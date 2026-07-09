@@ -17,12 +17,22 @@
  * a browser environment; we never dereference any property on it. */
 declare var process: unknown;
 
+/** Kern 02: `globalThis.gc`, only defined when Node is launched with
+ * `--expose-gc` (see `spike/tests-runtime/resident-gc.test.ts`). Feature-
+ * detected the same way as `process` above — `typeof gc === "function"` —
+ * never called without that check. */
+declare var gc: (() => void) | undefined;
+
 declare module "node:fs/promises" {
   export function readFile(path: string | URL): Promise<Uint8Array>;
 }
 
 declare module "node:test" {
   export function test(name: string, fn: () => void | Promise<void>): void;
+  /** Kern 02: the 3-arg options form, used to `skip` the GC-backstop test
+   * with an explicit reason when `--expose-gc` wasn't passed (honesty rule:
+   * never silently fake a pass). */
+  export function test(name: string, options: { skip?: boolean | string }, fn: () => void | Promise<void>): void;
 }
 
 declare module "node:assert" {

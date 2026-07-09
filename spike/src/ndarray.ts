@@ -28,12 +28,18 @@ import { computeStrides, elementwiseBinary, matmulRuntime, product, sumRuntime, 
 /** Narrow a possibly-erroring computed shape down to a real `Shape`,
  * excluding the `ShapeError` branch. Only ever evaluated at call sites
  * where the compatible branch already applies (the incompatible branch is
- * rejected earlier, at the argument itself, by `Guard`). */
-type OkShape<S> = S extends ShapeError<string> ? never : S extends Shape ? S : never;
+ * rejected earlier, at the argument itself, by `Guard`).
+ *
+ * Exported (type-only, Kern 02): `spike/src/wasm/resident.ts`'s `WNDArray`
+ * reuses this exact type machinery so its ops surface shape errors at the
+ * argument identically to `NDArray` — see docs/kern-02-residency-spec.md. */
+export type OkShape<S> = S extends ShapeError<string> ? never : S extends Shape ? S : never;
 
 /** The argument-side guard: forces a "missing property" error, naming the
- * shape mismatch, at the *argument* when `Result` is a `ShapeError`. */
-type Guard<Result, Actual> = Result extends ShapeError<infer Message> ? { readonly __shapeError: Message } : Actual;
+ * shape mismatch, at the *argument* when `Result` is a `ShapeError`.
+ *
+ * Exported (type-only, Kern 02): see `OkShape` above. */
+export type Guard<Result, Actual> = Result extends ShapeError<infer Message> ? { readonly __shapeError: Message } : Actual;
 
 /**
  * Erased top type for heterogeneous containers and non-generic helpers.

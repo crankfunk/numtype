@@ -10,10 +10,18 @@
  * and the two results are asserted equal inline — bit-for-bit, via
  * `Object.is` — so this script fails loudly on any TS/WASM divergence
  * instead of silently printing two different answers.
+ *
+ * Kern 02 addition: the same showcase ops run a THIRD time through the
+ * resident (zero-copy) backend — `WNDArray.fromArray` in, the same chain
+ * of ops pointer-to-pointer, asserted bit-identical to the already-printed
+ * TS results, with every resident handle explicitly `dispose()`d at the
+ * end of that section (demonstrating the full lifecycle, not relying on
+ * the GC backstop).
  */
 import { type AnyNDArray, NDArray } from "./src/ndarray.ts";
 import { wasmAdd, wasmMatmul, wasmSum, wasmTranspose } from "./src/wasm/backend.ts";
 import { initCore } from "./src/wasm/loader.ts";
+import { type AnyWNDArray, WNDArray } from "./src/wasm/resident.ts";
 
 function printArray(label: string, arr: AnyNDArray): void {
   console.log(`${label} shape=[${arr.shape.join(",")}]`);
@@ -91,4 +99,66 @@ const transposed = a.transpose();
 printArray("A.transpose()", transposed);
 assertBackendsAgree("A.transpose()", transposed, wasmTranspose(core, a.shape, a.data));
 
-console.log("=== demo complete: TS and WASM backends agree on every showcase op ===");
+// --- Kern 02: same showcase ops via the resident (zero-copy) backend ------
+console.log("=== Resident (WASM zero-copy) backend ===\n");
+
+/** Compare a `WNDArray` result against an already-printed TS `NDArray`
+ * result: same shape, bit-identical data. Throws loudly on any divergence,
+ * same standard as `assertBackendsAgree` above. */
+function assertResidentAgrees(
+  label: string,
+  ref: { shape: readonly number[]; data: Float64Array },
+  got: AnyWNDArray,
+): void {
+  const refShape: readonly number[] = ref.shape;
+  const gotShape: readonly number[] = got.shape;
+  const shapesEqual = refShape.length === gotShape.length && refShape.every((d, i) => d === gotShape[i]);
+  if (!shapesEqual) {
+    throw new Error(`${label}: TS/resident shape divergence: [${refShape.join(",")}] vs [${gotShape.join(",")}]`);
+  }
+  const gotData = got.toArray();
+  if (ref.data.length !== gotData.length) {
+    throw new Error(`${label}: TS/resident data-length divergence: ${ref.data.length} vs ${gotData.length}`);
+  }
+  for (let i = 0; i < ref.data.length; i++) {
+    if (!Object.is(ref.data[i], gotData[i])) {
+      throw new Error(`${label}: TS/resident bit divergence at index ${i}: ${ref.data[i]} vs ${gotData[i]}`);
+    }
+  }
+  console.log(`  [resident] ${label} shape=[${gotShape.join(",")}] — matches TS bit-for-bit`);
+  console.log(JSON.stringify(got.toNestedArray()));
+  console.log();
+}
+
+// Resident twins of A, B, M1, M2, cube — built once via the explicit
+// copy-IN boundary (`fromArray`), then chained resident, pointer-to-pointer.
+const rA = WNDArray.fromArray(core, a.shape, Array.from(a.data));
+const rB = WNDArray.fromArray(core, b.shape, Array.from(b.data));
+const rSum = rA.add(rB);
+assertResidentAgrees("A + B (bcast)", sum, rSum);
+
+const rM1 = WNDArray.fromArray(core, m1.shape, Array.from(m1.data));
+const rM2 = WNDArray.fromArray(core, m2.shape, Array.from(m2.data));
+const rProduct = rM1.matmul(rM2);
+assertResidentAgrees("M1 @ M2", product, rProduct);
+
+const rCube = WNDArray.fromArray(core, cube.shape, Array.from(cube.data));
+const rReduced = rCube.sum(1);
+assertResidentAgrees("cube.sum(1)", reduced, rReduced);
+
+const rTransposed = rA.transpose();
+assertResidentAgrees("A.transpose()", transposed, rTransposed);
+
+// Explicit dispose at the end of this section — every resident handle
+// created above, released deterministically (not left to the GC backstop).
+rA.dispose();
+rB.dispose();
+rSum.dispose();
+rM1.dispose();
+rM2.dispose();
+rProduct.dispose();
+rCube.dispose();
+rReduced.dispose();
+rTransposed.dispose();
+
+console.log("=== demo complete: TS, WASM v1, and WASM resident all agree on every showcase op ===");

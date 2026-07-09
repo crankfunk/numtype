@@ -15,7 +15,7 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 
 ## Current phase
 
-Kern 01: from-scratch Rust/WASM kernels behind the existing NDArray API — spec in docs/kern-01-wasm-core-spec.md. No wasm-bindgen/wasm-pack: hand-rolled `extern "C"` ABI + hand-written dual-target loader; naive TS runtime stays as the differential-test reference (bit-identical, transcendental-free v1). Spike 01 (type layer) is done and committed — spec in docs/spike-01-type-layer-spec.md, results incl. verification addendum in docs/spike-01-ergebnisse.md.
+Kern 02: zero-copy residency — array data lives in WASM linear memory, ops run pointer-to-pointer; spec in docs/kern-02-residency-spec.md. Done and committed: Spike 01 (type layer — docs/spike-01-type-layer-spec.md, results docs/spike-01-ergebnisse.md) and Kern 01 (from-scratch kernels behind hand-rolled `extern "C"` ABI, bit-identical to the naive TS reference — docs/kern-01-wasm-core-spec.md, results incl. scaling bench docs/kern-01-ergebnisse.md). The naive TS runtime remains the correctness reference; the v1 copy-based backend remains the performance baseline.
 
 ## Toolchain note (2026-07-09)
 
