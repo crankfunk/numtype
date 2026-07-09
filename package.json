@@ -1,0 +1,16 @@
+{
+  "name": "numtype",
+  "version": "0.0.0",
+  "private": true,
+  "description": "NumType — n-dimensional arrays for TypeScript with compile-time shape checking (research spike)",
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "check:diag": "tsc --noEmit --extendedDiagnostics",
+    "check:diag:bench": "tsc --noEmit -p spike/bench --extendedDiagnostics",
+    "demo": "node spike/demo.ts"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}
