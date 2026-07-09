@@ -350,3 +350,8 @@ tracked in FOLLOWUPS.md.
 Full suite: **21,151 instantiations / 0.008s check / 35.2MB** — *cheaper* than pre-fix (26,250), because the
 eager rank guards short-circuit recursion that previously ran to exhaustion. `pnpm check` green,
 `pnpm demo` output unchanged and correct.
+
+Correction (2026-07-09, found during Kern 01 verification): the single-call bench figure in the Metrics
+table above (9,494 instantiations) was measured BEFORE the dynamic-rank fix and never re-measured when this
+addendum updated the suite figure. Post-fix it is **7,425** (stable across runs; same 70-file compile scope,
+confirmed via `--listFiles`). Same cause as the suite drop: the eager rank guards short-circuit recursion.

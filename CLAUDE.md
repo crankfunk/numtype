@@ -15,7 +15,7 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 
 ## Current phase
 
-Spike 01: type-level shape system (broadcast / matmul / reduce) — spec in docs/spike-01-type-layer-spec.md, results in docs/spike-01-ergebnisse.md. The Rust/WASM core starts only after the spike proves the type layer carries.
+Kern 01: from-scratch Rust/WASM kernels behind the existing NDArray API — spec in docs/kern-01-wasm-core-spec.md. No wasm-bindgen/wasm-pack: hand-rolled `extern "C"` ABI + hand-written dual-target loader; naive TS runtime stays as the differential-test reference (bit-identical, transcendental-free v1). Spike 01 (type layer) is done and committed — spec in docs/spike-01-type-layer-spec.md, results incl. verification addendum in docs/spike-01-ergebnisse.md.
 
 ## Toolchain note (2026-07-09)
 

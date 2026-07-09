@@ -3,3 +3,8 @@ node_modules/
 *.tsbuildinfo
 .DS_Store
 graph-a-lama-out/
+
+# Kern 01: WASM build artifact (not byte-stable across hosts) + Cargo's
+# own build output.
+*.wasm
+crates/**/target/
