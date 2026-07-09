@@ -11,7 +11,8 @@
     "build:wasm": "cargo build --manifest-path crates/core/Cargo.toml --target wasm32-unknown-unknown --release && mkdir -p spike/src/wasm && cp crates/core/target/wasm32-unknown-unknown/release/numtype_core.wasm spike/src/wasm/numtype_core.wasm",
     "demo": "pnpm build:wasm && node spike/demo.ts",
     "test:core": "pnpm build:wasm && node --test \"spike/tests-runtime/*.test.ts\"",
-    "bench:core": "pnpm build:wasm && node spike/bench-core/matmul-256.ts"
+    "bench:core": "pnpm build:wasm && node spike/bench-core/matmul-256.ts",
+    "bench:scaling": "pnpm build:wasm && node spike/bench-core/scaling.ts"
   },
   "devDependencies": {
     "typescript": "^7.0.2"

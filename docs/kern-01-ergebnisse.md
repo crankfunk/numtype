@@ -156,6 +156,33 @@ speedup (avg TS / avg WASM): 1.92x
 
 Reproduced across 3 independent runs this session: 1.93x, 1.93x, 1.92x — stable. The WASM timing **includes** the full copy-in/copy-out overhead (shape+data marshalling into scratch WASM memory, kernel call, result copy-out, four `nt_free` calls) — v1 is copy-in/copy-out by design (spec: zero-copy resident buffers are v2/FOLLOWUPS). Despite that overhead, WASM is ~1.9x faster than the naive triple-loop TS implementation for this size — both are unoptimized/naive algorithms (no blocking, no SIMD), so this reflects raw scalar-loop throughput, not an apples-to-apples "good vs. best" comparison.
 
+## Scaling bench addendum (`pnpm bench:scaling`, 2026-07-09)
+
+Added after the initial results: naive TS vs WASM (incl. v1 copy-in/copy-out) across sizes, for `add`
+(same-shape elementwise) and square `matmul`. Seeded inputs; per-config bit-identity gate before timing;
+adaptive batch-timed reps (~150ms target per measurement). Representative run (second run confirms; deltas
+noted):
+
+```
+add [n,n]+[n,n]:      n=8: 2.0x · 64: 2.4x · 256: 2.5x · 512: 2.3x · 1024: 1.8–2.3x (run-dependent)
+matmul [n,n]x[n,n]:   n=8: 1.3–1.5x · 64: 1.3–1.8x · 256: 1.58x (stable both runs) · 512: 1.3–1.4x
+```
+
+Findings:
+
+1. **No small-op crossover found.** The hypothesis that call+copy overhead would make WASM *slower* for tiny
+   ops is refuted down to 8×8 (the smallest measured size): WASM incl. copies wins everywhere. Caveat: the TS
+   reference's elementwise path calls a JS closure per element (`elementwiseBinary(..., (x,y) => x+y)`) — the
+   comparison is against *this* deliberately generic naive reference; a hand-specialized JS loop would narrow
+   the small-size gap.
+2. **Add peaks mid-size (~2.4–2.5x) and narrows at 1024²** (three ~8MB copies per call start to matter) —
+   this quantifies the v2 zero-copy-residency motivation: copy bandwidth is the growing cost share at large
+   sizes.
+3. **The single-size matmul figure of ~1.9x (bench:core) sits at the optimistic end.** In the scaling bench's
+   warmed-up JIT state, matmul 256² is a stable 1.58x (both runs); the naive-TS side speeds up with V8 warm-up
+   (23.5ms cold-ish vs 19.7–19.8ms here) while the WASM side stays flat (~12.5ms). Honest headline range for
+   v1 matmul: **~1.3–1.9x depending on size and JIT state**, ~1.6x representative at 256².
+
 ## Gotchas (with evidence)
 
 ### 1. `wasm32-unknown-unknown` auto-exports `memory` and every `#[no_mangle]` function — no linker flags needed
