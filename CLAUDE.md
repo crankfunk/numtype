@@ -15,7 +15,11 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 
 ## Current phase
 
-Kern 02: zero-copy residency — array data lives in WASM linear memory, ops run pointer-to-pointer; spec in docs/kern-02-residency-spec.md. Done and committed: Spike 01 (type layer — docs/spike-01-type-layer-spec.md, results docs/spike-01-ergebnisse.md) and Kern 01 (from-scratch kernels behind hand-rolled `extern "C"` ABI, bit-identical to the naive TS reference — docs/kern-01-wasm-core-spec.md, results incl. scaling bench docs/kern-01-ergebnisse.md). The naive TS runtime remains the correctness reference; the v1 copy-based backend remains the performance baseline.
+Between phases — next candidates per FOLLOWUPS.md: strided kernels (first real payoff of the residency memory model) and SIMD128/blocking (the next real performance jump). Done, verified, and committed: Spike 01 (type layer — docs/spike-01-*), Kern 01 (from-scratch kernels behind a hand-rolled `extern "C"` ABI, bit-identical to the naive TS reference — docs/kern-01-*), Kern 02 (zero-copy residency incl. fromArray Float64Array overload — docs/kern-02-*). The naive TS runtime remains the correctness reference; the v1 copy-based backend remains the performance baseline. Every phase follows: binding spec doc → implementation → fresh-context verification → results doc with post-verification addendum → KB capture → commit.
+
+## Commands
+
+`pnpm check` (types) · `pnpm test:core` (v1 differential, 791) · `pnpm test:resident` (+`:gc` with --expose-gc) · `pnpm demo` (all three backends, asserted equal) · `pnpm bench:scaling` / `bench:chain` · `cargo test --manifest-path crates/core/Cargo.toml`. Note: test scripts use EXPLICIT file lists in package.json — new test files must be added there manually (guard pending, see FOLLOWUPS.md).
 
 ## Toolchain note (2026-07-09)
 
