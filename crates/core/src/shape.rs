@@ -29,6 +29,12 @@ pub enum KernelError {
     /// as the differential-testing signal for TS/Rust shape-logic
     /// divergence (see ABI doc in docs/kern-01-ergebnisse.md).
     SizeOverflow,
+    /// Status 4 (Kern 03): a strided operand's reachable index range
+    /// (`offset + Σ (dim_i − 1)·stride_i`) exceeds its buffer length — or
+    /// overflows entirely. Caller-supplied strides are the first ABI input
+    /// whose validity the kernels cannot derive themselves, so they are
+    /// bounds-checked before any data access (see `validate_strided_bounds`).
+    StridesOutOfBounds,
 }
 
 impl KernelError {
@@ -37,6 +43,7 @@ impl KernelError {
             KernelError::ShapeIncompatible => 1,
             KernelError::RankTooLarge => 2,
             KernelError::SizeOverflow => 3,
+            KernelError::StridesOutOfBounds => 4,
         }
     }
 }
@@ -145,6 +152,42 @@ pub fn effective_strides(aligned_shape: &[u32], aligned_strides: &[u32]) -> Vec<
         .collect()
 }
 
+/// Kern 03: validate a strided operand before any data access. Checks that
+/// the highest element index the (shape, strides, offset) triple can ever
+/// reach — `offset + Σ (dim_i − 1)·stride_i` — fits inside `data_len`.
+/// All arithmetic is checked `u64`; any overflow is reported as
+/// `StridesOutOfBounds` too (caller-supplied strides are untrusted input).
+/// A logically size-0 view (any dim == 0) never reads and passes vacuously,
+/// matching the ABI's existing "zero-length is valid regardless of pointer"
+/// rule. Rank must already have been validated via `checked_element_count`;
+/// `strides.len() == shape.len()` is the ABI contract (same `rank` argument
+/// covers both arrays).
+pub fn validate_strided_bounds(shape: &[u32], strides: &[u32], offset: u32, data_len: u32) -> KResult<()> {
+    if shape.iter().any(|&d| d == 0) {
+        return Ok(());
+    }
+    let mut max_reach: u64 = offset as u64;
+    for (&d, &s) in shape.iter().zip(strides.iter()) {
+        let term = (d as u64 - 1)
+            .checked_mul(s as u64)
+            .ok_or(KernelError::StridesOutOfBounds)?;
+        max_reach = max_reach.checked_add(term).ok_or(KernelError::StridesOutOfBounds)?;
+    }
+    if max_reach >= data_len as u64 {
+        return Err(KernelError::StridesOutOfBounds);
+    }
+    Ok(())
+}
+
+/// Kern 03: effective strides for broadcasting with *caller-supplied*
+/// strides — `align_to_rank` + `effective_strides` in one step, mirroring
+/// what the contiguous kernels do with computed strides. Leading padding
+/// axes and size-1 axes both contribute stride 0.
+pub fn aligned_effective_strides(shape: &[u32], strides: &[u32], rank: usize) -> Vec<u32> {
+    let (shape_al, strides_al) = align_to_rank(shape, strides, rank);
+    effective_strides(&shape_al, &strides_al)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +254,49 @@ mod tests {
         let out = broadcast_shape(&[100_000, 1], &[1, 100_000]).unwrap();
         assert_eq!(out, vec![100_000, 100_000]);
         assert_eq!(checked_element_count(&out), Err(KernelError::SizeOverflow));
+    }
+
+    #[test]
+    fn validate_strided_bounds_contiguous_and_transposed() {
+        // Contiguous [2,3]: strides [3,1], max reach 1*3+2*1 = 5 < 6.
+        assert!(validate_strided_bounds(&[2, 3], &[3, 1], 0, 6).is_ok());
+        // Transposed view [3,2]: strides [1,3], same buffer, same max reach.
+        assert!(validate_strided_bounds(&[3, 2], &[1, 3], 0, 6).is_ok());
+        // One element short: max reach 5 >= 5.
+        assert_eq!(
+            validate_strided_bounds(&[2, 3], &[3, 1], 0, 5),
+            Err(KernelError::StridesOutOfBounds)
+        );
+        // Offset pushes the reach past the end.
+        assert_eq!(
+            validate_strided_bounds(&[2, 3], &[3, 1], 1, 6),
+            Err(KernelError::StridesOutOfBounds)
+        );
+        assert!(validate_strided_bounds(&[2, 3], &[3, 1], 1, 7).is_ok());
+    }
+
+    #[test]
+    fn validate_strided_bounds_edge_cases() {
+        // Rank-0 scalar reads exactly data[offset].
+        assert!(validate_strided_bounds(&[], &[], 0, 1).is_ok());
+        assert_eq!(validate_strided_bounds(&[], &[], 1, 1), Err(KernelError::StridesOutOfBounds));
+        // Size-0 views never read: valid regardless of strides/offset.
+        assert!(validate_strided_bounds(&[0, 3], &[999, 999], 123, 0).is_ok());
+        // u64 accumulation overflow from garbage strides -> status 4, not wraparound.
+        let shape = vec![u32::MAX; 3];
+        let strides = vec![u32::MAX; 3];
+        assert_eq!(
+            validate_strided_bounds(&shape, &strides, 0, u32::MAX),
+            Err(KernelError::StridesOutOfBounds)
+        );
+    }
+
+    #[test]
+    fn aligned_effective_strides_pads_and_zeroes() {
+        // [3] with stride [1] aligned to rank 3 -> [0,0,1]; a size-1 axis
+        // with a real stride is zeroed for broadcasting.
+        assert_eq!(aligned_effective_strides(&[3], &[1], 3), vec![0, 0, 1]);
+        assert_eq!(aligned_effective_strides(&[1, 5], &[5, 1], 2), vec![0, 1]);
     }
 
     #[test]

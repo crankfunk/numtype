@@ -15,11 +15,11 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 
 ## Current phase
 
-Between phases — next candidates per FOLLOWUPS.md: strided kernels (first real payoff of the residency memory model) and SIMD128/blocking (the next real performance jump). Done, verified, and committed: Spike 01 (type layer — docs/spike-01-*), Kern 01 (from-scratch kernels behind a hand-rolled `extern "C"` ABI, bit-identical to the naive TS reference — docs/kern-01-*), Kern 02 (zero-copy residency incl. fromArray Float64Array overload — docs/kern-02-*). The naive TS runtime remains the correctness reference; the v1 copy-based backend remains the performance baseline. Every phase follows: binding spec doc → implementation → fresh-context verification → results doc with post-verification addendum → KB capture → commit.
+Between phases — next candidate per FOLLOWUPS.md: SIMD128/blocking for matmul (Kern 03's Series-A bench is direct evidence that memory access patterns, not architecture, are the current matmul bottleneck). Done, verified, and committed: Spike 01 (type layer — docs/spike-01-*), Kern 01 (from-scratch kernels behind a hand-rolled `extern "C"` ABI, bit-identical to the naive TS reference — docs/kern-01-*), Kern 02 (zero-copy residency incl. fromArray Float64Array overload — docs/kern-02-*), Kern 03 (strided views: O(1) transpose, refcounted buffers, strided ABI entry points + status 4, `contiguous()` — docs/kern-03-*; honest finding: views win ~2× on consume-once workloads but LOSE ~30 % feeding matmul at n≥256 → materialize first there). The naive TS runtime remains the correctness reference; the v1 copy-based backend remains the frozen performance baseline (its kernels/entry points stay byte-for-byte untouched). Every phase follows: binding spec doc → implementation → fresh-context verification → results doc with post-verification addendum → KB capture → commit.
 
 ## Commands
 
-`pnpm check` (types) · `pnpm test:core` (v1 differential, 791) · `pnpm test:resident` (+`:gc` with --expose-gc) · `pnpm demo` (all three backends, asserted equal) · `pnpm bench:scaling` / `bench:chain` · `cargo test --manifest-path crates/core/Cargo.toml`. Note: test scripts use EXPLICIT file lists in package.json — new test files must be added there manually (guard pending, see FOLLOWUPS.md).
+`pnpm check` (types) · `pnpm test:core` (v1 differential, 791) · `pnpm test:resident` (+`:gc` with --expose-gc) · `pnpm demo` (all three backends, asserted equal) · `pnpm bench:scaling` / `bench:chain` / `bench:strided` · `cargo test --manifest-path crates/core/Cargo.toml`. Note: test scripts use EXPLICIT file lists in package.json — new test files must be added there manually (guard pending, see FOLLOWUPS.md).
 
 ## Toolchain note (2026-07-09)
 

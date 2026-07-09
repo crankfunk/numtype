@@ -1,57 +1,63 @@
 /**
- * Zero-copy residency layer (Kern 02) — the resident twin of `NDArray<S>`.
- * See docs/kern-02-residency-spec.md for the full contract; this header
- * covers the invariants that matter for correctness/safety, not the why.
+ * Zero-copy residency layer (Kern 02) + strided views (Kern 03) — the
+ * resident twin of `NDArray<S>`. See docs/kern-02-residency-spec.md and
+ * docs/kern-03-strided-spec.md for the full contracts; this header covers
+ * the invariants that matter for correctness/safety, not the why.
  *
  * A `WNDArray<S>` does NOT hold its data in a JS-side `Float64Array`: the
- * data lives as a `(ptr, len)` pair into the WASM core's own linear memory
- * (`core.memory.buffer`), allocated once at construction and freed exactly
- * once (via `dispose()` or, as a backstop, GC). Ops call the *same* Rust
- * kernels as the v1 backend (`spike/src/wasm/backend.ts`) pointer-to-pointer:
- * operand DATA is never copied into or out of WASM for an op — only the
- * tiny per-call shape metadata (u32 arrays) is marshalled fresh each call,
- * exactly as the spec allows ("not worth residency"). Copies only happen at
- * the two explicit boundaries: `fromArray` (in) and `toArray`/
- * `toNestedArray` (out).
+ * data lives in the WASM core's own linear memory, tracked by a shared
+ * `ResidentBuffer` record (`ptr`/`bytes`/`refs`). Since Kern 03 a handle is
+ * a **view** onto that buffer: `(shape, strides, offset)` metadata over a
+ * possibly shared allocation. `transpose()` is an O(1) metadata operation —
+ * reversed shape + reversed strides, same buffer, no kernel call. Because
+ * `WNDArray` exposes no mutation, views are semantically indistinguishable
+ * from copies; sharing is observable only through memory/lifecycle.
+ *
+ * Ops call the Kern-03 *strided* kernels pointer-to-pointer (contiguous
+ * handles simply pass their natural strides and offset 0 — one code path
+ * for everything; the non-strided exports remain in use by the v1 backend
+ * only). Operand DATA is never copied for an op — only the tiny per-call
+ * shape/stride metadata (u32 arrays) is marshalled fresh each call. Copies
+ * happen at the explicit boundaries: `fromArray` (in), `toArray`/
+ * `toNestedArray` (out), and the explicit `contiguous()`.
  *
  * **Memory rule (hard, same as v1):** never store a typed-array view across
  * a call boundary — `memory.grow` detaches every existing view. Every read
- * (`toArray`, shape marshalling) derives a fresh view from
- * `core.memory.buffer` immediately before use. What IS safely stored
- * long-lived is the raw numeric `ptr`/`len` — plain numbers, unaffected by
- * `memory.grow` (an offset into linear memory stays valid; only the JS
- * typed-array *view object* wrapping the old, now-replaced `ArrayBuffer*
- * detaches).
+ * derives a fresh view from `core.memory.buffer` immediately before use.
+ * What IS safely stored long-lived is the raw numeric `ptr`/`len` — plain
+ * numbers, unaffected by `memory.grow`.
  *
  * **Output aliasing:** every op allocates a *fresh* WASM buffer for its
- * result and wraps it in a new `WNDArray` — it never writes into an input's
- * buffer and never returns a `WNDArray` that shares a buffer with an
- * operand. Kernels assume non-overlapping `out` vs. operands; this
- * invariant is what makes that assumption sound from the TS side too.
+ * result — it never writes into an operand's buffer. Kernels assume
+ * non-overlapping `out` vs. operands; this invariant keeps that assumption
+ * sound. (Views deliberately alias each other's *input* buffer — that is
+ * their point — but an op's output never aliases anything.)
  *
- * **Lifecycle:**
- *  - `dispose()` frees the WASM allocation, marks the handle disposed, and
- *    unregisters from the `FinalizationRegistry` (using `this` as the
- *    unregister token — a `FinalizationRegistry` only ever holds *weak*
- *    references to both the registration target and the unregister token,
- *    so this does not itself keep the instance alive or reachable). A
- *    second `dispose()` is a safe no-op (checked via the `disposed_` flag,
- *    not by inspecting `ptr` — a legitimately empty array, e.g. shape
- *    `[0, 3]`, has `ptr === 0` from the very start, which is NOT "already
- *    disposed").
- *  - The module-level `FinalizationRegistry` is the GC backstop: if a
- *    `WNDArray` is dropped without an explicit `dispose()`, its allocation
- *    is still freed once the GC collects it. The registry's held value
- *    carries only `{ core, ptr, bytes }` — plain data plus a reference to
- *    the long-lived WASM core handle, NEVER a reference to the `WNDArray`
- *    instance itself (that would keep it permanently reachable and defeat
- *    collection entirely).
- *  - Every op/`toArray`/`toNestedArray` call on a disposed handle throws
- *    immediately, naming the operation, before touching any WASM memory.
- *  - **Error paths leak nothing:** a non-zero kernel status frees the
- *    already-allocated *output* buffer before throwing (its ephemeral shape
- *    scratch buffers are always freed too, success or failure); input
- *    handles are never touched by a failing op and remain fully valid.
+ * **Lifecycle (refcounted since Kern 03):**
+ *  - The shared `ResidentBuffer` starts at `refs = 1`; each view (`transpose`)
+ *    increments. `dispose()` marks *this handle* disposed, unregisters it
+ *    from the `FinalizationRegistry`, and decrements — the WASM allocation
+ *    is freed exactly when `refs` hits 0. Disposing a base while views live
+ *    keeps the buffer alive and the views fully usable (and vice versa).
+ *  - A second `dispose()` on the same handle is a safe no-op (checked via
+ *    the per-handle `disposed_` flag, never via `ptr` — a legitimately
+ *    empty array has `ptr === 0` from the very start).
+ *  - The `FinalizationRegistry` is the GC backstop: a handle dropped
+ *    without `dispose()` still has its reference released once collected.
+ *    The held value is the shared `ResidentBuffer` record — plain data plus
+ *    the long-lived core handle, NEVER a reference to the `WNDArray` itself
+ *    (that would keep it permanently reachable and defeat collection).
+ *    Any interleaving of dispose/GC across the handles of one buffer
+ *    releases each reference exactly once, so no leak and no double-free.
+ *  - Every op/read on a disposed handle throws immediately, naming the
+ *    operation, before touching any WASM memory.
+ *  - **Error paths leak nothing:** per-call scratch (shape/stride arrays)
+ *    is tracked in a list freed in `finally` — this also covers an
+ *    out-of-memory throw *between* allocations, closing the Kern-02-era
+ *    gap where scratch allocated before a failing output `nt_alloc` leaked
+ *    (the v1 backend still has that gap; see FOLLOWUPS.md). A non-zero
+ *    kernel status frees the already-allocated output buffer before
+ *    throwing; input handles are never touched by a failing op.
  */
 
 import type { Broadcast } from "../broadcast.ts";
@@ -79,45 +85,61 @@ function freeBuf(core: CoreExports, buf: ScratchBuf): void {
   core.nt_free(buf.ptr, buf.bytes);
 }
 
-/** Allocate + write a shape as a little-endian u32 array — the same tiny,
- * per-call, copy-based marshalling v1 uses (spec: "not worth residency"). */
-function writeShape(core: CoreExports, shape: readonly number[]): ScratchBuf {
-  const buf = allocBytes(core, shape.length * 4);
-  const view = new Uint32Array(core.memory.buffer, buf.ptr, shape.length);
-  view.set(shape);
+/** Allocate + write a little-endian u32 array (shape or strides) — the same
+ * tiny, per-call, copy-based marshalling v1 uses (spec: "not worth
+ * residency"). */
+function writeU32Array(core: CoreExports, values: readonly number[]): ScratchBuf {
+  const buf = allocBytes(core, values.length * 4);
+  const view = new Uint32Array(core.memory.buffer, buf.ptr, values.length);
+  view.set(values);
   return buf;
 }
 
-// --- GC backstop + test-observability -------------------------------------
+// --- shared buffer record + GC backstop + test-observability ---------------
 
-interface FreeHandle {
+/** One WASM allocation, shared by a base handle and any views onto it.
+ * Plain data plus the core handle — deliberately free of any reference to
+ * the `WNDArray` handles themselves (see module doc comment). */
+interface ResidentBuffer {
   readonly core: CoreExports;
   readonly ptr: number;
   readonly bytes: number;
+  /** Full allocation length in ELEMENTS — the `data_len` every strided
+   * kernel call passes for bounds validation. */
+  readonly lenElems: number;
+  refs: number;
 }
 
 let residentFreeCount = 0;
 
-/** Test-only observability hook: how many times a *resident array's own
- * data buffer* (as opposed to per-op ephemeral shape/output scratch) has
- * actually been freed, whether via `dispose()` or the `FinalizationRegistry`
- * backstop. Not part of the product API — exists so the leak-plateau and
- * GC-backstop tests have a deterministic signal instead of only inferring
- * frees from `core.memory.buffer.byteLength` (which can never shrink, only
- * plateau, since WASM memory only grows). */
+/** Test-only observability hook: how many times a *resident data buffer*
+ * (as opposed to per-op ephemeral scratch) has actually been freed —
+ * i.e. how often a buffer's refcount reached 0, whether via `dispose()` or
+ * the `FinalizationRegistry` backstop. NOT a dispose counter: releasing a
+ * view of a still-referenced buffer does not increment it. Exists so the
+ * leak-plateau/GC/refcount tests have a deterministic signal instead of
+ * only inferring frees from `core.memory.buffer.byteLength` (which can
+ * never shrink, only plateau). */
 export function getResidentFreeCount(): number {
   return residentFreeCount;
 }
 
-function releaseDataBuf(core: CoreExports, ptr: number, bytes: number): void {
-  core.nt_free(ptr, bytes);
-  residentFreeCount++;
+function retainBuffer(buf: ResidentBuffer): void {
+  buf.refs++;
 }
 
-/** Held value carries `{ core, ptr, bytes }` only — never a reference to the
- * `WNDArray` itself (see module doc comment for why that matters). */
-const registry = new FinalizationRegistry<FreeHandle>((held) => {
-  releaseDataBuf(held.core, held.ptr, held.bytes);
+function releaseBuffer(buf: ResidentBuffer): void {
+  buf.refs--;
+  if (buf.refs === 0) {
+    buf.core.nt_free(buf.ptr, buf.bytes);
+    residentFreeCount++;
+  }
+}
+
+/** Held value is the shared `ResidentBuffer` record — never a reference to
+ * the `WNDArray` itself (see module doc comment for why that matters). */
+const registry = new FinalizationRegistry<ResidentBuffer>((buf) => {
+  releaseBuffer(buf);
 });
 
 /**
@@ -136,28 +158,42 @@ export type AnyWNDArray = WNDArray<any>;
  * Resident twin of `NDArray<S>`. See module doc comment for the full
  * lifecycle contract. Surface mirrors `NDArray`: `zeros`/`ones`/`fromArray`,
  * `add`/`matmul`/`sum`/`transpose`, `toArray`/`toNestedArray`, plus the
- * residency-specific `dispose()`/`disposed`.
+ * residency-specific `dispose()`/`disposed` and the Kern-03 `contiguous()`.
  */
 export class WNDArray<S extends Shape> {
   readonly shape: S;
-  private readonly core: CoreExports;
-  private ptr: number;
-  private readonly bytes: number;
-  private readonly len: number;
+  /** Element strides of this handle's view onto its buffer — row-major
+   * (`computeStrides(shape)`) for freshly created arrays, permuted for
+   * transpose views. Runtime observability only; strides have no type-level
+   * representation. */
+  readonly strides: readonly number[];
+  /** Base element offset into the buffer. Always 0 in Kern 03 (only
+   * transpose views exist); the ABI supports nonzero offsets so slicing
+   * later needs no ABI revision. */
+  private readonly offset: number;
+  private readonly buf: ResidentBuffer;
   private disposed_: boolean;
 
-  private constructor(core: CoreExports, shape: S, ptr: number, len: number) {
-    this.core = core;
+  /** Reference accounting happens at the call sites: a fresh buffer record
+   * is created with `refs = 1` (this constructor takes that reference); a
+   * view retains BEFORE constructing. The constructor itself never touches
+   * `refs`. */
+  private constructor(buf: ResidentBuffer, shape: S, strides: readonly number[], offset: number) {
+    this.buf = buf;
     this.shape = shape;
-    this.ptr = ptr;
-    this.len = len;
-    this.bytes = len * 8;
+    this.strides = strides;
+    this.offset = offset;
     this.disposed_ = false;
-    registry.register(this, { core, ptr, bytes: this.bytes }, this);
+    registry.register(this, buf, this);
+  }
+
+  private get core(): CoreExports {
+    return this.buf.core;
   }
 
   /** Whether `dispose()` has already run on this handle (once true, every
-   * op/read throws instead of touching WASM memory). */
+   * op/read throws instead of touching WASM memory). Views onto the same
+   * buffer each carry their own flag. */
   get disposed(): boolean {
     return this.disposed_;
   }
@@ -173,25 +209,41 @@ export class WNDArray<S extends Shape> {
   // docs/spike-01-ergebnisse.md's verified finding, the argument-side error
   // guards make this class's measured variance invariant, so
   // `WNDArray<[2, 3]>` is NOT assignable to a fixed `WNDArray<Shape>`
-  // parameter type — the same reason `ndarray.ts` needs `AnyNDArray =
-  // NDArray<any>` instead of `NDArray<Shape>` for its own erased handle.
+  // parameter type — the same reason `ndarray.ts` needs `AnyWNDArray =
+  // WNDArray<any>` instead of `WNDArray<Shape>` for its own erased handle.
   private assertSameCore<B extends Shape>(other: WNDArray<B>, op: string): void {
-    if (this.core !== other.core) {
+    if (this.buf.core !== other.buf.core) {
       throw new Error(`WNDArray.${op}: operands belong to different WASM core instances`);
     }
   }
 
-  /** Free the WASM allocation, mark this handle disposed, and unregister
-   * from the GC backstop (`this` doubles as the unregister token it was
-   * registered with — see the constructor). A second call is a safe no-op:
-   * guarded by the `disposed_` flag, never by inspecting `ptr` (a
-   * legitimately empty array has `ptr === 0` from construction, not from
-   * having been disposed). */
+  /** Whether this handle's metadata is plain row-major over the whole
+   * buffer (natural strides, offset 0) — the `toArray` fast-path test. A
+   * double-transposed view qualifies again by construction. */
+  private isContiguous(): boolean {
+    if (this.offset !== 0) return false;
+    const natural = computeStrides(this.shape);
+    return natural.length === this.strides.length && natural.every((s, i) => s === this.strides[i]);
+  }
+
+  /** Release this handle's reference on the shared buffer, mark the handle
+   * disposed, and unregister it from the GC backstop (`this` doubles as the
+   * unregister token). The WASM allocation is freed exactly when the last
+   * handle (base or view) releases. A second call is a safe no-op: guarded
+   * by the per-handle `disposed_` flag, never by inspecting `ptr`. */
   dispose(): void {
     if (this.disposed_) return;
     this.disposed_ = true;
     registry.unregister(this);
-    releaseDataBuf(this.core, this.ptr, this.bytes);
+    releaseBuffer(this.buf);
+  }
+
+  /** Wrap a freshly allocated WASM buffer (ownership transfers: the new
+   * handle holds the record's initial `refs = 1`) with natural row-major
+   * metadata. */
+  private static fresh<S extends Shape>(core: CoreExports, shape: S, ptr: number, lenElems: number): WNDArray<S> {
+    const buf: ResidentBuffer = { core, ptr, bytes: lenElems * 8, lenElems, refs: 1 };
+    return new WNDArray<S>(buf, shape, computeStrides(shape), 0);
   }
 
   /** An all-zeros resident array of the given shape. WASM's global
@@ -206,7 +258,7 @@ export class WNDArray<S extends Shape> {
       freeBuf(core, buf);
       throw new Error(`WNDArray.zeros: nt_fill unexpected status ${status}`);
     }
-    return new WNDArray<Mutable<S>>(core, [...shape] as Mutable<S>, buf.ptr, len);
+    return WNDArray.fresh<Mutable<S>>(core, [...shape] as Mutable<S>, buf.ptr, len);
   }
 
   /** An all-ones resident array of the given shape (see `zeros` for why
@@ -219,7 +271,7 @@ export class WNDArray<S extends Shape> {
       freeBuf(core, buf);
       throw new Error(`WNDArray.ones: nt_fill unexpected status ${status}`);
     }
-    return new WNDArray<Mutable<S>>(core, [...shape] as Mutable<S>, buf.ptr, len);
+    return WNDArray.fresh<Mutable<S>>(core, [...shape] as Mutable<S>, buf.ptr, len);
   }
 
   /** Build a resident array from flat row-major values — the explicit
@@ -241,13 +293,14 @@ export class WNDArray<S extends Shape> {
     const buf = allocBytes(core, len * 8);
     const view = new Float64Array(core.memory.buffer, buf.ptr, len);
     view.set(values);
-    return new WNDArray<Mutable<S>>(core, [...shape] as Mutable<S>, buf.ptr, len);
+    return WNDArray.fresh<Mutable<S>>(core, [...shape] as Mutable<S>, buf.ptr, len);
   }
 
   /** Broadcasting elementwise add — resident twin of `NDArray.add`/
-   * `wasmAdd`: operand data stays resident; only the two shape arrays are
-   * marshalled per call, and a fresh output buffer is allocated for the
-   * result (never aliasing either operand). */
+   * `wasmAdd`, routed through the strided kernel (contiguous handles pass
+   * natural strides): operand data stays resident; only the four shape/
+   * stride arrays are marshalled per call, and a fresh output buffer is
+   * allocated for the result (never aliasing either operand). */
   add<B extends Shape>(other: Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>> {
     this.assertLive("add");
     const o = other as unknown as WNDArray<B>;
@@ -255,46 +308,65 @@ export class WNDArray<S extends Shape> {
     this.assertSameCore(o, "add");
 
     // Shape computation (and any incompatibility throw) happens BEFORE any
-    // allocation — mirrors v1's error-path ordering: a rejected call never
-    // leaks a scratch buffer because none was ever allocated for it.
+    // allocation — a rejected call never leaks scratch because none was
+    // ever allocated for it.
     const outShape = runtimeBroadcastShape(this.shape, o.shape);
     const outLen = product(outShape);
 
-    const aShapeBuf = writeShape(this.core, this.shape);
-    const bShapeBuf = writeShape(this.core, o.shape);
-    const outDataBuf = allocBytes(this.core, outLen * 8);
+    const scratch: ScratchBuf[] = [];
     try {
-      const status = this.core.nt_add(
+      const aShapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(aShapeBuf);
+      const aStridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(aStridesBuf);
+      const bShapeBuf = writeU32Array(this.core, o.shape);
+      scratch.push(bShapeBuf);
+      const bStridesBuf = writeU32Array(this.core, o.strides);
+      scratch.push(bStridesBuf);
+      const outDataBuf = allocBytes(this.core, outLen * 8);
+
+      const status = this.core.nt_add_strided(
         aShapeBuf.ptr,
         this.shape.length,
-        this.ptr,
-        this.len,
+        aStridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
         bShapeBuf.ptr,
         o.shape.length,
-        o.ptr,
-        o.len,
+        bStridesBuf.ptr,
+        o.offset,
+        o.buf.ptr,
+        o.buf.lenElems,
         outDataBuf.ptr,
         outLen,
       );
       if (status !== 0) {
         freeBuf(this.core, outDataBuf); // fresh output buffer never escapes on failure
         throw new Error(
-          `wasm resident nt_add: status ${status} for shapes [${this.shape.join(",")}] and [${o.shape.join(",")}]`,
+          `wasm resident nt_add_strided: status ${status} for shapes [${this.shape.join(",")}] and [${o.shape.join(",")}]`,
         );
       }
-      return new WNDArray<OkShape<Broadcast<S, B>>>(this.core, outShape as OkShape<Broadcast<S, B>>, outDataBuf.ptr, outLen);
+      return WNDArray.fresh<OkShape<Broadcast<S, B>>>(
+        this.core,
+        outShape as OkShape<Broadcast<S, B>>,
+        outDataBuf.ptr,
+        outLen,
+      );
     } finally {
-      // Ephemeral per-call shape scratch: always freed, success or failure.
-      freeBuf(this.core, aShapeBuf);
-      freeBuf(this.core, bShapeBuf);
+      // Ephemeral per-call scratch: always freed — success, kernel failure,
+      // or an OOM throw between the allocations above.
+      for (const buf of scratch) freeBuf(this.core, buf);
     }
   }
 
-  /** Full NumPy `matmul` — resident twin of `NDArray.matmul`/`wasmMatmul`.
-   * 1-D promotion/squeeze is TS-side shape bookkeeping only (mirrors
-   * `matmulRuntime`/`wasmMatmul` exactly); it never touches operand data —
-   * the same resident `ptr`/`len` are passed straight to the kernel under
-   * the promoted shape metadata. */
+  /** Full NumPy `matmul` — resident twin of `NDArray.matmul`/`wasmMatmul`,
+   * routed through the strided kernel. 1-D promotion/squeeze is TS-side
+   * shape bookkeeping only (mirrors `matmulRuntime`/`wasmMatmul` exactly);
+   * it never touches operand data — the same resident buffer is passed
+   * straight to the kernel under promoted shape metadata. The axis added
+   * by promotion has dim 1 and carries stride 0 (never multiplied by a
+   * nonzero index, so any value would do; 0 keeps the bounds check tight). */
   matmul<B extends Shape>(other: Guard<MatMul<S, B>, WNDArray<B>>): WNDArray<OkShape<MatMul<S, B>>> {
     this.assertLive("matmul");
     const o = other as unknown as WNDArray<B>;
@@ -314,6 +386,8 @@ export class WNDArray<S extends Shape> {
     const bPromoted = bShapeIn.length === 1;
     const aShape = aPromoted ? [1, aShapeIn[0] ?? 1] : [...aShapeIn];
     const bShape = bPromoted ? [bShapeIn[0] ?? 1, 1] : [...bShapeIn];
+    const aStrides = aPromoted ? [0, this.strides[0] ?? 0] : [...this.strides];
+    const bStrides = bPromoted ? [o.strides[0] ?? 0, 0] : [...o.strides];
 
     const m = aShape[aShape.length - 2] ?? 1;
     const k1 = aShape[aShape.length - 1] ?? 1;
@@ -330,28 +404,38 @@ export class WNDArray<S extends Shape> {
     const outFullShape = [...batchOut, m, n];
     const outLen = product(outFullShape);
 
-    const aShapeBuf = writeShape(this.core, aShape);
-    const bShapeBuf = writeShape(this.core, bShape);
-    const outDataBuf = allocBytes(this.core, outLen * 8);
-
-    let result: WNDArray<OkShape<MatMul<S, B>>>;
+    const scratch: ScratchBuf[] = [];
     try {
-      const status = this.core.nt_matmul(
+      const aShapeBuf = writeU32Array(this.core, aShape);
+      scratch.push(aShapeBuf);
+      const aStridesBuf = writeU32Array(this.core, aStrides);
+      scratch.push(aStridesBuf);
+      const bShapeBuf = writeU32Array(this.core, bShape);
+      scratch.push(bShapeBuf);
+      const bStridesBuf = writeU32Array(this.core, bStrides);
+      scratch.push(bStridesBuf);
+      const outDataBuf = allocBytes(this.core, outLen * 8);
+
+      const status = this.core.nt_matmul_strided(
         aShapeBuf.ptr,
         aShape.length,
-        this.ptr,
-        this.len,
+        aStridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
         bShapeBuf.ptr,
         bShape.length,
-        o.ptr,
-        o.len,
+        bStridesBuf.ptr,
+        o.offset,
+        o.buf.ptr,
+        o.buf.lenElems,
         outDataBuf.ptr,
         outLen,
       );
       if (status !== 0) {
         freeBuf(this.core, outDataBuf);
         throw new Error(
-          `wasm resident nt_matmul: status ${status} for shapes [${aShapeIn.join(",")}] and [${bShapeIn.join(",")}]`,
+          `wasm resident nt_matmul_strided: status ${status} for shapes [${aShapeIn.join(",")}] and [${bShapeIn.join(",")}]`,
         );
       }
 
@@ -364,17 +448,22 @@ export class WNDArray<S extends Shape> {
       if (bPromoted) {
         finalShape = finalShape.slice(0, -1);
       }
-      result = new WNDArray<OkShape<MatMul<S, B>>>(this.core, finalShape as OkShape<MatMul<S, B>>, outDataBuf.ptr, outLen);
+      return WNDArray.fresh<OkShape<MatMul<S, B>>>(
+        this.core,
+        finalShape as OkShape<MatMul<S, B>>,
+        outDataBuf.ptr,
+        outLen,
+      );
     } finally {
-      freeBuf(this.core, aShapeBuf);
-      freeBuf(this.core, bShapeBuf);
+      for (const buf of scratch) freeBuf(this.core, buf);
     }
-    return result;
   }
 
   /** Sum-reduce along `axis` (negative counts from the end); omit `axis` to
    * sum every element down to a rank-0 array. Resident twin of
-   * `NDArray.sum`/`wasmSum`. */
+   * `NDArray.sum`/`wasmSum`, routed through the strided kernels. The full
+   * sum accumulates in this view's LOGICAL row-major order (kernel
+   * contract) — bit-identical to summing the materialized equivalent. */
   sum<const Axis extends number | undefined = undefined>(
     axis?: Guard<ReduceAxis<S, Axis>, Axis>,
   ): WNDArray<OkShape<ReduceAxis<S, Axis>>> {
@@ -382,13 +471,36 @@ export class WNDArray<S extends Shape> {
     const axisNum = axis as unknown as Axis | undefined;
 
     if (axisNum === undefined) {
-      const outDataBuf = allocBytes(this.core, 8);
-      const status = this.core.nt_sum_all(this.ptr, this.len, outDataBuf.ptr);
-      if (status !== 0) {
-        freeBuf(this.core, outDataBuf);
-        throw new Error(`wasm resident nt_sum_all: unexpected status ${status}`);
+      const scratch: ScratchBuf[] = [];
+      try {
+        const shapeBuf = writeU32Array(this.core, this.shape);
+        scratch.push(shapeBuf);
+        const stridesBuf = writeU32Array(this.core, this.strides);
+        scratch.push(stridesBuf);
+        const outDataBuf = allocBytes(this.core, 8);
+
+        const status = this.core.nt_sum_all_strided(
+          shapeBuf.ptr,
+          this.shape.length,
+          stridesBuf.ptr,
+          this.offset,
+          this.buf.ptr,
+          this.buf.lenElems,
+          outDataBuf.ptr,
+        );
+        if (status !== 0) {
+          freeBuf(this.core, outDataBuf);
+          throw new Error(`wasm resident nt_sum_all_strided: status ${status} for shape [${this.shape.join(",")}]`);
+        }
+        return WNDArray.fresh<OkShape<ReduceAxis<S, Axis>>>(
+          this.core,
+          [] as OkShape<ReduceAxis<S, Axis>>,
+          outDataBuf.ptr,
+          1,
+        );
+      } finally {
+        for (const buf of scratch) freeBuf(this.core, buf);
       }
-      return new WNDArray<OkShape<ReduceAxis<S, Axis>>>(this.core, [] as OkShape<ReduceAxis<S, Axis>>, outDataBuf.ptr, 1);
     }
 
     const rank = this.shape.length;
@@ -400,53 +512,147 @@ export class WNDArray<S extends Shape> {
     const outShape = [...this.shape.slice(0, normAxis), ...this.shape.slice(normAxis + 1)];
     const outLen = product(outShape);
 
-    const shapeBuf = writeShape(this.core, this.shape);
-    const outDataBuf = allocBytes(this.core, outLen * 8);
+    const scratch: ScratchBuf[] = [];
     try {
-      const status = this.core.nt_sum_axis(shapeBuf.ptr, rank, this.ptr, this.len, axisNum, outDataBuf.ptr, outLen);
+      const shapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(shapeBuf);
+      const stridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(stridesBuf);
+      const outDataBuf = allocBytes(this.core, outLen * 8);
+
+      const status = this.core.nt_sum_axis_strided(
+        shapeBuf.ptr,
+        rank,
+        stridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        axisNum,
+        outDataBuf.ptr,
+        outLen,
+      );
       if (status !== 0) {
         freeBuf(this.core, outDataBuf);
-        throw new Error(`wasm resident nt_sum_axis: status ${status} for shape [${this.shape.join(",")}] axis ${axisNum}`);
+        throw new Error(
+          `wasm resident nt_sum_axis_strided: status ${status} for shape [${this.shape.join(",")}] axis ${axisNum}`,
+        );
       }
-      return new WNDArray<OkShape<ReduceAxis<S, Axis>>>(this.core, outShape as OkShape<ReduceAxis<S, Axis>>, outDataBuf.ptr, outLen);
+      return WNDArray.fresh<OkShape<ReduceAxis<S, Axis>>>(
+        this.core,
+        outShape as OkShape<ReduceAxis<S, Axis>>,
+        outDataBuf.ptr,
+        outLen,
+      );
     } finally {
-      freeBuf(this.core, shapeBuf);
+      for (const buf of scratch) freeBuf(this.core, buf);
     }
   }
 
-  /** Reverse every axis (NumPy's `.T` generalized to N-D). Resident twin of
-   * `NDArray.transpose`/`wasmTranspose`. */
+  /** Reverse every axis (NumPy's `.T` generalized to N-D). Since Kern 03
+   * this is an **O(1) view**: reversed shape + reversed strides over the
+   * SAME buffer — no kernel call, no allocation, no data movement. The
+   * buffer is freed only when the last handle onto it is released; a
+   * double transpose yields a contiguous-strided view again. */
   transpose(): WNDArray<Transpose<S>> {
     this.assertLive("transpose");
-    const outShape = [...this.shape].reverse();
-    const outLen = product(outShape);
+    retainBuffer(this.buf);
+    return new WNDArray<Transpose<S>>(
+      this.buf,
+      [...this.shape].reverse() as Transpose<S>,
+      [...this.strides].reverse(),
+      this.offset,
+    );
+  }
 
-    const shapeBuf = writeShape(this.core, this.shape);
-    const outDataBuf = allocBytes(this.core, outLen * 8);
+  /** Materialize this view into a fresh, independently owned, contiguous
+   * row-major array of the same shape (Kern 03). Deliberately ALWAYS
+   * copies, even when the receiver is already contiguous — predictable
+   * ownership (the result is never a view) beats a micro-optimization.
+   * This is the explicit escape hatch when strided reads would be paid
+   * repeatedly (e.g. a transposed operand feeding many ops). */
+  contiguous(): WNDArray<S> {
+    this.assertLive("contiguous");
+    const len = product(this.shape);
+
+    const scratch: ScratchBuf[] = [];
     try {
-      const status = this.core.nt_transpose(shapeBuf.ptr, this.shape.length, this.ptr, this.len, outDataBuf.ptr, outLen);
+      const shapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(shapeBuf);
+      const stridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(stridesBuf);
+      const outDataBuf = allocBytes(this.core, len * 8);
+
+      const status = this.core.nt_materialize(
+        shapeBuf.ptr,
+        this.shape.length,
+        stridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        outDataBuf.ptr,
+        len,
+      );
       if (status !== 0) {
         freeBuf(this.core, outDataBuf);
-        throw new Error(`wasm resident nt_transpose: status ${status} for shape [${this.shape.join(",")}]`);
+        throw new Error(`wasm resident nt_materialize: status ${status} for shape [${this.shape.join(",")}]`);
       }
-      return new WNDArray<Transpose<S>>(this.core, outShape as Transpose<S>, outDataBuf.ptr, outLen);
+      // `[...t] as unknown as S`: the spread of a readonly tuple S types as
+      // S[number][], which TS won't narrow back to S directly — the values
+      // ARE the same dims, so the round trip through unknown is sound here.
+      return WNDArray.fresh<S>(this.core, [...this.shape] as unknown as S, outDataBuf.ptr, len);
     } finally {
-      freeBuf(this.core, shapeBuf);
+      for (const buf of scratch) freeBuf(this.core, buf);
     }
   }
 
-  /** Read back as an independent `Float64Array` copy — the explicit
-   * copy-OUT boundary (spec). Never a live view: the returned array is
-   * detached from WASM memory by construction (`Float64Array.from`), so it
-   * stays valid even after `dispose()` or a later `memory.grow`. */
+  /** Read back as an independent `Float64Array` copy in LOGICAL row-major
+   * order — the explicit copy-OUT boundary (spec). Never a live view: the
+   * returned array is detached from WASM memory by construction, so it
+   * stays valid even after `dispose()` or a later `memory.grow`. A
+   * contiguous handle copies directly; a strided view gathers through
+   * `nt_materialize` into ephemeral scratch first. */
   toArray(): Float64Array {
     this.assertLive("toArray");
-    const view = new Float64Array(this.core.memory.buffer, this.ptr, this.len);
-    return Float64Array.from(view);
+    const len = product(this.shape);
+
+    if (this.isContiguous()) {
+      const view = new Float64Array(this.core.memory.buffer, this.buf.ptr, len);
+      return Float64Array.from(view);
+    }
+
+    const scratch: ScratchBuf[] = [];
+    try {
+      const shapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(shapeBuf);
+      const stridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(stridesBuf);
+      const outDataBuf = allocBytes(this.core, len * 8);
+      scratch.push(outDataBuf); // ephemeral here — copied out below, always freed
+
+      const status = this.core.nt_materialize(
+        shapeBuf.ptr,
+        this.shape.length,
+        stridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        outDataBuf.ptr,
+        len,
+      );
+      if (status !== 0) {
+        throw new Error(`wasm resident nt_materialize (toArray): status ${status} for shape [${this.shape.join(",")}]`);
+      }
+      // Fresh view derived AFTER the last allocation above (memory rule).
+      const view = new Float64Array(this.core.memory.buffer, outDataBuf.ptr, len);
+      return Float64Array.from(view);
+    } finally {
+      for (const buf of scratch) freeBuf(this.core, buf);
+    }
   }
 
   /** Read back as a plain nested JS array (any rank), for printing/tests —
-   * same shape/stride walk as `NDArray.toNestedArray`. */
+   * same shape/stride walk as `NDArray.toNestedArray` (over the logical
+   * row-major copy `toArray` returns, so views need no special casing). */
   toNestedArray(): unknown {
     this.assertLive("toNestedArray");
     const data = this.toArray();

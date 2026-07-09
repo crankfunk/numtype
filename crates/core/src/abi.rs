@@ -19,7 +19,25 @@
 //!   `2` rank > 32, `3` size overflow (see `shape::KernelError` for exactly
 //!   which condition maps to which code, including the deliberate reuse of
 //!   `3` for "caller-supplied output length doesn't match the kernel's own
-//!   computed output length" — see that type's doc comment).
+//!   computed output length" — see that type's doc comment), `4` strides out
+//!   of bounds (Kern 03, strided entry points only — see below).
+//!
+//! ## Strided entry points (Kern 03)
+//!
+//! The `nt_*_strided` exports (plus `nt_materialize`) generalize their
+//! contiguous originals to **views**: an operand becomes the quadruple
+//! `(shape ptr/rank, strides ptr, offset, data ptr/len)` where `strides` is
+//! `rank` little-endian `u32` *element* strides at its own pointer, `offset`
+//! is a `u32` base *element* offset into the buffer, and `len` is the **full
+//! buffer** length in elements (not the view's logical size — the bounds
+//! check needs the real allocation size). Outputs are always freshly
+//! allocated, contiguous, row-major; strided outputs don't exist in this
+//! ABI. Caller-supplied strides are the first ABI input the kernels cannot
+//! derive themselves, so every strided operand is validated (max reachable
+//! index inside `len`, checked-u64 arithmetic) *before* any data access —
+//! failure is status `4`. The contiguous entry points and kernels are
+//! deliberately untouched (frozen v1 baseline, see
+//! docs/kern-03-strided-spec.md).
 //! - **The caller (TS) computes output shapes and allocates the output
 //!   buffer** (via `nt_alloc`) *before* calling an op; the op writes into
 //!   that buffer and returns status only (it does not report its own
@@ -245,6 +263,176 @@ pub extern "C" fn nt_transpose(shape_ptr: u32, rank: u32, data_ptr: u32, len: u3
     let data: &[f64] = unsafe { read_slice(data_ptr, len) };
 
     match kernels::transpose::transpose(shape, data) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// Kern 03: broadcasting elementwise add over two strided views. See the
+/// "Strided entry points" section of the module doc for the operand
+/// quadruple convention; output contract matches `nt_add`.
+#[no_mangle]
+pub extern "C" fn nt_add_strided(
+    a_shape_ptr: u32,
+    a_rank: u32,
+    a_strides_ptr: u32,
+    a_offset: u32,
+    a_data_ptr: u32,
+    a_data_len: u32,
+    b_shape_ptr: u32,
+    b_rank: u32,
+    b_strides_ptr: u32,
+    b_offset: u32,
+    b_data_ptr: u32,
+    b_data_len: u32,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    // Safety: same caller contract as nt_add (valid, typed, non-overlapping
+    // regions of this module's own memory, stable during the call); the
+    // strides arrays are `rank` u32s each, per the strided ABI convention.
+    let a_shape: &[u32] = unsafe { read_slice(a_shape_ptr, a_rank) };
+    let a_strides: &[u32] = unsafe { read_slice(a_strides_ptr, a_rank) };
+    let a_data: &[f64] = unsafe { read_slice(a_data_ptr, a_data_len) };
+    let b_shape: &[u32] = unsafe { read_slice(b_shape_ptr, b_rank) };
+    let b_strides: &[u32] = unsafe { read_slice(b_strides_ptr, b_rank) };
+    let b_data: &[f64] = unsafe { read_slice(b_data_ptr, b_data_len) };
+
+    match kernels::add::add_strided(a_shape, a_strides, a_offset, a_data, b_shape, b_strides, b_offset, b_data) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// Kern 03: matmul over two strided views. Same promotion contract as
+/// `nt_matmul` (operands arrive rank >= 2; TS squeezes afterward); the axis
+/// added by 1-D promotion carries stride 0 by TS convention.
+#[no_mangle]
+pub extern "C" fn nt_matmul_strided(
+    a_shape_ptr: u32,
+    a_rank: u32,
+    a_strides_ptr: u32,
+    a_offset: u32,
+    a_data_ptr: u32,
+    a_data_len: u32,
+    b_shape_ptr: u32,
+    b_rank: u32,
+    b_strides_ptr: u32,
+    b_offset: u32,
+    b_data_ptr: u32,
+    b_data_len: u32,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    let a_shape: &[u32] = unsafe { read_slice(a_shape_ptr, a_rank) };
+    let a_strides: &[u32] = unsafe { read_slice(a_strides_ptr, a_rank) };
+    let a_data: &[f64] = unsafe { read_slice(a_data_ptr, a_data_len) };
+    let b_shape: &[u32] = unsafe { read_slice(b_shape_ptr, b_rank) };
+    let b_strides: &[u32] = unsafe { read_slice(b_strides_ptr, b_rank) };
+    let b_data: &[f64] = unsafe { read_slice(b_data_ptr, b_data_len) };
+
+    match kernels::matmul::matmul_strided(a_shape, a_strides, a_offset, a_data, b_shape, b_strides, b_offset, b_data) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// Kern 03: full sum of a strided view, accumulated in the view's logical
+/// row-major order (order-sensitive — see `kernels::sum::sum_all_strided`).
+/// Fallible, unlike `nt_sum_all`: caller strides must validate first.
+#[no_mangle]
+pub extern "C" fn nt_sum_all_strided(
+    shape_ptr: u32,
+    rank: u32,
+    strides_ptr: u32,
+    offset: u32,
+    data_ptr: u32,
+    data_len: u32,
+    out_data_ptr: u32,
+) -> u32 {
+    let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
+    let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
+    let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
+
+    match kernels::sum::sum_all_strided(shape, strides, offset, data) {
+        Ok(total) => {
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, 1) };
+            dst[0] = total;
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// Kern 03: sum-reduce a strided view along `axis` (may be negative).
+#[no_mangle]
+pub extern "C" fn nt_sum_axis_strided(
+    shape_ptr: u32,
+    rank: u32,
+    strides_ptr: u32,
+    offset: u32,
+    data_ptr: u32,
+    data_len: u32,
+    axis: i32,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
+    let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
+    let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
+
+    match kernels::sum::sum_axis_strided(shape, strides, offset, data, axis) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// Kern 03: gather a strided view into a contiguous row-major buffer of the
+/// same logical shape (`out_len` must equal the view's element count).
+#[no_mangle]
+pub extern "C" fn nt_materialize(
+    shape_ptr: u32,
+    rank: u32,
+    strides_ptr: u32,
+    offset: u32,
+    data_ptr: u32,
+    data_len: u32,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
+    let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
+    let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
+
+    match kernels::materialize::materialize(shape, strides, offset, data) {
         Ok((_out_shape, out_data)) => {
             if out_data.len() as u32 != out_len {
                 return KernelError::SizeOverflow.status();

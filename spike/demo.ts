@@ -149,8 +149,19 @@ assertResidentAgrees("cube.sum(1)", reduced, rReduced);
 const rTransposed = rA.transpose();
 assertResidentAgrees("A.transpose()", transposed, rTransposed);
 
+// --- Kern 03: transpose is an O(1) VIEW — feed it straight into matmul ----
+// `rM2.transpose()` allocates nothing and copies nothing (shared buffer,
+// reversed strides); the strided matmul kernel reads it in place. The
+// reference chains the same two ops on the naive runtime.
+const viewRef = m2.transpose().matmul(m2);
+const rM2View = rM2.transpose(); // O(1), no kernel call
+const rViewProduct = rM2View.matmul(rM2);
+assertResidentAgrees("M2ᵀ (view) @ M2", viewRef, rViewProduct);
+
 // Explicit dispose at the end of this section — every resident handle
 // created above, released deterministically (not left to the GC backstop).
+// Note the order freedom refcounting buys: rM2 was already safe to dispose
+// before rM2View (shared buffer lives until the LAST handle releases).
 rA.dispose();
 rB.dispose();
 rSum.dispose();
@@ -160,5 +171,7 @@ rProduct.dispose();
 rCube.dispose();
 rReduced.dispose();
 rTransposed.dispose();
+rM2View.dispose();
+rViewProduct.dispose();
 
 console.log("=== demo complete: TS, WASM v1, and WASM resident all agree on every showcase op ===");

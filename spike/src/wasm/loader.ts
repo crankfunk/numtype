@@ -53,6 +53,71 @@ export interface CoreExports {
   ): number;
   nt_transpose(shapePtr: number, rank: number, dataPtr: number, len: number, outDataPtr: number, outLen: number): number;
   nt_fill(outDataPtr: number, outLen: number, value: number): number;
+  // --- Kern 03: strided entry points. A strided operand is the quadruple
+  // (shape ptr/rank, strides ptr, element offset, data ptr/FULL-buffer len);
+  // see the "Strided entry points" section of crates/core/src/abi.rs.
+  nt_add_strided(
+    aShapePtr: number,
+    aRank: number,
+    aStridesPtr: number,
+    aOffset: number,
+    aDataPtr: number,
+    aDataLen: number,
+    bShapePtr: number,
+    bRank: number,
+    bStridesPtr: number,
+    bOffset: number,
+    bDataPtr: number,
+    bDataLen: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
+  nt_matmul_strided(
+    aShapePtr: number,
+    aRank: number,
+    aStridesPtr: number,
+    aOffset: number,
+    aDataPtr: number,
+    aDataLen: number,
+    bShapePtr: number,
+    bRank: number,
+    bStridesPtr: number,
+    bOffset: number,
+    bDataPtr: number,
+    bDataLen: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
+  nt_sum_all_strided(
+    shapePtr: number,
+    rank: number,
+    stridesPtr: number,
+    offset: number,
+    dataPtr: number,
+    dataLen: number,
+    outDataPtr: number,
+  ): number;
+  nt_sum_axis_strided(
+    shapePtr: number,
+    rank: number,
+    stridesPtr: number,
+    offset: number,
+    dataPtr: number,
+    dataLen: number,
+    axis: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
+  nt_materialize(
+    shapePtr: number,
+    rank: number,
+    stridesPtr: number,
+    offset: number,
+    dataPtr: number,
+    dataLen: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
 }
 
 const WASM_URL = new URL("./numtype_core.wasm", import.meta.url);
