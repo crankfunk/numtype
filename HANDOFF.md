@@ -1,7 +1,7 @@
 # Handoff — 2026-07-10
 
 ## Aktueller Stand
-NumType (Forschungsprojekt: typsichere n-dim Arrays — TS-Typ-Ebene + from-scratch Rust/WASM-Kerne). Drei Phasen sind implementiert, **unabhängig verifiziert** und committet (Branch `main`, 6 Commits, Arbeitsbaum clean, **kein Remote** — lokal-privat):
+NumType (Forschungsprojekt: typsichere n-dim Arrays — TS-Typ-Ebene + from-scratch Rust/WASM-Kerne). Drei Phasen sind implementiert, **unabhängig verifiziert** und committet (Branch `main`, Arbeitsbaum clean; Remote: `github.com/crankfunk/numtype`, privat, gepusht):
 
 - **Typ-Ebene** (Spike 01): `Broadcast`/`MatMul`/`ReduceAxis`/`Transpose` im Typsystem, graduell (`number`-Dims und `number[]`-Rang degradieren ehrlich), Shape-Fehler am schuldigen Argument mit benannten Shapes.
 - **Rust/WASM-Kerne** (Kern 01): handgerolltes `extern "C"`-ABI (kein wasm-bindgen, leere `[dependencies]`), **bit-identisch** zur naiven TS-Referenz (791 Differentialfälle), ~1,3–2,5× über naiv-TS.
