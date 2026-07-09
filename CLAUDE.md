@@ -21,6 +21,23 @@ Kern 01: from-scratch Rust/WASM kernels behind the existing NDArray API — spec
 
 Installed TypeScript is **7.0.2** — the native (Go) compiler generation, now `latest` on npm (6.0 is still `beta`). All researched recursion/instantiation limits below were documented for TS 5.x; treat them as hypotheses to verify empirically on 7.x, not as facts. `--extendedDiagnostics` works on 7.0.2.
 
+## Obligatory workflow: capture findings in the coding-kb (user-mandated, 2026-07-09)
+
+Every substantial slice of work (spike, phase, verification pass, benchmark) ends with a knowledge capture —
+it is part of the Definition of Done, not optional:
+
+1. **In-project:** findings go into the phase's results doc (`docs/*-ergebnisse.md`) — grounded in commands
+   actually run, honest about failures and gaps (see the docs' "honesty rule").
+2. **Cross-project:** every *general* lesson (disproven assumption, non-trivial gotcha, failed→working
+   approach, transferable technique) is upserted into the coding-kb Obsidian vault as an atomic note —
+   revise a related existing note rather than duplicating; correct notes that turned out wrong or imprecise
+   (e.g. replace single-point figures with measured ranges). Follow the vault's
+   `90-Meta/Capture-Workflow.md` (template, `status: seedling`, tags, `projekte: [numtype]`).
+3. **Wire it:** link the note into the fitting MOC(s), then rebuild the graph (root op, command in
+   Capture-Workflow.md) and verify the new note's link edges via a `coding-kb` query.
+4. Before starting non-trivial work in a known domain, **consult** the KB first (`find` → `neighbors` →
+   `read`) — do not re-derive what is already written down.
+
 ## Key TS limits to respect (researched on TS 5.x, sourced in docs/wettbewerbsanalyse-und-usp.md §4)
 
 - ~100 instantiation depth non-tail-recursive; ~1000 tail-recursive → write ALL recursive types accumulator/tail-recursive.
