@@ -132,8 +132,8 @@ for (const n of SIZES) {
 
   function residentChain(): Float64Array {
     // Boundary-IN: construct every operand this pipeline run needs, once.
-    let cur: AnyWNDArray = WNDArray.fromArray(core, shape, Array.from(seedData));
-    const stepArrays: AnyWNDArray[] = stepData.map((d) => WNDArray.fromArray(core, shape, Array.from(d)));
+    let cur: AnyWNDArray = WNDArray.fromArray(core, shape, seedData);
+    const stepArrays: AnyWNDArray[] = stepData.map((d) => WNDArray.fromArray(core, shape, d));
     // Pure pointer-to-pointer chain: dispose each intermediate as soon as
     // the next op has consumed it.
     for (let i = 0; i < CHAIN_LEN; i++) {
@@ -189,6 +189,6 @@ for (const r of rows) {
 console.log();
 console.log("Notes: each timed rep runs the WHOLE pipeline once, including its boundary copies —");
 console.log("v1 pays copy-in/copy-out at every one of the 8 steps; resident pays it once, at the ends.");
-console.log("The resident boundary-in cost includes converting Float64Array -> number[] for fromArray");
-console.log("(WNDArray.fromArray mirrors NDArray.fromArray's own `readonly number[]` signature exactly).");
+console.log("Boundary-in uses fromArray's Float64Array overload (a single memcpy-fast view.set) — the");
+console.log("~100x Array.from conversion tax originally measured here no longer applies (kern-02 doc).");
 console.log("A '<' marker means the left side of that comparison is SLOWER. Bit-identity checked first.");

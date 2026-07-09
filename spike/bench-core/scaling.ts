@@ -118,8 +118,8 @@ for (const n of ADD_SIZES) {
   const got = wasmAdd(core, shape, a, shape, b);
   assertBitIdentical(`add ${n}x${n}`, ref.data, got.data);
 
-  const rA = WNDArray.fromArray(core, shape, Array.from(a));
-  const rB = WNDArray.fromArray(core, shape, Array.from(b));
+  const rA = WNDArray.fromArray(core, shape, a);
+  const rB = WNDArray.fromArray(core, shape, b);
   const residentCheck = rA.add(rB);
   assertBitIdentical(`add ${n}x${n} (resident)`, ref.data, residentCheck.toArray());
   residentCheck.dispose();
@@ -160,8 +160,8 @@ for (const n of MATMUL_SIZES) {
   const got = wasmMatmul(core, shape, a, shape, b);
   assertBitIdentical(`matmul ${n}x${n}`, ref.data, got.data);
 
-  const rA = WNDArray.fromArray(core, shape, Array.from(a));
-  const rB = WNDArray.fromArray(core, shape, Array.from(b));
+  const rA = WNDArray.fromArray(core, shape, a);
+  const rB = WNDArray.fromArray(core, shape, b);
   const residentCheck = rA.matmul(rB);
   assertBitIdentical(`matmul ${n}x${n} (resident)`, ref.data, residentCheck.toArray());
   residentCheck.dispose();

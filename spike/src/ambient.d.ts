@@ -39,6 +39,7 @@ declare module "node:assert" {
   function ok(value: unknown, message?: string | Error): asserts value;
   function strictEqual<T>(actual: T, expected: T, message?: string | Error): void;
   function deepStrictEqual<T>(actual: T, expected: T, message?: string | Error): void;
+  function notStrictEqual<T>(actual: T, expected: T, message?: string | Error): void;
   /** `error` may be a RegExp matched against the thrown error's message, or
    * a validation function receiving the thrown value and returning
    * whether it's acceptable (both forms used by this project's tests). */
@@ -47,8 +48,9 @@ declare module "node:assert" {
     ok: typeof ok;
     strictEqual: typeof strictEqual;
     deepStrictEqual: typeof deepStrictEqual;
+    notStrictEqual: typeof notStrictEqual;
     throws: typeof throws;
   };
   export default assertDefault;
-  export { ok, strictEqual, deepStrictEqual, throws };
+  export { ok, strictEqual, deepStrictEqual, notStrictEqual, throws };
 }

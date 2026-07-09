@@ -307,3 +307,35 @@ An independent fresh-context verification pass reproduced every acceptance crite
   (near-OOM only). → FOLLOWUPS.md.
 - **Finding (minor):** the `test:core` explicit-list deviation is sound but leaves a footgun (future
   v1 test files silently never run). → FOLLOWUPS.md.
+
+---
+
+## Follow-up: `fromArray` Float64Array overload (2026-07-10)
+
+Both `NDArray.fromArray` and `WNDArray.fromArray` now accept `readonly number[] | Float64Array`
+(API mirror preserved by widening BOTH). The typed-array path copies via `new Float64Array(src)` /
+`view.set(src)` — memcpy-fast; input always copied, never aliased. Covered by 4 new tests
+(`fromarray-overload.test.ts`: bit-identity typed-vs-list path, copy-not-alias, both classes; resident
+suite now 678). All gates re-run green: `pnpm check`, `test:core` 791/791, demo (all three paths).
+
+**Chain bench after the overload** (was 0.76–0.91x, i.e. 9–24% SLOWER than v1):
+
+```
+  128 |  13.864ms |  6.923ms |  6.871ms | res/naive 2.02x | res/v1 1.01x
+  256 |  92.277ms | 52.310ms | 52.159ms | res/naive 1.77x | res/v1 1.00x
+  512 | 729.207ms |485.703ms |484.992ms | res/naive 1.50x | res/v1 1.00x
+```
+
+The artificial deficit is fully eliminated. Additional probe (add-ONLY chain, 8 ops at n=1024 — the
+copy-heaviest realistic case, two runs): naive 119.6/119.3ms, v1 88.3/88.1ms, resident 84.4/83.6ms →
+**res/v1 = 1.05x** stable.
+
+**Honest conclusion:** the ~100x tax was the *boxing conversion* (`Array.from` to `number[]`), never
+the copying itself — v1's copies are plain memcpys and were cheap all along. With the conversion gone,
+residency's end-to-end edge over v1 is ~1.0x in matmul-heavy chains (compute-bound) and a modest ~1.05x
+even in add-only chains; its per-op steady-state edge (operands reused across many ops) remains
+1.07–1.55x for add. Residency's primary value going forward is the memory model itself (data stays put;
+foundation for strided views and SIMD in later Kerne), not raw v1-relative throughput today. No
+separate verification pass was dispatched for this follow-up: the diff is small, mechanically gated
+(678 + 791 tests, bit-identity gates in every bench), and the new claims above are direct measurements
+recorded here.

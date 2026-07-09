@@ -52,7 +52,7 @@ function assertBackendsAgree(
     }
   }
   console.log(`  [wasm] ${label} shape=[${got.shape.join(",")}] — matches TS bit-for-bit`);
-  console.log(JSON.stringify(NDArray.fromArray(got.shape, Array.from(got.data)).toNestedArray()));
+  console.log(JSON.stringify(NDArray.fromArray(got.shape, got.data).toNestedArray()));
   console.log();
 }
 
@@ -132,17 +132,17 @@ function assertResidentAgrees(
 
 // Resident twins of A, B, M1, M2, cube — built once via the explicit
 // copy-IN boundary (`fromArray`), then chained resident, pointer-to-pointer.
-const rA = WNDArray.fromArray(core, a.shape, Array.from(a.data));
-const rB = WNDArray.fromArray(core, b.shape, Array.from(b.data));
+const rA = WNDArray.fromArray(core, a.shape, a.data);
+const rB = WNDArray.fromArray(core, b.shape, b.data);
 const rSum = rA.add(rB);
 assertResidentAgrees("A + B (bcast)", sum, rSum);
 
-const rM1 = WNDArray.fromArray(core, m1.shape, Array.from(m1.data));
-const rM2 = WNDArray.fromArray(core, m2.shape, Array.from(m2.data));
+const rM1 = WNDArray.fromArray(core, m1.shape, m1.data);
+const rM2 = WNDArray.fromArray(core, m2.shape, m2.data);
 const rProduct = rM1.matmul(rM2);
 assertResidentAgrees("M1 @ M2", product, rProduct);
 
-const rCube = WNDArray.fromArray(core, cube.shape, Array.from(cube.data));
+const rCube = WNDArray.fromArray(core, cube.shape, cube.data);
 const rReduced = rCube.sum(1);
 assertResidentAgrees("cube.sum(1)", reduced, rReduced);
 

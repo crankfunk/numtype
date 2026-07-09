@@ -222,11 +222,18 @@ export class WNDArray<S extends Shape> {
     return new WNDArray<Mutable<S>>(core, [...shape] as Mutable<S>, buf.ptr, len);
   }
 
-  /** Build a resident array from a flat row-major values list — the
-   * explicit copy-IN boundary (spec). Throws at runtime if `values.length`
-   * doesn't match the shape's element count (same check as
-   * `NDArray.fromArray`). */
-  static fromArray<const S extends Shape>(core: CoreExports, shape: S, values: readonly number[]): WNDArray<Mutable<S>> {
+  /** Build a resident array from flat row-major values — the explicit
+   * copy-IN boundary (spec). Accepts a plain list or a `Float64Array`
+   * (mirrors `NDArray.fromArray`); either way the copy into WASM memory is
+   * a single `view.set()` — for a `Float64Array` that is memcpy-fast,
+   * removing the ~100x `Array.from` conversion tax the Kern-02 chain bench
+   * measured. Throws at runtime if `values.length` doesn't match the
+   * shape's element count (same check as `NDArray.fromArray`). */
+  static fromArray<const S extends Shape>(
+    core: CoreExports,
+    shape: S,
+    values: readonly number[] | Float64Array,
+  ): WNDArray<Mutable<S>> {
     const len = product(shape);
     if (values.length !== len) {
       throw new Error(`fromArray: expected ${len} values for shape [${shape.join(",")}], got ${values.length}`);

@@ -80,14 +80,19 @@ export class NDArray<S extends Shape> {
     return new NDArray<Mutable<S>>([...shape] as Mutable<S>, new Float64Array(product(shape)).fill(1));
   }
 
-  /** Build an array from a flat row-major values list. Throws at runtime if
-   * `values.length` doesn't match the shape's element count. */
-  static fromArray<const S extends Shape>(shape: S, values: readonly number[]): NDArray<Mutable<S>> {
+  /** Build an array from flat row-major values. Accepts a plain list or a
+   * `Float64Array` — the typed-array path copies via the copy constructor
+   * (memcpy-fast); forcing typed-array callers through `number[]` would
+   * cost ~100x at the boundary (docs/kern-02-ergebnisse.md, chain-bench
+   * finding). The input is always copied, never aliased. Throws at runtime
+   * if `values.length` doesn't match the shape's element count. */
+  static fromArray<const S extends Shape>(shape: S, values: readonly number[] | Float64Array): NDArray<Mutable<S>> {
     const size = product(shape);
     if (values.length !== size) {
       throw new Error(`fromArray: expected ${size} values for shape [${shape.join(",")}], got ${values.length}`);
     }
-    return new NDArray<Mutable<S>>([...shape] as Mutable<S>, Float64Array.from(values));
+    const data = values instanceof Float64Array ? new Float64Array(values) : Float64Array.from(values);
+    return new NDArray<Mutable<S>>([...shape] as Mutable<S>, data);
   }
 
   /** Broadcasting elementwise add. */
