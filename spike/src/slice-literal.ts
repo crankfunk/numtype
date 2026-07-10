@@ -40,7 +40,7 @@
  * above; only non-negative literals reach this arithmetic at all.)
  */
 
-import { type Dim, type IsDynamicDim } from "./dim.ts";
+import { type Dim, type IsDynamicDim, type IsDynamicRank, type Shape } from "./dim.ts";
 
 type Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
 
@@ -368,3 +368,213 @@ export type LiteralIndexBounds<I, D extends Dim> = IsDynamicDim<D> extends true
             : never
           : "unknown" // "1.5", "1e+21", mixed unions like "-1" | "2": no claim
     : "unknown"; // not a number at all (defensive; callers pre-filter)
+
+// ---------------------------------------------------------------------------
+// Spike 04 (docs/spike-04-shape-products-spec.md): the literal PRODUCT of a
+// shape's dims — reshape/flatten's Phase-B enabler. Appended below all
+// pre-existing content; needs `Compare`, `StripLeadingZeros`, `ReverseStr`,
+// `IsPlainDigits`/`NonNegDigits`, `Digit`/`DigitValue`/`Tup`/`TupDigit` — no
+// duplication of anything above. Unlike Spike 03 (a bounded finite verdict
+// alphabet, safely union-tolerant via subset checks), a product is an
+// UNBOUNDED value with no such alphabet, so this section's arithmetic is
+// UNION-FREE BY CONSTRUCTION instead: any union (or `never`) dim is filtered
+// out at the shape-walk boundary, before a single digit string is built, and
+// no type below ever receives a naked union as `A`/`B`. Addition is needed
+// here (Kern 05's stretch got away with subtraction+comparison only) because
+// schoolbook multiplication is repeated shifted addition.
+// ---------------------------------------------------------------------------
+
+/** Add two digits with an incoming carry (0 or 1): `[resultDigit,
+ * carryOut]` — the carry mirror of `SubDigit`. Built by concatenating three
+ * bounded tuples (length <= 9+9+1 = 19: both digits plus an optional
+ * carry-in unit) and peeling `Tup<10>` off once if that overflows — never a
+ * 100-entry digit+digit lookup table and never proportional to a dim
+ * value. */
+type AddDigit<A extends Digit, B extends Digit, CarryIn extends 0 | 1> = [
+  ...Tup<DigitValue<A>>,
+  ...Tup<DigitValue<B>>,
+  ...(CarryIn extends 1 ? Tup<1> : []),
+] extends infer Sum extends readonly unknown[]
+  ? Sum extends [...Tup<10>, ...infer Rest extends readonly unknown[]]
+    ? [TupDigit<Rest>, 1]
+    : [TupDigit<Sum>, 0]
+  : never;
+
+/** Multi-digit addition, digit-by-digit from the LEAST significant end (via
+ * `ReverseStr`), threading a carry — `SubRev`'s addition mirror, but
+ * SYMMETRIC in both operands: `SubRev` only ever needs to handle `BRev`
+ * running out first, because its one caller (`MultiSub`) establishes
+ * `A >= B` in LENGTH via `Compare` before calling it. `AddRev` has no such
+ * precondition — the schoolbook accumulator below (`MulAccRev`) adds a
+ * short shifted partial product into a long running total, and later a long
+ * one into a short total, in either order, so both exhaustion orders must
+ * be handled. A carry surviving past BOTH operands exhausting APPENDS one
+ * more (highest) digit — addition's one failure mode subtraction never has
+ * under its own precondition (e.g. `999 + 1 = 1000`: one digit longer than
+ * either operand; `A - B` with `A >= B` can never grow past `A`'s length). */
+type AddRev<ARev extends string, BRev extends string, CarryIn extends 0 | 1, Acc extends string = ""> = ARev extends `${infer AHead extends Digit}${infer ARest}`
+  ? BRev extends `${infer BHead extends Digit}${infer BRest}`
+    ? AddDigit<AHead, BHead, CarryIn> extends [infer RDigit extends Digit, infer CarryOut extends 0 | 1]
+      ? AddRev<ARest, BRest, CarryOut, `${Acc}${RDigit}`>
+      : never
+    : AddDigit<AHead, "0", CarryIn> extends [infer RDigit extends Digit, infer CarryOut extends 0 | 1]
+      ? AddRev<ARest, "", CarryOut, `${Acc}${RDigit}`>
+      : never
+  : BRev extends `${infer BHead extends Digit}${infer BRest}`
+    ? AddDigit<"0", BHead, CarryIn> extends [infer RDigit extends Digit, infer CarryOut extends 0 | 1]
+      ? AddRev<"", BRest, CarryOut, `${Acc}${RDigit}`>
+      : never
+    : CarryIn extends 1
+      ? `${Acc}1` // both exhausted, carry survives: one more (highest) digit
+      : Acc;
+
+/** `Countdown.length` copies of `BTup`, concatenated: a tuple of length
+ * `Countdown.length * BTup.length` — bounded to <= 9*9 = 81 at every call
+ * site below (both operands are single digits 0-9). Recursion depth <= 9
+ * (peels one `Countdown` element per step). This is the "repeated concat"
+ * `MulAdd` needs to get a digit product, kept OUT of a 100-entry digit x
+ * digit lookup table and never proportional to a dim VALUE (only ever to
+ * bounded 0-9 digit values). */
+type MulTup<Countdown extends readonly unknown[], BTup extends readonly unknown[], Acc extends readonly unknown[] = []> = Countdown extends [unknown, ...infer Rest]
+  ? MulTup<Rest, BTup, [...Acc, ...BTup]>
+  : Acc;
+
+/** Split a bounded (<=89-element) tuple into `[remainderDigit,
+ * quotientDigit]` by peeling `Tup<10>` off repeatedly — <= 8 peels, since
+ * `floor(89/10) = 8` is the largest possible quotient any call site below
+ * produces (see `MulAdd`'s comment for where 89 comes from). The quotient is
+ * tracked as the accumulated peel-count's tuple LENGTH and converted via
+ * `TupDigit` at the end — the same idiom `SubDigit`'s borrow branch already
+ * uses at a single-peel scale, just iterated here. */
+type DivMod10<T extends readonly unknown[], QAcc extends readonly unknown[] = []> = T extends [...Tup<10>, ...infer Rest extends readonly unknown[]]
+  ? DivMod10<Rest, [...QAcc, unknown]>
+  : [TupDigit<T>, TupDigit<QAcc>];
+
+/** Digit x digit + a carry-in DIGIT (not just 0|1, unlike `AddDigit`'s
+ * carry) -> `[resultDigit, carryOutDigit]`. Value bound: `9*9 + 8 = 89` —
+ * the `+8` is the largest carry a PRIOR `MulAdd` step in the same
+ * digit-times-digit chain (`MulDigitRev`) can hand off (`DivMod10`'s own
+ * comment explains why 8, not 9, is the ceiling — the bound is
+ * self-consistent: a chain of `MulAdd` calls can never produce a carry above
+ * 8 into the NEXT call either). Built from the two bounded tuple helpers
+ * above — never a 100-entry digit x digit table. */
+type MulAdd<A extends Digit, B extends Digit, CarryIn extends Digit> = DivMod10<[...MulTup<Tup<DigitValue<A>>, Tup<DigitValue<B>>>, ...Tup<DigitValue<CarryIn>>]>;
+
+/** `ARev` (a multi-digit number, reversed) times the single digit `B`,
+ * threading the carry digit-position to digit-position via `MulAdd`. A
+ * surviving final carry (nonzero once `ARev` is exhausted) becomes one more
+ * (highest) digit — the schoolbook "carry the tens into a new column"
+ * step. */
+type MulDigitRev<ARev extends string, B extends Digit, CarryIn extends Digit = "0", Acc extends string = ""> = ARev extends `${infer AHead extends Digit}${infer ARest}`
+  ? MulAdd<AHead, B, CarryIn> extends [infer RDigit extends Digit, infer CarryOut extends Digit]
+    ? MulDigitRev<ARest, B, CarryOut, `${Acc}${RDigit}`>
+    : never
+  : CarryIn extends "0"
+    ? Acc
+    : `${Acc}${CarryIn}`;
+
+/** Schoolbook long multiplication, tail-recursive over `B`'s digits
+ * (`BRev`, peeled LEAST-significant first — the natural order to walk a
+ * reversed string, and the order the shift amount grows in). `Shift` is a
+ * string of zeros tracking the current column: moving the next partial
+ * product one column further left (schoolbook: the tens' place, then
+ * hundreds', ...) means appending one more zero in NORMAL (un-reversed)
+ * terms — which is PREFIXING one more zero in REVERSED terms. Hence
+ * `` `0${Shift}` `` grows as a prefix here, not a suffix — the "shift-left =
+ * prefix zeros in reversed space" the binding spec calls for. `AccRev` (the
+ * running total) is threaded in the SAME reversed form `AddRev` both
+ * produces and consumes, so no per-step reverse/un-reverse round-trip is
+ * needed — only `MulDigits` below converts back to normal form once, at the
+ * very end. */
+type MulAccRev<ARev extends string, BRev extends string, Shift extends string = "", AccRev extends string = "0"> = BRev extends `${infer BHead extends Digit}${infer BRest}`
+  ? MulAccRev<ARev, BRest, `0${Shift}`, AddRev<AccRev, `${Shift}${MulDigitRev<ARev, BHead>}`, 0>>
+  : AccRev;
+
+/** `A * B` for non-negative integer digit strings: reverse both operands for
+ * the least-significant-first walk `MulAccRev` needs, then reverse its
+ * (also-reversed) result back. `StripLeadingZeros` is MANDATORY here, not
+ * merely tidy: a `x 0` schoolbook path produces a string of all-zero digits
+ * at full operand length (e.g. `"999" * "0"` walks out as `"000"`, not
+ * `"0"`) — without stripping, a downstream
+ * `` `${infer N extends number}` `` template-literal parse would simply
+ * fail to match (leading zeros are not a valid `number` literal's string
+ * form), silently degrading a perfectly decidable `0` product to `number`. */
+type MulDigits<A extends string, B extends string> = StripLeadingZeros<ReverseStr<MulAccRev<ReverseStr<A>, ReverseStr<B>>>>;
+
+/** Standard "is `T` a (2+-member) union" probe. `U` defaults to (and is
+ * bound ONCE, undistributed, to the whole of) `T`; the naked `T extends
+ * unknown` distributes over `T`'s members when `T` IS a union, giving each
+ * member a chance to fail `[U] extends [T]` — true only when `T`'s single
+ * member (not the whole original union) equals `U`, which is impossible
+ * unless `T` had exactly one member to begin with. `[T] extends [never]` is
+ * a separate, necessary special case FIRST: `never` is the empty union, so
+ * `T extends unknown` for `T = never` distributes over ZERO members and
+ * evaluates to `never` itself, never reaching a `true`/`false` verdict.
+ * (`ProductAcc` below additionally guards `never` dims itself — NOT for this
+ * helper's sake, which answers `false` for `never` via this branch, but
+ * because `never` would otherwise sail on THROUGH `NonNegDigits`: `never`
+ * satisfies every `extends` check, so `` IsPlainDigits<`${never}`> extends
+ * true `` matches and hands back `` `${never}` `` = `never`, which then
+ * propagates through the whole product as `never` instead of an honest
+ * `number` degrade — the standard never-always-matches gotcha, empirically
+ * confirmed by ablation while building this block.) */
+type IsUnion<T, U = T> = [T] extends [never] ? false : T extends unknown ? ([U] extends [T] ? false : true) : never;
+
+/**
+ * The product of a fixed-rank shape's dims, decided per-dim in this exact
+ * order (binding spec's semantics table): `never` dim, then union dim, then
+ * "outside the supported literal subset" (dynamic dim, negative,
+ * non-integer, exponent-form — all already classified as `NonNegDigits`'s
+ * `"unsupported"` sentinel) — each an unconditional, EARLY-EXIT `number`
+ * degrade. No arithmetic is attempted on the remaining dims once any one dim
+ * degrades: there is no partial literal to report for a shape with one
+ * unknown axis. Every OTHER dim multiplies into a running digit-string
+ * accumulator (`Acc`, starting at `"1"`, the empty product) via
+ * `MulDigits` — union-free BY CONSTRUCTION, since a naked union dim can
+ * never reach that branch.
+ *
+ * At exhaustion, the exact product is reportable as a literal only if it is
+ * a SAFE integer (`<= Number.MAX_SAFE_INTEGER = 9_007_199_254_740_991`):
+ * round-tripping a LARGER digit string through
+ * `` `${infer N extends number}` `` would double-round through `number`'s
+ * float64 representation, silently returning a WRONG literal — the worst
+ * failure mode for this project's whole USP. This is a plain
+ * `Number.isSafeInteger`-style boundary (strictly GREATER than the cap
+ * degrades; `== the cap` itself is still exact and stays a literal), not a
+ * representability special case. Note the cap check happens ONLY here, at
+ * the very end: an intermediate product (e.g. two 16-digit dims multiplied
+ * before a LATER `0` dim zeroes the whole shape out) may transiently exceed
+ * the cap and is never truncated or degraded early — digit strings are
+ * exact at any length, so only the FINAL value is judged against the cap.
+ */
+type ProductAcc<S extends Shape, Acc extends string = "1"> = S extends readonly [infer Head extends Dim, ...infer Rest extends Shape]
+  ? [Head] extends [never]
+    ? number
+    : IsUnion<Head> extends true
+      ? number
+      : NonNegDigits<Head> extends infer HeadDigits extends string
+        ? HeadDigits extends "unsupported"
+          ? number
+          : ProductAcc<Rest, MulDigits<Acc, HeadDigits>>
+        : number // defensive: NonNegDigits<Dim> always yields a string
+  : Compare<Acc, "9007199254740991"> extends "gt"
+    ? number
+    : Acc extends `${infer N extends number}`
+      ? N
+      : number; // defensive: Acc is always plain digits by construction
+
+/**
+ * The product of a shape's literal dims (reshape/flatten's Phase-B enabler,
+ * docs/spike-04-shape-products-spec.md). Dynamic RANK is checked FIRST,
+ * before any tuple recursion — the same ordering `SliceShape` elsewhere in
+ * this codebase already uses: a rank-unknown shape (`number[]`, a variadic
+ * tail) cannot be walked dim-by-dim at all, so it degrades WHOLLY, never
+ * attempting to read a fixed prefix. A union of FIXED shapes (e.g.
+ * `[2,3] | [4]`) is deliberately NOT filtered here — `S` is a naked type
+ * parameter inside `ProductAcc`'s own recursive `S extends [Head,
+ * ...Rest]` check, so it distributes there automatically once `ProductAcc`
+ * is reached, running the whole pipeline independently per union member and
+ * yielding the union of results (`6 | 4`); this is standard TS
+ * conditional-type distribution, not special-cased code.
+ */
+export type LiteralShapeProduct<S extends Shape> = IsDynamicRank<S> extends true ? number : ProductAcc<S>;
