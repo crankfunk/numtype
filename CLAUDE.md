@@ -21,6 +21,10 @@ Between phases — Kern 06 (threads) is done and independently verified in three
 
 `pnpm check` (types) · `pnpm test:core` (v1 differential + meta, 817) · `pnpm test:resident` (+`:gc` with --expose-gc) · `pnpm test:threaded` (60; builds the threads artifact — needs the pinned nightly-2026-07-09 toolchain with rust-src, install command in scripts/build-wasm-threads.sh) · `pnpm demo` (all three backends, asserted equal) · `pnpm bench:scaling` / `bench:chain` / `bench:strided` / `bench:blocked` / `bench:slice` / `bench:threaded` · `cargo test --manifest-path crates/core/Cargo.toml` (110). Note: test scripts use EXPLICIT file lists in package.json — new test files must be added there manually; test-scripts-guard.test.ts (part of test:core) fails if a file is unlisted, double-listed across test:core/test:resident/test:threaded, or missing on disk.
 
+## Frozen-baseline discipline (hard, since Kern 06)
+
+New code in files shared with frozen kernels/entry points (abi.rs, matmul_blocked.rs, shape.rs) must be APPENDED strictly after all pre-existing content — mere line shifts change `#[track_caller]` panic-location metadata and thus the compiled bytes of UNTOUCHED functions. The binding freeze proof is the artifact hash from a clean rebuild (SHA256 of spike/src/wasm/numtype_core.wasm), not a plus-lines-only git diff. Threads-path extras: env RUSTFLAGS REPLACES the config-file rustflags (always carry `+simd128`); the threads artifact builds via scripts/build-wasm-threads.sh on pinned nightly-2026-07-09 (+rust-src) with its own target-dir; `thread_local!` is forbidden in the crate (`__tls_base` only initializes in the winning instance); never cache memory.buffer/views — with shared memory this fails SILENTLY (stale length, no detach).
+
 ## Toolchain note (2026-07-09)
 
 Installed TypeScript is **7.0.2** — the native (Go) compiler generation, now `latest` on npm (6.0 is still `beta`). All researched recursion/instantiation limits below were documented for TS 5.x; treat them as hypotheses to verify empirically on 7.x, not as facts. `--extendedDiagnostics` works on 7.0.2.
