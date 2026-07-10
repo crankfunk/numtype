@@ -3,7 +3,10 @@
  * (`numtype_core_threads.wasm`), spawns a persistent `worker_threads` pool
  * over one shared `WebAssembly.Memory`, and exposes a synchronous
  * `threadedMatmul` that fans a matmul call's output ROWS out across the
- * pool via `nt_matmul_blocked_partial` (see docs/kern-06-threads-spec.md).
+ * pool via `nt_matmul_blocked_partial` (see docs/kern-06-threads-spec.md) —
+ * except for calls below a measured work-volume threshold, which it routes
+ * to the single-threaded kernel on the main thread instead (see
+ * `threadedMatmul`'s "Size-based auto-routing" doc section).
  *
  * Everything else (lifecycle, views, slicing, non-matmul ops) stays on the
  * UNCHANGED `WNDArray` class from `resident.ts`, which works unmodified
@@ -611,6 +614,60 @@ function dispatchAndRun(pool: ThreadedPool, da: WNDArrayDescriptor, db: WNDArray
 }
 
 /**
+ * Work-volume threshold (in multiply-accumulate operations, batch·m·k·n) at
+ * or above which `threadedMatmul` dispatches through the worker pool; below
+ * it, the call runs the single-threaded `nt_matmul_blocked` kernel on the
+ * MAIN thread instead (same core, same memory, and — by the parallel
+ * bit-identity law — the identical bits; the pool path IS row-partitioned
+ * `nt_matmul_blocked`, so the two routes can never disagree).
+ *
+ * MEASURED, not guessed (FOLLOWUPS item: "Schwelle MESSEN statt raten"), via
+ * `pnpm bench:crossover` (spike/bench-core/threaded-crossover.ts) on the
+ * reference machine (M-series MacBook, 8 logical cores / 4 performance
+ * cores, near-idle host, two runs), 2026-07-10. The measured picture —
+ * NOTABLY different from what the Kern-06 Series-B bench suggested, see
+ * docs/kern-06-ergebnisse.md (auto-routing addendum) for why the two
+ * measurements disagree and the full tables:
+ * - at/below ~0.03 Mops (square n<=32) the MAIN route wins decisively: the
+ *   pool's per-call dispatch/wait round trip costs ~13–40µs (grows with
+ *   worker count) and is 1.8–21× slower than just computing on main;
+ * - ~0.11 Mops (n=48) is a wash (pool/main 0.99–1.16 across 2/4/8 workers);
+ * - from 0.26 Mops (= 64³, n=64) upward the POOL route wins for every
+ *   measured worker count and shape family (square, wide-n, deep-k, tall-m,
+ *   batched; both runs agree) — including n=64, where the Kern-06 bench had
+ *   reported threads losing. That older reading compared end-to-end calls
+ *   (fromArray/toArray marshalling included) against the STABLE core; the
+ *   router's actual choice is between two routes on the SAME threads core,
+ *   and on that comparison the pool is already ahead at n=64. Worst honest
+ *   case above the threshold: a single-MC-block call (rows < 32 -> one
+ *   active worker) essentially ties (0.97–1.02; one unreproduced 1.30
+ *   host-noise outlier in run 2, disclosed in the results-doc addendum).
+ *
+ * The cut sits at the TOP of the 0.11–0.26 Mops indifference band because
+ * the risk is asymmetric: routing tiny calls through the pool loses BIG
+ * relatively (up to ~21×), while routing a band-edge call to main costs a
+ * few percent at most. 262_144 = 64³ exactly: the smallest measured volume
+ * where the pool reliably wins keeps its win (>= dispatches to the pool).
+ *
+ * The criterion is WORK VOLUME, not matrix side length or row count: a
+ * [1, 2048]·[2048, 2048] call has ONE output row but 4.2 Mops of work
+ * (pool-worthy), and a [2048, 8]·[8, 8] call has 2048 rows of trivial work
+ * (0.13 Mops — main-worthy); n alone or rows alone would misroute both.
+ */
+export const THREADED_MATMUL_MIN_POOL_WORK = 262_144;
+
+export interface ThreadedMatmulOptions {
+  /** Override for `THREADED_MATMUL_MIN_POOL_WORK` (same semantics/units:
+   * dispatch through the pool iff batch·m·k·n >= this value). Tests use the
+   * two extremes: `0` forces every nonempty call through the pool (the
+   * differential suite must keep exercising the REAL worker-dispatch path —
+   * with the default threshold, its deliberately small shapes would silently
+   * all run on main and prove nothing about the pool); `Infinity` forces the
+   * main-thread route. */
+  readonly minPoolWork?: number;
+}
+
+/**
  * Threaded twin of `WNDArray.matmul` (resident.ts), for `WNDArray`s bound to
  * a `ThreadedPool`'s core. Mirrors the resident matmul semantics exactly —
  * 1-D promotion, batch broadcast, final squeeze — by reusing `planMatmul`/
@@ -621,6 +678,23 @@ function dispatchAndRun(pool: ThreadedPool, da: WNDArrayDescriptor, db: WNDArray
  * — matching the existing `WNDArray.zeros(core, shape)`/`fromArray(core,
  * shape, values)` precedent of taking `core` explicitly rather than
  * inferring it).
+ *
+ * ## Size-based auto-routing (FOLLOWUPS follow-up to Kern 06)
+ *
+ * Calls whose work volume (batch·m·k·n, see `THREADED_MATMUL_MIN_POOL_WORK`)
+ * is below the threshold are routed to the single-threaded
+ * `nt_matmul_blocked` kernel on the MAIN thread — literally `a.matmul(b)`,
+ * the unchanged `WNDArray` method, over this pool's core — instead of paying
+ * the pool's per-call Atomics dispatch/wait round trips (~13–40µs, measured;
+ * up to ~21× slower than main for an 8×8 matmul). Both routes produce
+ * bit-identical results by construction (the pool path is row-partitioned
+ * `nt_matmul_blocked`; parallel bit-identity law, Kern 06). The lifecycle
+ * contract stays SIZE-INDEPENDENT on purpose: a disposed or poisoned pool
+ * throws for every `threadedMatmul` call, including ones the router would
+ * have run on main — callers get one predictable contract, not one that
+ * silently flips with operand size. `opts.minPoolWork` overrides the
+ * threshold per call (`0` = force pool, `Infinity` = force main — the
+ * differential tests use both to pin each route explicitly).
  *
  * Empty row spaces / size-0 output shapes short-circuit on main (allocate,
  * possibly a zero-length buffer, and return) without dispatching a single
@@ -633,6 +707,7 @@ export function threadedMatmul<S extends Shape, B extends Shape>(
   pool: ThreadedPool,
   a: WNDArray<S>,
   b: Guard<MatMul<S, B>, WNDArray<B>>,
+  opts?: ThreadedMatmulOptions,
 ): WNDArray<OkShape<MatMul<S, B>>> {
   pool.assertNotDisposed();
   pool.assertNotPoisoned();
@@ -649,6 +724,17 @@ export function threadedMatmul<S extends Shape, B extends Shape>(
 
   const plan = planMatmul(da.shape, da.strides, db.shape, db.strides);
   const totalRows = plan.batchOut.reduce((acc, d) => acc * d, 1) * plan.m;
+
+  // Auto-routing (see module doc): totalRows already includes the batch
+  // product, so totalRows·k·n IS batch·m·k·n. `planMatmul` has already
+  // thrown on any shape error at this point, so both routes reject invalid
+  // inputs identically (with the same messages — `matmul()` runs the same
+  // checks). Strictly below the threshold -> single-threaded main-thread
+  // kernel; at/above -> pool dispatch below.
+  const minPoolWork = opts?.minPoolWork ?? THREADED_MATMUL_MIN_POOL_WORK;
+  if (totalRows * plan.k * plan.n < minPoolWork) {
+    return a.matmul(b);
+  }
 
   const outBytes = plan.outLen * 8;
   const outPtr = outBytes === 0 ? 0 : pool.core.nt_alloc(outBytes);

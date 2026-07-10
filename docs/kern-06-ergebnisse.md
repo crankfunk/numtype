@@ -173,3 +173,78 @@ the current control flow and untested directly (documented in code); the
 `MaxListenersExceededWarning` remains (cosmetic); browser execution remains untested (out of
 scope). The verification found a real concurrency bug that self-review and 55 passing tests did
 not — another data point for the fresh-context-verify discipline.
+
+## Follow-up addendum: size-based auto-routing (2026-07-10)
+
+The FOLLOWUPS item deferred out of this phase's scope — `threadedMatmul` routes small problems to
+the single-threaded `nt_matmul_blocked` call on the main thread instead of through the pool — is
+now implemented, with the threshold **measured, not guessed**, per the item's own requirement.
+
+**What was built.** `threadedMatmul(pool, a, b, opts?)` computes the call's work volume
+(batch·m·k·n, from the same `planMatmul` result it already needed) and routes it to
+`a.matmul(b)` — the unchanged `WNDArray` method over the pool's own core — when the volume is
+below `THREADED_MATMUL_MIN_POOL_WORK` (exported from `threaded.ts`); at/above it dispatches
+through the pool as before. Both routes are bit-identical by construction (the pool path IS
+row-partitioned `nt_matmul_blocked`; parallel bit-identity law above). The lifecycle contract is
+deliberately size-independent: a disposed/poisoned pool refuses every call, including ones the
+router would have run on main. `opts.minPoolWork` overrides per call (`0` = force pool,
+`Infinity` = force main); the differential/crash tests pin the pool route with `0` (they would
+otherwise silently stop exercising worker dispatch), and new tests observe the route actually
+taken via the workers' `postedSeq` counters.
+
+**Measurement** (`pnpm bench:crossover`, new: `spike/bench-core/threaded-crossover.ts`). Timed
+unit = `threadedMatmul` + result dispose, operands created once per (case, pool) — i.e. exactly
+the decision the router faces, both routes on the SAME threads core. Grid: square n=8…256,
+volume-matched non-square (wide-n / deep-k / tall-m at ~128³ and ~256³ volumes), batched cases;
+worker counts {2, 4, 8}; adaptively batch-timed samples with ~30 ms tier-up warmup per
+(case, pool, route) — a first run with only 2 warmup calls showed V8's per-module wasm tiering
+as a systematic main-route spread across pools. Bit-identity gate (both routes vs `runtime.ts`)
+before any timing. Host near-idle (load ~2.5 from the interactive desktop session itself; two
+runs, findings agree on every case both runs contain).
+
+| volume (Mops) | representative case | pool/main (w=2 / w=4 / w=8) | verdict |
+|---|---|---|---|
+| 0.0005 (n=8) | 8×8 @ 8×8 | 4.46 / 14.72 / 21.03 | main wins BIG |
+| 0.004–0.03 (n=16…32) | square, tall-tiny [256,8]@[8,8] | 1.84–13.37 | main wins |
+| 0.11 (n=48) | 48×48 @ 48×48 | 0.99 / 1.06 / 1.16 | wash |
+| 0.26 (n=64) | 64×64 @ 64×64 | 0.67 / 0.70 / 0.76 (run 1: 0.85/0.55/0.91) | pool wins, both runs |
+| 0.88–16.8 (n=96…256 + non-square + batch) | all | 0.22–1.02 (one outlier: 1.30, see below) | pool wins or ties |
+
+Pool dispatch overhead itself measures ~13–40µs per call (grows with worker count — one
+Atomics post/wake round trip per worker, including empty-range workers). The worst above-threshold
+cases are single-MC-block shapes (rows < 32 → one active worker), which essentially tie
+(0.97–1.02) — with one disclosed outlier: run 2's deep-k/8-rows cell at workers=8 read 1.30,
+while run 1 read 0.99 for the same cell and the fresh-context verifier's independent re-run read
+1.00 — a one-off host-noise spike, not reproduced, but it sits outside the tie band and is
+reported rather than hidden. The volume criterion never loses badly above the cut, while below it
+the pool loses up to ~21×.
+
+**Chosen threshold: `262_144` (= 64³)** — the top of the 0.11–0.26 Mops indifference band, i.e.
+the smallest measured volume at which the pool reliably won in both runs keeps its win
+(`>=` dispatches through the pool). The asymmetric risk motivates cutting high: tiny calls
+through the pool lose up to ~21×, a band-edge call on main loses ≤ a few percent.
+
+**Honest correction of this doc's own Series B reading.** Series B (and the "n=64 loss persists"
+measurement follow-up above) baselined end-to-end calls — `fromArray` marshalling, `toArray`,
+disposes included — against the STABLE core. On the router's actual comparison (call-only, same
+threads core) the pool already wins at n=64; the small-n "threads lose" readings above are a
+property of that other measurement unit (stable-core baseline + marshalling dilution), not of
+dispatch overhead at n=64. Dispatch overhead does lose — decisively — but at n≤48, sizes Series B
+never measured. `bench:threaded`'s Series B now pins its worker rows to the pool route explicitly
+(`{minPoolWork: 0}`) and carries an auto-routed row for the record.
+
+**Caveats.** The constant is calibrated on the reference machine only (per-host variation
+untested — acceptable for a research-grade constant; the override parameter exists). n=48 was
+measured in one run only (its routing either way costs ≤16 % at worst, inside the wash band).
+The main route pays a second `planMatmul` (once in the router, once inside `matmul()`) — O(rank)
+array work, nanoseconds against a ≥µs matmul, accepted for zero duplication of the frozen-adjacent
+`matmul()` method.
+
+Gates after the change: `pnpm check` clean; `test:threaded` 65/65 (60 + 5 new auto-routing tests)
+three consecutive runs; `test:core` 817 unchanged (test-list guard: the new tests live in the
+already-listed `threaded.test.ts`); `bench:threaded` re-run with the pool route pinned — Series A
+scaling reproduced (1.92–1.98× / 2.66–3.52× / 3.54–4.35× at 2/4/8 workers across n=256/512/1024;
+host carried the interactive desktop session, ~1 core), Series B this run even showed workers≥2
+WINNING end-to-end at n=64 (1.19–1.24×; only workers=1 — pure protocol overhead by construction —
+lost at 0.84×), further corroborating that the older n=64 readings sat inside the noise of a
+different comparison; auto row 1.19× (routes to the pool, as designed at exactly-threshold volume).

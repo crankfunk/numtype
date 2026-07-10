@@ -19,7 +19,7 @@ Between phases — Kern 06 (threads) is done and independently verified in three
 
 ## Commands
 
-`pnpm check` (types) · `pnpm test:core` (v1 differential + meta, 817) · `pnpm test:resident` (+`:gc` with --expose-gc) · `pnpm test:threaded` (60; builds the threads artifact — needs the pinned nightly-2026-07-09 toolchain with rust-src, install command in scripts/build-wasm-threads.sh) · `pnpm demo` (all three backends, asserted equal) · `pnpm bench:scaling` / `bench:chain` / `bench:strided` / `bench:blocked` / `bench:slice` / `bench:threaded` · `cargo test --manifest-path crates/core/Cargo.toml` (110). Note: test scripts use EXPLICIT file lists in package.json — new test files must be added there manually; test-scripts-guard.test.ts (part of test:core) fails if a file is unlisted, double-listed across test:core/test:resident/test:threaded, or missing on disk.
+`pnpm check` (types) · `pnpm test:core` (v1 differential + meta, 817) · `pnpm test:resident` (+`:gc` with --expose-gc) · `pnpm test:threaded` (65; builds the threads artifact — needs the pinned nightly-2026-07-09 toolchain with rust-src, install command in scripts/build-wasm-threads.sh) · `pnpm demo` (all three backends, asserted equal) · `pnpm bench:scaling` / `bench:chain` / `bench:strided` / `bench:blocked` / `bench:slice` / `bench:threaded` / `bench:crossover` (kalibriert die Auto-Weiche, nightly) · `cargo test --manifest-path crates/core/Cargo.toml` (110). Note: test scripts use EXPLICIT file lists in package.json — new test files must be added there manually; test-scripts-guard.test.ts (part of test:core) fails if a file is unlisted, double-listed across test:core/test:resident/test:threaded, or missing on disk.
 
 ## Frozen-baseline discipline (hard, since Kern 06)
 

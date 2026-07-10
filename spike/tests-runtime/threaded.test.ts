@@ -32,6 +32,7 @@ import {
   getPoisonCleanupFreeCount,
   getThreadedPoolFreeCount,
   initThreadedCore,
+  THREADED_MATMUL_MIN_POOL_WORK,
   threadedMatmul,
   ThreadedPool,
 } from "../src/wasm/threaded.ts";
@@ -39,6 +40,16 @@ import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
 import { genBroadcastShapes, genData, makeRng, type Rng } from "./prng.ts";
 
 const stableCore: CoreExports = await initCore();
+
+/** Since the size-based auto-routing follow-up, `threadedMatmul` routes
+ * calls below `THREADED_MATMUL_MIN_POOL_WORK` (batch·m·k·n) to the
+ * single-threaded main-thread kernel. Every test in this file whose POINT
+ * is the worker-dispatch path (the differential grid's deliberately small
+ * shapes, lifecycle, crash/poison scenarios) pins that route explicitly —
+ * otherwise they would silently all run on main and prove nothing about
+ * the pool. The auto-routing tests at the bottom of this file are the ones
+ * that exercise the router itself. */
+const FORCE_POOL = { minPoolWork: 0 } as const;
 
 const WORKER_COUNTS = [1, 2, 3, 4] as const;
 const pools = new Map<number, ThreadedPool>();
@@ -112,7 +123,7 @@ function runCase(name: string, aShape: number[], bShape: number[], aView: boolea
       const a = makeOperand(pool.core, aView, aShape, aData);
       const b = makeOperand(pool.core, bView, bShape, bData);
       try {
-        const got = threadedMatmul(pool, a.arr, b.arr);
+        const got = threadedMatmul(pool, a.arr, b.arr, FORCE_POOL);
         try {
           assertShapeEqual(ref.shape, got.shape, `${name} workers=${wc}`);
           const gotData = got.toArray();
@@ -236,7 +247,7 @@ const MC = 32;
         const a = WNDArray.fromArray(pool.core, aShape, aData);
         const b = WNDArray.fromArray(pool.core, bShape, bData);
         try {
-          const got = threadedMatmul(pool, a, b);
+          const got = threadedMatmul(pool, a, b, FORCE_POOL);
           try {
             assertShapeEqual(ref.shape, got.shape, `${label} workers=${wc}`);
             const gotData = got.toArray();
@@ -247,6 +258,28 @@ const MC = 32;
           } finally {
             got.dispose();
           }
+
+          // DEFAULT opts too (verify finding: FORCE_POOL alone left this
+          // untested): every size-zero shape has work volume 0, so the
+          // router sends these to the MAIN thread — that route must be
+          // bit-identical as well, and must dispatch no worker.
+          const seqBefore = pool.workers.map((pw) => pw.postedSeq);
+          const gotAuto = threadedMatmul(pool, a, b);
+          try {
+            assertShapeEqual(ref.shape, gotAuto.shape, `${label} workers=${wc} (auto-routed)`);
+            const gotAutoData = gotAuto.toArray();
+            assertDataBitIdentical(ref.data, gotAutoData, `${label} workers=${wc} (auto-routed)`);
+            if (label === "k=0" || label === "batch k=0") {
+              assert.ok(gotAutoData.every((v) => v === 0), `${label} (auto-routed): every output must be exactly 0.0, workers=${wc}`);
+            }
+          } finally {
+            gotAuto.dispose();
+          }
+          assert.deepStrictEqual(
+            pool.workers.map((pw) => pw.postedSeq),
+            seqBefore,
+            `${label} workers=${wc}: a size-zero call (volume 0) must not dispatch any worker on the default route`,
+          );
         } finally {
           a.dispose();
           b.dispose();
@@ -283,7 +316,7 @@ test("pool lifecycle: dispose frees workers (free-counter increments), plateaus 
 
   const a = WNDArray.fromArray(p.core, [2, 2] as const, [1, 2, 3, 4]);
   const b = WNDArray.fromArray(p.core, [2, 2] as const, [1, 0, 0, 1]); // identity
-  const c = threadedMatmul(p, a, b);
+  const c = threadedMatmul(p, a, b, FORCE_POOL);
   assertDataBitIdentical(new Float64Array([1, 2, 3, 4]), c.toArray(), "sanity matmul before dispose");
   a.dispose();
   b.dispose();
@@ -301,7 +334,7 @@ test("pool lifecycle: dispose frees workers (free-counter increments), plateaus 
   const p2 = await initThreadedCore(2);
   const a2 = WNDArray.fromArray(p2.core, [2, 2] as const, [5, 6, 7, 8]);
   const b2 = WNDArray.fromArray(p2.core, [2, 2] as const, [1, 0, 0, 1]);
-  const c2 = threadedMatmul(p2, a2, b2);
+  const c2 = threadedMatmul(p2, a2, b2, FORCE_POOL);
   assertDataBitIdentical(new Float64Array([5, 6, 7, 8]), c2.toArray(), "a fresh pool created after a disposed one still works");
   a2.dispose();
   b2.dispose();
@@ -325,7 +358,7 @@ test("sequential reuse: many matmuls on one persistent pool", async () => {
       const a = WNDArray.fromArray(p.core, [m, k], aData);
       const b = WNDArray.fromArray(p.core, [k, n], bData);
       try {
-        const got = threadedMatmul(p, a, b);
+        const got = threadedMatmul(p, a, b, FORCE_POOL);
         try {
           assertShapeEqual(ref.shape, got.shape, `sequential reuse case ${i}`);
           assertDataBitIdentical(ref.data, got.toArray(), `sequential reuse case ${i}`);
@@ -368,7 +401,7 @@ test("worker death mid-job surfaces as a thrown Error within the deadline, not a
     const terminatePromise = p.workers[1]!.worker.terminate();
 
     const t0 = Date.now();
-    assert.throws(() => threadedMatmul(p, a, b), /did not complete within|not alive/, "threadedMatmul must throw, not hang, when a worker dies mid-job");
+    assert.throws(() => threadedMatmul(p, a, b, FORCE_POOL), /did not complete within|not alive/, "threadedMatmul must throw, not hang, when a worker dies mid-job");
     const elapsed = Date.now() - t0;
     assert.ok(elapsed < shortTimeoutMs + 5000, `crash detection took ${elapsed}ms, expected roughly the ${shortTimeoutMs}ms deadline`);
 
@@ -393,7 +426,7 @@ test("a worker already known dead (from a prior call) is refused immediately, no
     const a = WNDArray.fromArray(p.core, [4, 3] as const, genData(makeRng(1n), [4, 3]));
     const b = WNDArray.fromArray(p.core, [3, 2] as const, genData(makeRng(2n), [3, 2]));
     const t0 = Date.now();
-    assert.throws(() => threadedMatmul(p, a, b), /not alive/);
+    assert.throws(() => threadedMatmul(p, a, b, FORCE_POOL), /not alive/);
     const elapsed = Date.now() - t0;
     assert.ok(elapsed < 500, `pre-dispatch liveness check took ${elapsed}ms, expected near-instant (not the 5000ms deadline)`);
     a.dispose();
@@ -447,7 +480,7 @@ test("worker death mid-dispatch (a still-computing EARLIER worker) defers buffer
     const b = WNDArray.fromArray(p.core, [k, n], bData);
 
     const beforeThrow = getPoisonCleanupFreeCount();
-    assert.throws(() => threadedMatmul(p, a, b), /not alive/, "must throw synchronously (pool poisoned), not hang");
+    assert.throws(() => threadedMatmul(p, a, b, FORCE_POOL), /not alive/, "must throw synchronously (pool poisoned), not hang");
     const rightAfterThrow = getPoisonCleanupFreeCount();
     assert.strictEqual(
       rightAfterThrow,
@@ -558,7 +591,7 @@ test("wait-loop timeout (a later-index worker still genuinely computing) defers 
 
     const beforeThrow = getPoisonCleanupFreeCount();
     const t0 = Date.now();
-    assert.throws(() => threadedMatmul(p, a, b), /did not complete within/, "must throw due to the wait-loop timeout, not the pre-dispatch alive check");
+    assert.throws(() => threadedMatmul(p, a, b, FORCE_POOL), /did not complete within/, "must throw due to the wait-loop timeout, not the pre-dispatch alive check");
     const elapsed = Date.now() - t0;
     // Sanity: the throw must actually be GATED by the deadline (roughly
     // shortTimeoutMs), not instant — proves this exercised the timeout
@@ -604,10 +637,240 @@ test("threadedMatmul on an already-disposed pool throws immediately, not undefin
   assert.strictEqual(p.isDisposed, true, "precondition: pool must be disposed");
 
   const t0 = Date.now();
+  // Deliberately DEFAULT opts: [2,2]@[2,2] is far below the auto-routing
+  // threshold, so this also pins that the disposed check runs BEFORE the
+  // route decision — a disposed pool refuses even calls the router would
+  // have run entirely on the main thread.
   assert.throws(() => threadedMatmul(p, a, b), /disposed/, "threadedMatmul on a disposed pool must throw, naming the lifecycle state");
   assert.ok(Date.now() - t0 < 200, "disposed-pool refusal must be near-instant, not a hang or undefined behavior");
 
   a.dispose();
   b.dispose();
+});
+
+// --- Kern 06 follow-up: size-based auto-routing ------------------------------
+// `threadedMatmul` routes calls with work volume (batch·m·k·n) below
+// `THREADED_MATMUL_MIN_POOL_WORK` to the single-threaded main-thread kernel
+// (a.matmul(b) over the pool's core) instead of the worker pool. The route
+// actually taken is observed via the workers' `postedSeq` counters — they
+// increment ONLY when dispatchAndRun posts jobs into the pool, so an
+// unchanged counter proves no worker was involved.
+
+function postedSeqs(p: ThreadedPool): number[] {
+  return p.workers.map((pw) => pw.postedSeq);
+}
+
+test("auto-routing: a small call (default threshold) runs on the main thread — no worker dispatch, bit-identical result", async () => {
+  const p = await initThreadedCore(2);
+  try {
+    const rng = makeRng(0x524f555445534d4cn); // "ROUTESML" packed, arbitrary distinct seed
+    const aData = genData(rng, [8, 8]);
+    const bData = genData(rng, [8, 8]);
+    const ref = matmulRuntime([8, 8], aData, [8, 8], bData);
+    const a = WNDArray.fromArray(p.core, [8, 8], aData);
+    const b = WNDArray.fromArray(p.core, [8, 8], bData);
+    try {
+      assert.ok(8 * 8 * 8 < THREADED_MATMUL_MIN_POOL_WORK, "precondition: this case must sit below the default threshold");
+      const before = postedSeqs(p);
+
+      const got = threadedMatmul(p, a, b); // default opts -> router decides -> main
+      try {
+        assertShapeEqual(ref.shape, got.shape, "auto-routed small call shape");
+        assertDataBitIdentical(ref.data, got.toArray(), "auto-routed small call vs runtime.ts");
+      } finally {
+        got.dispose();
+      }
+      assert.deepStrictEqual(postedSeqs(p), before, "no worker may have been dispatched for a below-threshold call");
+
+      // Explicit Infinity pins the same route regardless of the constant.
+      const got2 = threadedMatmul(p, a, b, { minPoolWork: Infinity });
+      got2.dispose();
+      assert.deepStrictEqual(postedSeqs(p), before, "minPoolWork: Infinity must never dispatch workers");
+    } finally {
+      a.dispose();
+      b.dispose();
+    }
+  } finally {
+    await p.dispose();
+  }
+});
+
+test("auto-routing: the threshold is inclusive (>= dispatches through the pool), exact boundary", async () => {
+  const p = await initThreadedCore(2);
+  try {
+    const rng = makeRng(0x524f555445424e44n); // "ROUTEBND" packed, arbitrary distinct seed
+    const aData = genData(rng, [16, 16]);
+    const bData = genData(rng, [16, 16]);
+    const ref = matmulRuntime([16, 16], aData, [16, 16], bData);
+    const a = WNDArray.fromArray(p.core, [16, 16], aData);
+    const b = WNDArray.fromArray(p.core, [16, 16], bData);
+    const volume = 16 * 16 * 16; // 4096
+    try {
+      const before = postedSeqs(p);
+
+      // work == minPoolWork -> POOL (inclusive lower bound).
+      const viaPool = threadedMatmul(p, a, b, { minPoolWork: volume });
+      try {
+        assertDataBitIdentical(ref.data, viaPool.toArray(), "boundary case via pool vs runtime.ts");
+      } finally {
+        viaPool.dispose();
+      }
+      assert.deepStrictEqual(
+        postedSeqs(p),
+        before.map((s) => s + 1),
+        "work volume == minPoolWork must dispatch through the pool (every worker gets a job posted, even an empty range)",
+      );
+
+      // work one below minPoolWork -> MAIN.
+      const afterPool = postedSeqs(p);
+      const viaMain = threadedMatmul(p, a, b, { minPoolWork: volume + 1 });
+      try {
+        assertDataBitIdentical(ref.data, viaMain.toArray(), "boundary case via main vs runtime.ts");
+      } finally {
+        viaMain.dispose();
+      }
+      assert.deepStrictEqual(postedSeqs(p), afterPool, "work volume < minPoolWork must not dispatch any worker");
+    } finally {
+      a.dispose();
+      b.dispose();
+    }
+  } finally {
+    await p.dispose();
+  }
+});
+
+test("auto-routing criterion is work volume (batch·m·k·n), not row count", async () => {
+  const p = await initThreadedCore(2);
+  try {
+    const rng = makeRng(0x524f555445564f4cn); // "ROUTEVOL" packed, arbitrary distinct seed
+
+    // ONE output row, but k·n = 2048·2048 -> volume 4.19M, far above the
+    // default threshold: must go through the pool despite rows=1 (row count
+    // alone would call this "too small to parallelize").
+    {
+      const aData = genData(rng, [1, 2048]);
+      const bData = genData(rng, [2048, 2048]);
+      const ref = matmulRuntime([1, 2048], aData, [2048, 2048], bData);
+      const a = WNDArray.fromArray(p.core, [1, 2048], aData);
+      const b = WNDArray.fromArray(p.core, [2048, 2048], bData);
+      try {
+        assert.ok(1 * 2048 * 2048 >= THREADED_MATMUL_MIN_POOL_WORK, "precondition: single-row case must sit at/above the default threshold");
+        const before = postedSeqs(p);
+        const got = threadedMatmul(p, a, b);
+        try {
+          assertDataBitIdentical(ref.data, got.toArray(), "single-row above-threshold call vs runtime.ts");
+        } finally {
+          got.dispose();
+        }
+        assert.deepStrictEqual(
+          postedSeqs(p),
+          before.map((s) => s + 1),
+          "a single-row call above the volume threshold must still dispatch through the pool",
+        );
+      } finally {
+        a.dispose();
+        b.dispose();
+      }
+    }
+
+    // MANY rows (2048), but k·n = 8·8 -> volume 0.13M < threshold: must run
+    // on main despite the large row count (rows alone would misroute this
+    // into the pool, where dispatch overhead loses).
+    {
+      const aData = genData(rng, [2048, 8]);
+      const bData = genData(rng, [8, 8]);
+      const ref = matmulRuntime([2048, 8], aData, [8, 8], bData);
+      const a = WNDArray.fromArray(p.core, [2048, 8], aData);
+      const b = WNDArray.fromArray(p.core, [8, 8], bData);
+      try {
+        assert.ok(2048 * 8 * 8 < THREADED_MATMUL_MIN_POOL_WORK, "precondition: many-rows case must sit below the default threshold");
+        const before = postedSeqs(p);
+        const got = threadedMatmul(p, a, b);
+        try {
+          assertDataBitIdentical(ref.data, got.toArray(), "many-rows below-threshold call vs runtime.ts");
+        } finally {
+          got.dispose();
+        }
+        assert.deepStrictEqual(postedSeqs(p), before, "a many-rows call below the volume threshold must not dispatch any worker");
+      } finally {
+        a.dispose();
+        b.dispose();
+      }
+    }
+  } finally {
+    await p.dispose();
+  }
+});
+
+test("auto-routing: the batch product counts toward the work volume (exact boundary through a batched call)", async () => {
+  const p = await initThreadedCore(2);
+  try {
+    const rng = makeRng(0x524f555445424154n); // "ROUTEBAT" packed, arbitrary distinct seed
+    const aShape = [8, 64, 64];
+    const bShape = [64, 64];
+    const volume = 8 * 64 * 64 * 64; // 2_097_152 — batch·m·k·n, NOT m·k·n
+    const aData = genData(rng, aShape);
+    const bData = genData(rng, bShape);
+    const ref = matmulRuntime(aShape, aData, bShape, bData);
+    const a = WNDArray.fromArray(p.core, aShape, aData);
+    const b = WNDArray.fromArray(p.core, bShape, bData);
+    try {
+      const before = postedSeqs(p);
+
+      // minPoolWork exactly at batch·m·k·n -> pool. If the router forgot the
+      // batch product (m·k·n = 262144 only), this would route to main and
+      // the postedSeq assertion below would fail.
+      const viaPool = threadedMatmul(p, a, b, { minPoolWork: volume });
+      try {
+        assertShapeEqual(ref.shape, viaPool.shape, "batched boundary call shape");
+        assertDataBitIdentical(ref.data, viaPool.toArray(), "batched boundary call vs runtime.ts");
+      } finally {
+        viaPool.dispose();
+      }
+      assert.deepStrictEqual(
+        postedSeqs(p),
+        before.map((s) => s + 1),
+        "batch·m·k·n == minPoolWork must dispatch through the pool (batch product must count)",
+      );
+
+      // One above -> main.
+      const afterPool = postedSeqs(p);
+      const viaMain = threadedMatmul(p, a, b, { minPoolWork: volume + 1 });
+      viaMain.dispose();
+      assert.deepStrictEqual(postedSeqs(p), afterPool, "batch·m·k·n < minPoolWork must not dispatch any worker");
+    } finally {
+      a.dispose();
+      b.dispose();
+    }
+  } finally {
+    await p.dispose();
+  }
+});
+
+test("auto-routing: a poisoned pool refuses even a small call the router would have run on main — lifecycle is size-independent", async () => {
+  const p = await initThreadedCore(2, 5000);
+  try {
+    // Poison the pool: kill worker 1, let the exit event settle, then any
+    // forced-pool dispatch discovers the dead worker and poisons (same
+    // recipe as the deferred-free test above, just with a tiny job — the
+    // poisoning itself is not the subject here).
+    await p.workers[1]!.worker.terminate();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const a = WNDArray.fromArray(p.core, [2, 2] as const, [1, 2, 3, 4]);
+    const b = WNDArray.fromArray(p.core, [2, 2] as const, [1, 0, 0, 1]);
+    assert.throws(() => threadedMatmul(p, a, b, FORCE_POOL), /not alive/, "setup: forced-pool dispatch must discover the dead worker and poison");
+    assert.strictEqual(p.isPoisoned, true, "setup: pool must now be poisoned");
+
+    // The actual subject: DEFAULT opts on a far-below-threshold call. The
+    // router WOULD run this on the main thread (which still works fine on a
+    // poisoned pool's core) — but the size-independent lifecycle contract
+    // says threadedMatmul on a poisoned pool throws, period.
+    assert.throws(() => threadedMatmul(p, a, b), /poisoned/, "a poisoned pool must refuse even main-routable calls — no size-dependent contract");
+
+    a.dispose();
+    b.dispose();
+  } finally {
+    await p.dispose();
+  }
 });
 

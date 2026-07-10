@@ -96,7 +96,31 @@ function baselineBlocked(shape: readonly number[], aData: Float64Array, bData: F
   return result;
 }
 
+/** Pins the POOL route explicitly: this bench's job is to measure worker
+ * dispatch itself (Series A scaling, Series B overhead), so the size-based
+ * auto-router must not quietly reroute small cases to the main thread. */
+const FORCE_POOL = { minPoolWork: 0 } as const;
+
 function threadedRun(pool: ThreadedPool, shape: readonly number[], aData: Float64Array, bData: Float64Array): Float64Array {
+  const a = WNDArray.fromArray(pool.core, shape, aData);
+  const b = WNDArray.fromArray(pool.core, shape, bData);
+  const c = threadedMatmul(pool, a, b, FORCE_POOL);
+  const result = c.toArray();
+  a.dispose();
+  b.dispose();
+  c.dispose();
+  return result;
+}
+
+/** The auto-routed call (default threshold) — what a caller actually gets
+ * since the auto-routing follow-up. Shown in Series B for the record: at
+ * n=64 (0.26 Mops, exactly the measured threshold) the router KEEPS the
+ * pool, because within the threads core the pool route is faster there —
+ * the crossover bench showed Series B's <1.00x readings at n=64 come from
+ * the STABLE-core baseline + marshalling, not from dispatch overhead. The
+ * router's savings live at sizes smaller than any Series B measures (see
+ * bench:crossover, n<=48). */
+function threadedRunAuto(pool: ThreadedPool, shape: readonly number[], aData: Float64Array, bData: Float64Array): Float64Array {
   const a = WNDArray.fromArray(pool.core, shape, aData);
   const b = WNDArray.fromArray(pool.core, shape, bData);
   const c = threadedMatmul(pool, a, b);
@@ -179,9 +203,23 @@ console.log(`--- Series B: n=${SIZE_B} — dispatch overhead at a size too small
     const mark = speedup >= 1 ? "" : "  <-- threads LOSE here";
     console.log(`${`workers=${wc}`.padStart(16)} | ${fmtRange(r).padStart(28)} | ${speedup.toFixed(2)}x${mark}`);
   }
+  // Auto-routed row (default threshold), for the record — n=64 sits exactly
+  // AT the measured threshold (64^3 = THREADED_MATMUL_MIN_POOL_WORK), so the
+  // router keeps it on the pool; see threadedRunAuto's doc for why that is
+  // the right call despite this table's <1.00x readings.
+  {
+    const pool = pools.get(WORKER_COUNTS[WORKER_COUNTS.length - 1]!)!;
+    const got = threadedRunAuto(pool, shape, aData, bData);
+    assertBitIdentical(`series B n=${SIZE_B} auto-routed`, ref, got);
+    const r = measureRange(() => void threadedRunAuto(pool, shape, aData, bData));
+    const speedup = baseline.medianMs / r.medianMs;
+    console.log(`${"auto (routed)".padStart(16)} | ${fmtRange(r).padStart(28)} | ${speedup.toFixed(2)}x  (workers=${WORKER_COUNTS[WORKER_COUNTS.length - 1]} pool — at/above threshold)`);
+  }
   console.log(
-    "\n(At n=64 the per-call Atomics dispatch/wait round trip across the pool is a real, measured cost; if any\n" +
-      " workers>1 row shows <1.00x, that is an honest loss, not hidden — dispatch overhead is not amortized here.)",
+    "\n(At n=64 the per-call Atomics dispatch/wait round trip across the pool is a real, measured cost; the workers=N\n" +
+      " rows pin the POOL route explicitly ({minPoolWork: 0}) to keep measuring it honestly; if any workers>1 row\n" +
+      " shows <1.00x, that is an honest loss, not hidden — but note it is measured against the STABLE core incl.\n" +
+      " fromArray/toArray marshalling; the router's own decision baseline is the threads core, see bench:crossover.)",
   );
 }
 
