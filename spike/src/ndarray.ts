@@ -53,7 +53,82 @@ export type OkShape<S> = S extends ShapeError<string> ? never : S extends Shape 
 export type Guard<Result, Actual> = Result extends ShapeError<infer Message> ? { readonly __shapeError: Message } : Actual;
 
 /**
- * Erased top type for heterogeneous containers and non-generic helpers.
+ * A minimal, checker-ENFORCED covariant read view (Spike 05,
+ * docs/spike-05-variance-design-spec.md). `out S` makes the compiler itself
+ * prove, at every compile, that widening a concrete `NDArrayView<[2, 3]>` to
+ * `NDArrayView<Shape>` (or to `NDArrayView<readonly number[]>`) is sound —
+ * the annotation is a declaration-site regression pin for every
+ * instantiation at once. WITH ONE KNOWN LOOPHOLE the maintainer must carry
+ * (verified empirically, Spike-05 fresh-context pass): TypeScript checks
+ * METHOD-SHORTHAND parameters bivariantly (the same long-standing exemption
+ * `strictFunctionTypes` grants methods), so a future member written
+ * shorthand-style with `S` in argument position — `resizeTo(s: S): void` —
+ * would COMPILE despite genuinely breaking covariance. Only a
+ * property-typed function member (`resizeTo: (s: S) => void`) triggers
+ * TS2636. House rule, therefore: this view must NEVER gain a member that
+ * consumes `S`, and any future function-typed member is to be declared
+ * property-style, where the annotation actually enforces.
+ *
+ * Kept to EXACTLY these three members — the omissions are load-bearing,
+ * not oversights (probe evidence in the spec):
+ *  - No op methods (add/matmul/sum/transpose/slice/…): sound dynamic-rank
+ *    degradation needs `S` in ARGUMENT position (the `Guard<Result, Actual>`
+ *    pattern above, on `NDArray` itself) to surface shape errors at the
+ *    call site — consuming `S` genuinely breaks covariance (whether or not
+ *    the checker catches the particular syntax, per the loophole above), so
+ *    guard-bearing members and a covariant view are mutually exclusive
+ *    (the two-of-three rule, docs/spike-01-ergebnisse.md, applied to a
+ *    read-only view). Op consumers stay on generic `NDArray<S>` — a plain
+ *    generic function never needs variance, it re-derives `S` per call.
+ *  - No shape-COMPUTING members either (e.g. a hypothetical
+ *    `transpose(): NDArrayView<Transpose<S>>`), even though such a member
+ *    takes no `S`-typed argument: measured this session (scratchpad
+ *    `variance-probes{,-2}.ts`), that member declaration itself fails with
+ *    TS2636. The `out` check is ABSTRACT — it must hold for any two related
+ *    S/super-S, not merely the shapes this codebase happens to build — and
+ *    `Transpose` is not *provably* monotone under that abstract check, only
+ *    *factually* monotone for concrete instantiations. Proof of the
+ *    distinction: the identical member WITHOUT the `out` annotation type-
+ *    checks fine (the structural widening check runs on concrete
+ *    instantiations only, where `Transpose` happens to behave) — but that
+ *    is covariance-BY-ACCIDENT, exactly the failure mode Spike 01 rejected
+ *    for `NDArray` itself: unenforced, silently breakable by a future
+ *    non-monotone shape op, and only catchable point-wise by tests. The
+ *    `out` annotation trades that away for a compile-time proof, which is
+ *    only available to a view with no computing members.
+ *  - No `data` field: a `Float64Array` is naive-backend-specific; keeping
+ *    the view to shape/strides/nested-array keeps it satisfiable by
+ *    resident/strided backends (`WNDArray`-style) too, for a later phase
+ *    (FOLLOWUPS.md) — out of scope here.
+ *
+ * Two honest caveats on "read view":
+ *  - `readonly shape: S` blocks reassigning the PROPERTY, not mutating the
+ *    tuple's elements — `view.shape[0] = 99` type-checks. This is a
+ *    PRE-EXISTING latent hole on `NDArray` itself (same member type), not
+ *    introduced or widened by this view; a deep-readonly shape is a
+ *    deliberate open decision (FOLLOWUPS.md — it interacts with the
+ *    clean-hover house rule).
+ *  - This is ordinary STRUCTURAL typing: any object with these three
+ *    members satisfies the view, real `NDArray` or not — unlike
+ *    `AnyNDArray` below, which stays de-facto nominal because `NDArray`'s
+ *    private constructor blocks structural impostors. For a read-only
+ *    surface that looseness is by design, but the capability difference
+ *    between the two top types is real and worth knowing.
+ */
+export interface NDArrayView<out S extends Shape> {
+  readonly shape: S;
+  strides(): number[];
+  toNestedArray(): unknown;
+}
+
+/**
+ * Erased top type for heterogeneous containers and non-generic helpers that
+ * also need to CALL ops (add/matmul/sum/transpose/slice/…) on a
+ * shape-erased handle — a deliberately UNSAFE escape hatch, unsafe in BOTH
+ * directions: `any` as the type argument bypasses the variance comparison
+ * entirely (TS's own idiom for a variance-erased handle), so nothing stops
+ * an `AnyNDArray` from flowing back into a precisely-shaped
+ * `NDArray<[2, 3]>` binding either.
  *
  * `NDArray<Shape>` does NOT work as an implicit supertype: sound
  * dynamic-rank degradation puts `S` in method-parameter positions (the
@@ -63,12 +138,18 @@ export type Guard<Result, Actual> = Result extends ShapeError<infer Message> ? {
  * because the unsound degradations happened to satisfy the variance probe;
  * verified empirically against Guard-, intersection- and single-root
  * formulations — see docs/spike-01-ergebnisse.md, post-verification
- * addendum.) `any` as the type argument bypasses the variance comparison
- * entirely, TS's own idiom for a variance-erased handle.
+ * addendum.)
+ *
+ * Reach for `AnyNDArray` ONLY when you need to CALL ops on a
+ * heterogeneously-shaped array. For read-only access (shape/strides/
+ * toNestedArray) prefer `NDArrayView<Shape>` (above) instead — it is the
+ * safe, checker-enforced top type: covariant by a proven annotation, not by
+ * erasure, so it cannot silently unerase in the write direction the way
+ * `any` can.
  */
 export type AnyNDArray = NDArray<any>;
 
-export class NDArray<S extends Shape> {
+export class NDArray<S extends Shape> implements NDArrayView<S> {
   readonly shape: S;
   readonly data: Float64Array;
 

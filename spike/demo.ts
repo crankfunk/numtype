@@ -18,12 +18,13 @@
  * end of that section (demonstrating the full lifecycle, not relying on
  * the GC backstop).
  */
-import { type AnyNDArray, NDArray } from "./src/ndarray.ts";
+import { NDArray, type NDArrayView } from "./src/ndarray.ts";
 import { wasmAdd, wasmMatmul, wasmSum, wasmTranspose } from "./src/wasm/backend.ts";
 import { initCore } from "./src/wasm/loader.ts";
 import { type AnyWNDArray, WNDArray } from "./src/wasm/resident.ts";
+import type { Shape } from "./src/dim.ts";
 
-function printArray(label: string, arr: AnyNDArray): void {
+function printArray(label: string, arr: NDArrayView<Shape>): void {
   console.log(`${label} shape=[${arr.shape.join(",")}]`);
   console.log(JSON.stringify(arr.toNestedArray()));
   console.log();

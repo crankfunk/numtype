@@ -1,4 +1,5 @@
-import { type AnyNDArray, NDArray } from "../src/ndarray.ts";
+import type { Shape } from "../src/dim.ts";
+import { type AnyNDArray, NDArray, type NDArrayView } from "../src/ndarray.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
 // --- const type params: callers never write `as const` ------------------
@@ -93,3 +94,39 @@ const anyErased: AnyNDArray = NDArray.zeros([2, 3]); // the supported pattern
 const anyList: AnyNDArray[] = [NDArray.zeros([2, 3]), NDArray.zeros([7]), NDArray.zeros([])];
 void anyErased;
 void anyList;
+
+// --- NDArrayView<out S>: the safe, checker-enforced covariant read view ----
+// (Spike 05, docs/spike-05-variance-design-spec.md). Unlike AnyNDArray
+// (erasure — unsafe in both directions), the view's `out S` lets a concrete
+// view WIDEN safely while still rejecting a narrowing assignment back.
+
+declare const literalView: NDArrayView<[2, 3]>;
+const widenedToShape: NDArrayView<Shape> = literalView; // widening: [2,3] -> Shape
+const widenedToWideTuple: NDArrayView<readonly number[]> = literalView; // widening: [2,3] -> readonly number[]
+void widenedToShape;
+void widenedToWideTuple;
+
+// A real NDArray<[2,3]> widens the same way — `NDArray<S> implements
+// NDArrayView<S>` is the drift alarm on the class side (see ndarray.ts).
+const nd23 = NDArray.zeros([2, 3]);
+const nd45 = NDArray.zeros([4, 5]);
+const nd23AsView: NDArrayView<Shape> = nd23;
+void nd23AsView;
+
+// Heterogeneous containers of the safe read-only top type — the same
+// use case AnyNDArray[] serves above, but checker-enforced, not erased.
+const heterogeneousViews: NDArrayView<Shape>[] = [nd23, nd45];
+void heterogeneousViews;
+
+// Downcast must still be rejected — `out` widens, it never narrows.
+declare const wideView: NDArrayView<Shape>;
+// @ts-expect-error - NDArrayView<Shape> is not assignable back to NDArrayView<[2, 3]>: downcast, not widening
+const narrowedView: NDArrayView<[2, 3]> = wideView;
+void narrowedView;
+
+// Generic inference through the view: a generic function parameterized over
+// NDArrayView<S> infers the exact literal tuple (probe evidence: the same
+// held for a standalone `materialize<S>(v: View<S>)` free function).
+declare function shapeOf<S extends Shape>(v: NDArrayView<S>): S;
+const inferredShape = shapeOf(nd23);
+type T14 = Expect<Equal<typeof inferredShape, [2, 3]>>;
