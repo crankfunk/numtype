@@ -158,6 +158,17 @@ const rM2View = rM2.transpose(); // O(1), no kernel call
 const rViewProduct = rM2View.matmul(rM2);
 assertResidentAgrees("M2ᵀ (view) @ M2", viewRef, rViewProduct);
 
+// --- Kern 05: slice is ALSO an O(1) VIEW — feed it straight into sum() ----
+// `rA.slice(1)` picks row index 1 of A ([[1,2,3],[4,5,6]]) -> [4,5,6],
+// folding the integer spec into the offset (allocates nothing, copies
+// nothing — same mechanism as transpose()); the strided sum kernel then
+// reads that row in place. The reference chains the same two ops on the
+// naive runtime.
+const sliceSumRef = a.slice(1).sum();
+const rASlice = rA.slice(1); // O(1), no kernel call
+const rSliceSum = rASlice.sum();
+assertResidentAgrees("A.slice(1).sum()", sliceSumRef, rSliceSum);
+
 // Explicit dispose at the end of this section — every resident handle
 // created above, released deterministically (not left to the GC backstop).
 // Note the order freedom refcounting buys: rM2 was already safe to dispose
@@ -173,5 +184,7 @@ rReduced.dispose();
 rTransposed.dispose();
 rM2View.dispose();
 rViewProduct.dispose();
+rASlice.dispose();
+rSliceSum.dispose();
 
 console.log("=== demo complete: TS, WASM v1, and WASM resident all agree on every showcase op ===");

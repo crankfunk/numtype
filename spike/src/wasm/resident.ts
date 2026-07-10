@@ -1,7 +1,8 @@
 /**
- * Zero-copy residency layer (Kern 02) + strided views (Kern 03) — the
- * resident twin of `NDArray<S>`. See docs/kern-02-residency-spec.md and
- * docs/kern-03-strided-spec.md for the full contracts; this header covers
+ * Zero-copy residency layer (Kern 02) + strided views (Kern 03) + slicing
+ * (Kern 05) — the resident twin of `NDArray<S>`. See
+ * docs/kern-02-residency-spec.md, docs/kern-03-strided-spec.md, and
+ * docs/kern-05-slicing-spec.md for the full contracts; this header covers
  * the invariants that matter for correctness/safety, not the why.
  *
  * A `WNDArray<S>` does NOT hold its data in a JS-side `Float64Array`: the
@@ -9,9 +10,13 @@
  * `ResidentBuffer` record (`ptr`/`bytes`/`refs`). Since Kern 03 a handle is
  * a **view** onto that buffer: `(shape, strides, offset)` metadata over a
  * possibly shared allocation. `transpose()` is an O(1) metadata operation —
- * reversed shape + reversed strides, same buffer, no kernel call. Because
- * `WNDArray` exposes no mutation, views are semantically indistinguishable
- * from copies; sharing is observable only through memory/lifecycle.
+ * reversed shape + reversed strides, same buffer, no kernel call. Since
+ * Kern 05, `slice()` is the same kind of O(1) metadata operation: integer
+ * axes fold into `offset` and drop out of the shape/strides, range axes
+ * reshape/restride in place — the first op to actually produce a nonzero
+ * `offset` (transpose alone never does). Because `WNDArray` exposes no
+ * mutation, views are semantically indistinguishable from copies; sharing is
+ * observable only through memory/lifecycle.
  *
  * Ops call the Kern-03 *strided* kernels pointer-to-pointer (contiguous
  * handles simply pass their natural strides and offset 0 — one code path
@@ -34,8 +39,8 @@
  * their point — but an op's output never aliases anything.)
  *
  * **Lifecycle (refcounted since Kern 03):**
- *  - The shared `ResidentBuffer` starts at `refs = 1`; each view (`transpose`)
- *    increments. `dispose()` marks *this handle* disposed, unregisters it
+ *  - The shared `ResidentBuffer` starts at `refs = 1`; each view (`transpose`,
+ *    `slice`) increments. `dispose()` marks *this handle* disposed, unregisters it
  *    from the `FinalizationRegistry`, and decrements — the WASM allocation
  *    is freed exactly when `refs` hits 0. Disposing a base while views live
  *    keeps the buffer alive and the views fully usable (and vice versa).
@@ -65,7 +70,8 @@ import { type Dim, type Mutable, type Shape } from "../dim.ts";
 import type { Guard, OkShape } from "../ndarray.ts";
 import type { MatMul } from "../matmul.ts";
 import type { ReduceAxis, Transpose } from "../reduce.ts";
-import { computeStrides, product, runtimeBroadcastShape } from "../runtime.ts";
+import { computeStrides, normalizeSliceSpecs, product, runtimeBroadcastShape, type SliceSpec } from "../runtime.ts";
+import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "../slice.ts";
 import type { CoreExports } from "./loader.ts";
 
 interface ScratchBuf {
@@ -167,9 +173,10 @@ export class WNDArray<S extends Shape> {
    * transpose views. Runtime observability only; strides have no type-level
    * representation. */
   readonly strides: readonly number[];
-  /** Base element offset into the buffer. Always 0 in Kern 03 (only
-   * transpose views exist); the ABI supports nonzero offsets so slicing
-   * later needs no ABI revision. */
+  /** Base element offset into the buffer. Always 0 for fresh arrays and
+   * transpose views (transpose never shifts the origin); `slice()` (Kern 05)
+   * is the first op that produces a nonzero offset — the ABI has supported
+   * it since Kern 03 specifically so this needed no ABI revision. */
   private readonly offset: number;
   private readonly buf: ResidentBuffer;
   private disposed_: boolean;
@@ -561,6 +568,53 @@ export class WNDArray<S extends Shape> {
       [...this.shape].reverse() as Transpose<S>,
       [...this.strides].reverse(),
       this.offset,
+    );
+  }
+
+  /** Basic (NumPy-style) slicing — an **O(1) VIEW**, the resident twin of
+   * `NDArray.slice` (see its doc comment for the type-level contract; both
+   * share `normalizeSliceSpecs`, a deliberate, documented differential blind
+   * spot — see that function's doc comment). Integer axes fold into
+   * `offset` and are dropped from the shape/strides; range axes reshape and
+   * restride in place. Same mechanism as `transpose()`: `refs + 1` on the
+   * shared buffer, a fresh handle over new `(shape, strides, offset)`
+   * metadata, no kernel call, no data movement. Composes with transpose
+   * views exactly like any other view (slice-of-transpose, transpose-of-
+   * slice, slice-of-slice all just chain retains over the same buffer). */
+  slice<const Specs extends readonly SliceSpecInput[]>(
+    ...specs: SliceSpecsGuard<S, Specs>
+  ): WNDArray<OkShape<SliceShape<S, Specs>>> {
+    this.assertLive("slice");
+    const rawSpecs = specs as unknown as readonly SliceSpec[];
+    const norm = normalizeSliceSpecs(this.shape, rawSpecs);
+
+    let offset = this.offset;
+    const outShape: number[] = [];
+    const outStrides: number[] = [];
+    for (let axis = 0; axis < this.shape.length; axis++) {
+      const stride = this.strides[axis] ?? 0;
+      const spec = norm[axis];
+      if (spec === undefined) {
+        // Trailing axis, beyond the given specs: taken in full.
+        outShape.push(this.shape[axis] ?? 0);
+        outStrides.push(stride);
+        continue;
+      }
+      if (spec.kind === "index") {
+        offset += spec.i * stride;
+      } else {
+        offset += spec.start * stride;
+        outShape.push(spec.dim);
+        outStrides.push(stride * spec.step);
+      }
+    }
+
+    retainBuffer(this.buf);
+    return new WNDArray<OkShape<SliceShape<S, Specs>>>(
+      this.buf,
+      outShape as OkShape<SliceShape<S, Specs>>,
+      outStrides,
+      offset,
     );
   }
 

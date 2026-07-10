@@ -23,7 +23,18 @@ import type { Broadcast } from "./broadcast.ts";
 import { type Dim, type Mutable, type Shape, type ShapeError } from "./dim.ts";
 import type { MatMul } from "./matmul.ts";
 import type { ReduceAxis, Transpose } from "./reduce.ts";
-import { computeStrides, elementwiseBinary, matmulRuntime, product, sumRuntime, transposeRuntime } from "./runtime.ts";
+import {
+  computeStrides,
+  elementwiseBinary,
+  matmulRuntime,
+  normalizeSliceSpecs,
+  product,
+  sliceRuntime,
+  type SliceSpec,
+  sumRuntime,
+  transposeRuntime,
+} from "./runtime.ts";
+import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "./slice.ts";
 
 /** Narrow a possibly-erroring computed shape down to a real `Shape`,
  * excluding the `ShapeError` branch. Only ever evaluated at call sites
@@ -123,6 +134,26 @@ export class NDArray<S extends Shape> {
   transpose(): NDArray<Transpose<S>> {
     const { shape, data } = transposeRuntime(this.shape, this.data);
     return new NDArray<Transpose<S>>(shape as Transpose<S>, data);
+  }
+
+  /** Basic (NumPy-style) slicing: one spec per leading axis, trailing axes
+   * taken in full — see docs/kern-05-slicing-spec.md for the full semantics
+   * table. `const Specs` means callers never write `as const` (same
+   * rationale as `zeros`/`ones`/`fromArray`'s `const S`), which also lets
+   * literal `start`/`stop`/`step` values reach the type layer. Always a
+   * fresh COPY (naive reference; `WNDArray.slice` is the O(1) view twin —
+   * both share `normalizeSliceSpecs`, see its doc comment for why that's a
+   * deliberate, documented differential blind spot). Too many specs is a
+   * compile error at the offending argument (`SliceSpecsGuard`, see
+   * slice.ts) and a runtime throw (`normalizeSliceSpecs`) for gradual/
+   * dynamic-rank callers the type layer couldn't check statically. */
+  slice<const Specs extends readonly SliceSpecInput[]>(
+    ...specs: SliceSpecsGuard<S, Specs>
+  ): NDArray<OkShape<SliceShape<S, Specs>>> {
+    const rawSpecs = specs as unknown as readonly SliceSpec[];
+    const norm = normalizeSliceSpecs(this.shape, rawSpecs);
+    const { shape, data } = sliceRuntime(this.shape, this.data, norm);
+    return new NDArray<OkShape<SliceShape<S, Specs>>>(shape as OkShape<SliceShape<S, Specs>>, data);
   }
 
   /** Row-major strides for the current shape (introspection helper). */

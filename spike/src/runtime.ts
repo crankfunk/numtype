@@ -248,6 +248,148 @@ export function sumRuntime(
   return { shape: outShape, data: out };
 }
 
+/**
+ * One axis's slice specification at the runtime boundary — structurally
+ * identical to `slice.ts`'s type-level `SliceSpecInput`, declared
+ * independently here so this module stays the standalone, type-file-free
+ * value layer it already is (mirrors the existing `Shape`/`readonly
+ * number[]` split: dim.ts declares `Shape`, this file never imports it).
+ *
+ * NumPy semantics (see docs/kern-05-slicing-spec.md for the full fixture
+ * table this normalizer is pinned against):
+ *  - `number` — index the axis; negative counts from the end; out-of-bounds
+ *    (after normalization) THROWS (indices never clamp).
+ *  - `null` — take the axis in full.
+ *  - `{ start?, stop?, step? }` — range slice; `step` defaults to 1 and must
+ *    be `>= 1` (throw otherwise — negative steps need signed strides, out of
+ *    scope since Kern 03); `start`/`stop` default to `0`/`d`, negative values
+ *    count from the end, and the result CLAMPS to `[0, d]` (never throws).
+ */
+export type SliceSpec = number | null | { readonly start?: number; readonly stop?: number; readonly step?: number };
+
+/** One axis's spec, post-normalization: either a dropped `index` (with its
+ * already-bounds-checked absolute position) or a surviving `range` (with its
+ * already-clamped absolute `start`, resulting element `dim`, and `step`). */
+export type NormalizedAxisSpec =
+  | { readonly kind: "index"; readonly i: number }
+  | { readonly kind: "range"; readonly start: number; readonly dim: number; readonly step: number };
+
+/** Normalize one axis's raw spec against its dim `d` (see `SliceSpec`'s doc
+ * comment for the exact semantics; `axis` is only for error messages).
+ * Indices/step are assumed integral (NumPy itself rejects fractional slice
+ * indices with a `TypeError`) — a non-integer value would otherwise produce
+ * a non-integer element offset/stride that silently corrupts every strided
+ * read downstream, so this is checked explicitly rather than left latent. */
+function normalizeAxisSpec(d: number, spec: SliceSpec, axis: number): NormalizedAxisSpec {
+  if (spec === null) {
+    return { kind: "range", start: 0, dim: d, step: 1 };
+  }
+  if (typeof spec === "number") {
+    if (!Number.isInteger(spec)) {
+      throw new Error(`slice: index ${spec} for axis ${axis} is not an integer`);
+    }
+    const i = spec < 0 ? spec + d : spec;
+    if (i < 0 || i >= d) {
+      throw new Error(`slice: index ${spec} is out of bounds for axis ${axis} with dim ${d}`);
+    }
+    return { kind: "index", i };
+  }
+
+  const step = spec.step ?? 1;
+  if (!Number.isInteger(step) || step < 1) {
+    throw new Error(`slice: step ${step} for axis ${axis} is invalid (must be an integer >= 1; negative steps are out of scope)`);
+  }
+  let start = spec.start ?? 0;
+  if (!Number.isInteger(start)) {
+    throw new Error(`slice: start ${start} for axis ${axis} is not an integer`);
+  }
+  if (start < 0) start += d;
+  start = Math.min(Math.max(start, 0), d);
+
+  let stop = spec.stop ?? d;
+  if (!Number.isInteger(stop)) {
+    throw new Error(`slice: stop ${stop} for axis ${axis} is not an integer`);
+  }
+  if (stop < 0) stop += d;
+  stop = Math.min(Math.max(stop, 0), d);
+
+  const dim = Math.max(0, Math.ceil((stop - start) / step));
+  return { kind: "range", start, dim, step };
+}
+
+/**
+ * Normalize a per-axis spec list against `shape`. One spec per LEADING axis
+ * (trailing axes are implicitly "taken in full" — callers that need that
+ * distinction check `specs.length` themselves; this function only normalizes
+ * the axes it was given specs for). Throws if there are more specs than
+ * axes (mirrors the type layer's `SliceSpecsGuard` compile-time rejection —
+ * this is the runtime backstop for gradual/dynamic-rank callers the type
+ * layer couldn't check statically).
+ *
+ * Shared, byte-for-byte, by BOTH `sliceRuntime` (naive, copy-based) and
+ * `WNDArray.slice` (resident, O(1) view) — a deliberate, documented
+ * differential blind spot: the two backends share spec *parsing* but
+ * diverge in *data movement*, which is where the differential test suite's
+ * value actually lies. This function's own semantics are pinned directly by
+ * the fixture-table unit tests instead.
+ */
+export function normalizeSliceSpecs(shape: readonly number[], specs: readonly SliceSpec[]): NormalizedAxisSpec[] {
+  if (specs.length > shape.length) {
+    throw new Error(`slice: ${specs.length} specs given for rank ${shape.length} shape [${shape.join(",")}]`);
+  }
+  return specs.map((spec, axis) => normalizeAxisSpec(shape[axis] ?? 0, spec, axis));
+}
+
+/**
+ * Naive reference slice: copy-based gather. Trailing axes beyond
+ * `specs.length` are taken in full. Walks the SAME per-axis
+ * offset/stride algebra `WNDArray.slice`'s O(1) view construction does
+ * (shared normalizer, diverging data movement — see `normalizeSliceSpecs`'s
+ * doc comment) but immediately gathers into a fresh contiguous buffer
+ * instead of returning view metadata, since `NDArray` never aliases.
+ */
+export function sliceRuntime(
+  shape: readonly number[],
+  data: Float64Array,
+  specs: readonly NormalizedAxisSpec[],
+): { shape: number[]; data: Float64Array } {
+  const originalStrides = computeStrides(shape);
+  const outShape: number[] = [];
+  const viewStrides: number[] = [];
+  let offset = 0;
+
+  for (let axis = 0; axis < shape.length; axis++) {
+    const stride = originalStrides[axis] ?? 0;
+    const spec = specs[axis];
+    if (spec === undefined) {
+      // Trailing axis, beyond the given specs: taken in full.
+      outShape.push(shape[axis] ?? 0);
+      viewStrides.push(stride);
+      continue;
+    }
+    if (spec.kind === "index") {
+      offset += spec.i * stride;
+    } else {
+      offset += spec.start * stride;
+      outShape.push(spec.dim);
+      viewStrides.push(stride * spec.step);
+    }
+  }
+
+  const size = product(outShape);
+  const out = new Float64Array(size);
+  const outStrides = computeStrides(outShape);
+  for (let flat = 0; flat < size; flat++) {
+    const idx = unravel(flat, outShape, outStrides);
+    let srcOffset = offset;
+    for (let i = 0; i < viewStrides.length; i++) {
+      srcOffset += (idx[i] ?? 0) * (viewStrides[i] ?? 0);
+    }
+    out[flat] = data[srcOffset] ?? 0;
+  }
+  return { shape: outShape, data: out };
+}
+
 /** Reverse every axis (NumPy's `.T` generalized to N-D). */
 export function transposeRuntime(shape: readonly number[], data: Float64Array): { shape: number[]; data: Float64Array } {
   const rank = shape.length;
