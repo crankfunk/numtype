@@ -51,7 +51,7 @@
  */
 
 import { type Dim, type IsDynamicRank, type Shape, type ShowShape } from "./dim.ts";
-import type { LiteralRangeDim } from "./slice-literal.ts";
+import type { LiteralIndexBounds, LiteralRangeDim } from "./slice-literal.ts";
 
 /** One axis's slice specification, at the type level. See file header. */
 export type SliceSpecInput = number | null | { readonly start?: number; readonly stop?: number; readonly step?: number };
@@ -123,19 +123,49 @@ type ErrorTuple<T extends readonly unknown[], Msg extends string> = { [K in keyo
 type TooManySpecsMessage<S extends Shape, Specs extends readonly SliceSpecInput[]> =
   `slice: ${Specs["length"]} specs given for rank ${S["length"]} shape ${ShowShape<S>}`;
 
+/** Spike 03 (docs/spike-03-index-bounds-spec.md): the out-of-bounds message
+ * for a provably-invalid literal integer index — same wording stem as the
+ * runtime's own throw in `normalizeAxisSpec` (runtime.ts), extended with the
+ * full shape for editor context. */
+type IndexOutOfBoundsMessage<I extends number, Axis extends number, D extends Dim, S extends Shape> =
+  `slice: index ${I} is out of bounds for axis ${Axis} with dim ${D} (shape ${ShowShape<S>})`;
+
 /** Tail-recursive accumulator: walks `S` and `Specs` in lockstep, passing
- * each in-range spec's OWN type through unchanged. Once `S` is exhausted
- * with `Specs` entries still remaining, every remaining position is retyped
- * to the shared error object (`ErrorTuple`) — every excess argument is
- * flagged, not just the first. */
+ * each in-range spec's OWN type through unchanged. Two error mechanisms,
+ * both landing at the offending ARGUMENT:
+ *  - Once `S` is exhausted with `Specs` entries still remaining, every
+ *    remaining position is retyped to the shared error object
+ *    (`ErrorTuple`) — every excess argument is flagged, not just the first.
+ *  - Spike 03: an integer spec whose literal value is PROVABLY out of
+ *    bounds for its axis's literal dim (`LiteralIndexBounds` = `"out"` —
+ *    the runtime would be guaranteed to throw) is retyped, individually, to
+ *    the branded error object naming index, axis, dim, and shape. `"in"`
+ *    and `"unknown"` (wide/dynamic/union/non-integer-literal) pass through
+ *    unchanged — the static check is never wrong, only incomplete; the
+ *    runtime backstop stays authoritative for everything unproven.
+ * `FullS` threads the ORIGINAL shape (unconsumed) purely for messages;
+ * `Passed["length"]` doubles as the current axis index (one entry is
+ * accumulated per consumed spec — rank-bounded, the allowed kind of
+ * tuple-length arithmetic). */
 type ValidateSpecsAcc<
   S extends readonly Dim[],
   Specs extends readonly SliceSpecInput[],
   Msg extends string,
+  FullS extends Shape,
   Passed extends readonly unknown[] = [],
-> = S extends readonly [Dim, ...infer STail extends readonly Dim[]]
+> = S extends readonly [infer SHead extends Dim, ...infer STail extends readonly Dim[]]
   ? Specs extends readonly [infer Head, ...infer SpecsTail extends readonly SliceSpecInput[]]
-    ? ValidateSpecsAcc<STail, SpecsTail, Msg, [...Passed, Head]>
+    ? [Head] extends [number]
+      ? LiteralIndexBounds<Head, SHead> extends "out"
+        ? ValidateSpecsAcc<
+            STail,
+            SpecsTail,
+            Msg,
+            FullS,
+            [...Passed, { readonly __shapeError: IndexOutOfBoundsMessage<Head, Passed["length"], SHead, FullS> }]
+          >
+        : ValidateSpecsAcc<STail, SpecsTail, Msg, FullS, [...Passed, Head]>
+      : ValidateSpecsAcc<STail, SpecsTail, Msg, FullS, [...Passed, Head]>
     : [...Passed, ...Specs] // Specs shorter than/equal to the remaining rank: nothing to flag (Specs is empty here)
   : Specs extends readonly []
     ? [...Passed] // exact match: rank and spec count agree exactly
@@ -154,4 +184,4 @@ export type SliceSpecsGuard<S extends Shape, Specs extends readonly SliceSpecInp
   ? Specs
   : IsDynamicLength<Specs> extends true
     ? Specs
-    : ValidateSpecsAcc<S, Specs, TooManySpecsMessage<S, Specs>>;
+    : ValidateSpecsAcc<S, Specs, TooManySpecsMessage<S, Specs>, S>;

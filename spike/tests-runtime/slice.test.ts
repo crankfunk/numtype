@@ -510,17 +510,53 @@ test("slice view strides/offset observability: matches the hand-computed offset/
 // =============================================================================
 
 test("error: integer index out of bounds throws through NDArray.slice and WNDArray.slice", () => {
+  // Since Spike 03 (docs/spike-03-index-bounds-spec.md), a LITERAL OOB index
+  // against a literal dim is already a COMPILE error — which is exactly what
+  // this test's original literal calls started triggering. The runtime
+  // backstop this test pins is the path for indices the type layer cannot
+  // prove anything about, so the indices are deliberately WIDENED to
+  // `number` here (the gradual escape hatch); the compile-time twin of this
+  // test lives in spike/tests/slice.test-d.ts.
   const nd = NDArray.fromArray([5], [1, 2, 3, 4, 5]);
-  assert.throws(() => nd.slice(5), /out of bounds/);
-  assert.throws(() => nd.slice(-6), /out of bounds/);
+  assert.throws(() => nd.slice(5 as number), /out of bounds/);
+  assert.throws(() => nd.slice(-6 as number), /out of bounds/);
 
   const base = WNDArray.fromArray(core, [5], [1, 2, 3, 4, 5]);
   try {
-    assert.throws(() => base.slice(5), /out of bounds/);
-    assert.throws(() => base.slice(-6), /out of bounds/);
+    assert.throws(() => base.slice(5 as number), /out of bounds/);
+    assert.throws(() => base.slice(-6 as number), /out of bounds/);
   } finally {
     base.dispose();
   }
+});
+
+// Spike 03 runtime parity: the exact boundary the TYPE layer draws
+// (docs/spike-03-index-bounds-spec.md, acceptance criterion 2) must match
+// the runtime's behavior on both sides — every statically-REJECTED case
+// throws at runtime (checked via widened indices, since the literal forms no
+// longer compile), every statically-ACCEPTED boundary case succeeds as a
+// literal call.
+test("Spike 03 parity: runtime throws exactly where the type layer rejects, succeeds exactly where it accepts", () => {
+  const nd = NDArray.fromArray([5], [1, 2, 3, 4, 5]);
+
+  // Statically accepted boundary cases — these compile as literals AND must
+  // not throw: i = d-1 (last valid), i = -d (normalizes to index 0).
+  assert.strictEqual(nd.slice(4).data[0], 5);
+  assert.strictEqual(nd.slice(-5).data[0], 1);
+
+  // Statically rejected cases — the same values, widened, must throw: i = d,
+  // i = -(d+1) (one past each end).
+  assert.throws(() => nd.slice(5 as number), /out of bounds/);
+  assert.throws(() => nd.slice(-6 as number), /out of bounds/);
+
+  // d = 0: every integer index is statically rejected; runtime agrees.
+  const empty = NDArray.fromArray([0], []);
+  assert.throws(() => empty.slice(0 as number), /out of bounds/);
+  assert.throws(() => empty.slice(-1 as number), /out of bounds/);
+
+  // Values the type layer makes NO claim about (non-integer literal) still
+  // hit the runtime's own error, unchanged.
+  assert.throws(() => nd.slice(1.5), /not an integer/);
 });
 
 test("error: step <= 0 throws through both backends", () => {

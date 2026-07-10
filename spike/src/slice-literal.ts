@@ -12,10 +12,12 @@
  * Isolated in its OWN file, deliberately: this is the gated, "allowed to
  * fail and be dropped" part of the phase (spec: go/no-go on
  * Instantiations <= 3x baseline, wall time <= 2x baseline, clean hovers,
- * errors still at the argument). `slice.ts` imports exactly one symbol from
- * here (`LiteralRangeDim`); dropping the stretch means reverting that one
- * call site back to the core's honest `Dim` degrade and deleting this file
- * — no other file depends on anything below.
+ * errors still at the argument). `slice.ts` imports two symbols from here:
+ * `LiteralRangeDim` (Kern 05 stretch — dropping it means reverting that one
+ * call site back to the core's honest `Dim` degrade) and
+ * `LiteralIndexBounds` (Spike 03 — dropping it means reverting
+ * `ValidateSpecsAcc`'s bounds branch to an unconditional pass-through). No
+ * other file depends on anything below.
  *
  * SUPPORTED LITERAL SUBSET (precise, by design — see file body for why):
  *  - `step` must be omitted or the literal `1`. Any other step (including a
@@ -305,3 +307,64 @@ export type LiteralRangeDim<Spec, D extends Dim> = IsDynamicDim<D> extends true
           : Dim
       : Dim
     : Dim;
+
+// ---------------------------------------------------------------------------
+// Spike 03 (docs/spike-03-index-bounds-spec.md): bounds classification for a
+// literal integer INDEX spec against a literal dim. Appended below all
+// pre-existing Kern-05 content; needs only `Compare` (a bounds check is a
+// comparison — the signed ADDITION that kept negative start/stop out of the
+// Kern-05 stretch is not required here, which is why negative literal
+// INDICES are fully supported by this check even though negative literal
+// start/stop still degrade in `LiteralRangeDim` above).
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify literal index `I` against dim `D`:
+ *  - `"in"`  — provably in bounds (`0 <= i < d` after NumPy negative
+ *    normalization `i < 0 -> i + d`, i.e. positive `i < d`, negative
+ *    `abs(i) <= d`). The runtime (`normalizeAxisSpec` in runtime.ts) will
+ *    not throw.
+ *  - `"out"` — provably out of bounds; the runtime is GUARANTEED to throw
+ *    `slice: index i is out of bounds ...`. The caller (slice.ts's
+ *    `ValidateSpecsAcc`) turns exactly this verdict into a compile error at
+ *    the offending argument.
+ *  - `"unknown"` — no static claim (dynamic dim, wide `number` index, union
+ *    literals, non-plain-digit literal forms like `1.5` or `1e21`). The
+ *    runtime backstop stays authoritative — this type must be NEVER WRONG,
+ *    only incomplete, so every ambiguous input lands here.
+ *
+ * Union safety (the reason for the `[C] extends [...]`-wrapped verdict
+ * checks): `Compare` distributes over union digit strings (its parameters
+ * appear naked in its own conditionals), so e.g. `I = 2 | 7` against `d = 5`
+ * yields `C = "lt" | "gt"`. The tuple-wrapped SUBSET checks below accept a
+ * (possibly-union) verdict only when EVERY member classifies the same way —
+ * `[C] extends [("eq" | "gt")]` is true for `"eq"`, `"gt"`, and
+ * `"eq" | "gt"` (all genuinely out of bounds) but false for anything
+ * containing `"lt"`. A mixed verdict falls through to `"unknown"` instead
+ * of picking a side.
+ */
+export type LiteralIndexBounds<I, D extends Dim> = IsDynamicDim<D> extends true
+  ? "unknown"
+  : [I] extends [number]
+    ? IsDynamicDim<I> extends true
+      ? "unknown"
+      : `${I}` extends `-${infer Abs}`
+        ? IsPlainDigits<Abs> extends true
+          ? Compare<Abs, `${D}`> extends infer C
+            ? [C] extends [("lt" | "eq")]
+              ? "in" // abs(i) <= d (i = -d normalizes to index 0, still valid)
+              : [C] extends ["gt"]
+                ? "out" // abs(i) > d: past even i = -d
+                : "unknown" // mixed union verdict (e.g. I = -1 | -9 on d = 5): no claim
+            : never
+          : "unknown" // "-1.5" and friends: not a plain-digit negative integer
+        : IsPlainDigits<`${I}`> extends true
+          ? Compare<`${I}`, `${D}`> extends infer C
+            ? [C] extends ["lt"]
+              ? "in" // i < d
+              : [C] extends [("eq" | "gt")]
+                ? "out" // i >= d (includes every literal index against d = 0)
+                : "unknown" // mixed union verdict (e.g. I = 2 | 7 on d = 5): no claim
+            : never
+          : "unknown" // "1.5", "1e+21", mixed unions like "-1" | "2": no claim
+    : "unknown"; // not a number at all (defensive; callers pre-filter)

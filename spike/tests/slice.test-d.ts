@@ -11,6 +11,7 @@
  * differential suite instead).
  */
 import { type AnyNDArray, NDArray } from "../src/ndarray.ts";
+import type { LiteralIndexBounds } from "../src/slice-literal.ts";
 import type { SliceShape, SliceSpecsGuard } from "../src/slice.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
@@ -176,3 +177,93 @@ void s6;
 void s7;
 void dynSliced;
 void dynDropped;
+
+// =============================================================================
+// Spike 03 (docs/spike-03-index-bounds-spec.md): type-level bounds checks for
+// literal integer indices against literal dims. Compile-time twin of the
+// runtime-parity test in tests-runtime/slice.test.ts.
+// =============================================================================
+
+// --- LiteralIndexBounds: boundary exactness (pure type function) -----------
+
+type B1 = Expect<Equal<LiteralIndexBounds<4, 5>, "in">>; // i = d-1: last valid
+type B2 = Expect<Equal<LiteralIndexBounds<5, 5>, "out">>; // i = d: first invalid
+type B3 = Expect<Equal<LiteralIndexBounds<-5, 5>, "in">>; // i = -d: normalizes to index 0
+type B4 = Expect<Equal<LiteralIndexBounds<-6, 5>, "out">>; // i = -(d+1): past the front
+type B5 = Expect<Equal<LiteralIndexBounds<0, 5>, "in">>;
+// d = 0: no valid index exists at all.
+type B6 = Expect<Equal<LiteralIndexBounds<0, 0>, "out">>;
+type B7 = Expect<Equal<LiteralIndexBounds<-1, 0>, "out">>;
+// Big dims: multi-digit Compare paths (length-compare AND same-length
+// lexicographic), both sides of the boundary, both signs.
+type B8 = Expect<Equal<LiteralIndexBounds<1023, 1024>, "in">>;
+type B9 = Expect<Equal<LiteralIndexBounds<1024, 1024>, "out">>;
+type B10 = Expect<Equal<LiteralIndexBounds<65535, 65536>, "in">>;
+type B11 = Expect<Equal<LiteralIndexBounds<65536, 65536>, "out">>;
+type B12 = Expect<Equal<LiteralIndexBounds<-65536, 65536>, "in">>;
+type B13 = Expect<Equal<LiteralIndexBounds<-65537, 65536>, "out">>;
+// No static claim (conservative "unknown"): wide index, dynamic dim,
+// non-integer literal, exponent-form literal (an integer, but not provable
+// from its template form — flagging it with the wrong reason would lie),
+// and MIXED unions (members classify differently).
+type B14 = Expect<Equal<LiteralIndexBounds<number, 5>, "unknown">>;
+type B15 = Expect<Equal<LiteralIndexBounds<3, number>, "unknown">>;
+type B16 = Expect<Equal<LiteralIndexBounds<1.5, 5>, "unknown">>;
+type B17 = Expect<Equal<LiteralIndexBounds<1e21, 5>, "unknown">>;
+type B18 = Expect<Equal<LiteralIndexBounds<2 | 7, 5>, "unknown">>;
+type B19 = Expect<Equal<LiteralIndexBounds<-1 | 2, 5>, "unknown">>;
+// A UNIFORM union (every member out of bounds) IS classified — the call is
+// invalid whichever member the value turns out to be.
+type B20 = Expect<Equal<LiteralIndexBounds<6 | 7, 5>, "out">>;
+
+// --- SliceSpecsGuard: OOB positions retyped, message + axis exactness ------
+
+// The error lands on exactly the offending position, naming index, axis,
+// dim, and the full shape; in-range positions keep their own types.
+type OobAxis1Msg = `slice: index 5 is out of bounds for axis 1 with dim 5 (shape [2,5])`;
+type G1 = Expect<Equal<SliceSpecsGuard<[2, 5], [1, 5]>, [1, { readonly __shapeError: OobAxis1Msg }]>>;
+// Boundary-valid calls pass through completely unchanged (both signs).
+type G2 = Expect<Equal<SliceSpecsGuard<[2, 5], [1, 4]>, [1, 4]>>;
+type G3 = Expect<Equal<SliceSpecsGuard<[2, 5], [-2, -5]>, [-2, -5]>>;
+// null / range specs are never bounds-flagged (ranges CLAMP, per NumPy).
+type G4 = Expect<Equal<SliceSpecsGuard<[2, 5], [null, { start: 99 }]>, [null, { start: 99 }]>>;
+// Axis indexing is exact: the flagged axis is 2, not 0.
+type OobAxis2Msg = `slice: index 5 is out of bounds for axis 2 with dim 5 (shape [5,5,5])`;
+type G5 = Expect<Equal<SliceSpecsGuard<[5, 5, 5], [null, null, 5]>, [null, null, { readonly __shapeError: OobAxis2Msg }]>>;
+// Both mechanisms in one call: an OOB literal at axis 0 AND an excess spec —
+// each flagged with its own message.
+type G6 = Expect<
+  Equal<
+    SliceSpecsGuard<[2], [5, null]>,
+    [
+      { readonly __shapeError: `slice: index 5 is out of bounds for axis 0 with dim 2 (shape [2])` },
+      { readonly __shapeError: `slice: 2 specs given for rank 1 shape [2]` },
+    ]
+  >
+>;
+
+// --- NDArray.slice(): method-level error-at-argument + gradual pass-through -
+
+// @ts-expect-error - index 2 is out of bounds for axis 0 with dim 2
+arr.slice(2);
+// @ts-expect-error - index -3 is past the front for axis 0 with dim 2
+arr.slice(-3);
+// Boundary-valid negative index compiles and threads the shape.
+const okBoundary = arr.slice(-2);
+type T29 = Expect<Equal<(typeof okBoundary)["shape"], [3, 4]>>;
+// The error lands at the SECOND argument; the first (valid) is untouched.
+// @ts-expect-error - index 3 is out of bounds for axis 1 with dim 3
+arr.slice(1, 3);
+// Wide `number` index: no static claim -> compiles (runtime backstop), and
+// the axis still drops statically.
+declare const wideIdx: number;
+const wideCall = arr.slice(wideIdx);
+type T30 = Expect<Equal<(typeof wideCall)["shape"], [3, 4]>>;
+// Non-integer literal: no static claim -> compiles; the runtime's own
+// "not an integer" error stays authoritative (pinned in tests-runtime).
+const nonInt = arr.slice(1.5);
+type T31 = Expect<Equal<(typeof nonInt)["shape"], [3, 4]>>;
+
+void okBoundary;
+void wideCall;
+void nonInt;
