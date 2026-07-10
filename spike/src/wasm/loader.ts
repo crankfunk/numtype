@@ -118,6 +118,25 @@ export interface CoreExports {
     outDataPtr: number,
     outLen: number,
   ): number;
+  // --- Kern 04: blocked + packed + SIMD128 matmul. Identical quadruple
+  // convention to nt_matmul_strided (see abi.rs); drop-in alternative entry
+  // point for matmul only.
+  nt_matmul_blocked(
+    aShapePtr: number,
+    aRank: number,
+    aStridesPtr: number,
+    aOffset: number,
+    aDataPtr: number,
+    aDataLen: number,
+    bShapePtr: number,
+    bRank: number,
+    bStridesPtr: number,
+    bOffset: number,
+    bDataPtr: number,
+    bDataLen: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
 }
 
 const WASM_URL = new URL("./numtype_core.wasm", import.meta.url);

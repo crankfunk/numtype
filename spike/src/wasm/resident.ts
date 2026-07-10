@@ -416,7 +416,7 @@ export class WNDArray<S extends Shape> {
       scratch.push(bStridesBuf);
       const outDataBuf = allocBytes(this.core, outLen * 8);
 
-      const status = this.core.nt_matmul_strided(
+      const status = this.core.nt_matmul_blocked(
         aShapeBuf.ptr,
         aShape.length,
         aStridesBuf.ptr,
@@ -435,7 +435,7 @@ export class WNDArray<S extends Shape> {
       if (status !== 0) {
         freeBuf(this.core, outDataBuf);
         throw new Error(
-          `wasm resident nt_matmul_strided: status ${status} for shapes [${aShapeIn.join(",")}] and [${bShapeIn.join(",")}]`,
+          `wasm resident nt_matmul_blocked: status ${status} for shapes [${aShapeIn.join(",")}] and [${bShapeIn.join(",")}]`,
         );
       }
 

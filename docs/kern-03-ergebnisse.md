@@ -80,7 +80,10 @@ Why: the strided matmul reads the transposed operand column-wise (`a_col_stride 
 k-step at n ≥ 256, which costs more than the one O(n²) gather copy it saves. This is precisely why
 BLAS-class libraries pack/copy operands for GEMM. **Consequence:** views are not a blanket win; for a hot
 matmul on a large transposed operand, `.contiguous()` first is the right call — which is exactly why the
-API exposes it.
+API exposes it. *(Superseded for matmul as of Kern 04: the blocked packing kernel erases this penalty —
+view operands are now as fast or faster than materializing at every measured size; see
+kern-04-ergebnisse.md, Series B. The general principle — access pattern decides — stands; the concrete
+guidance was kernel-dependent.)*
 
 **Series B — the routing decision is validated: strided entry points are free on contiguous data.**
 Raw ABI comparison (identical per-rep plumbing, only the entry point differs), `new/old` over

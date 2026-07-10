@@ -38,6 +38,13 @@
 //! failure is status `4`. The contiguous entry points and kernels are
 //! deliberately untouched (frozen v1 baseline, see
 //! docs/kern-03-strided-spec.md).
+//!
+//! `nt_matmul_blocked` (Kern 04) reuses this exact quadruple convention and
+//! status set — it is a drop-in alternative entry point for matmul only,
+//! see `kernels::matmul_blocked` for the blocked/packed/SIMD128 core and
+//! docs/kern-04-simd-blocking-spec.md for the design. `nt_matmul_strided`
+//! itself stays untouched (frozen Kern-03 baseline, kept as the measurable
+//! "before" and the native equivalence reference for the new kernel).
 //! - **The caller (TS) computes output shapes and allocates the output
 //!   buffer** (via `nt_alloc`) *before* calling an op; the op writes into
 //!   that buffer and returns status only (it does not report its own
@@ -403,6 +410,48 @@ pub extern "C" fn nt_sum_axis_strided(
     let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
 
     match kernels::sum::sum_axis_strided(shape, strides, offset, data, axis) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// Kern 04: blocked + packed + SIMD128 generalization of `nt_matmul_strided`
+/// — identical signature and contract (see
+/// `kernels::matmul_blocked::matmul_blocked`'s doc comment for the
+/// bit-identity argument). `resident.ts`'s `matmul()` routes here
+/// unconditionally (no size-based dispatch this phase).
+#[no_mangle]
+pub extern "C" fn nt_matmul_blocked(
+    a_shape_ptr: u32,
+    a_rank: u32,
+    a_strides_ptr: u32,
+    a_offset: u32,
+    a_data_ptr: u32,
+    a_data_len: u32,
+    b_shape_ptr: u32,
+    b_rank: u32,
+    b_strides_ptr: u32,
+    b_offset: u32,
+    b_data_ptr: u32,
+    b_data_len: u32,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    let a_shape: &[u32] = unsafe { read_slice(a_shape_ptr, a_rank) };
+    let a_strides: &[u32] = unsafe { read_slice(a_strides_ptr, a_rank) };
+    let a_data: &[f64] = unsafe { read_slice(a_data_ptr, a_data_len) };
+    let b_shape: &[u32] = unsafe { read_slice(b_shape_ptr, b_rank) };
+    let b_strides: &[u32] = unsafe { read_slice(b_strides_ptr, b_rank) };
+    let b_data: &[f64] = unsafe { read_slice(b_data_ptr, b_data_len) };
+
+    match kernels::matmul_blocked::matmul_blocked(a_shape, a_strides, a_offset, a_data, b_shape, b_strides, b_offset, b_data) {
         Ok((_out_shape, out_data)) => {
             if out_data.len() as u32 != out_len {
                 return KernelError::SizeOverflow.status();

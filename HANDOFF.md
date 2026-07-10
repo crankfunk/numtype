@@ -1,38 +1,36 @@
-# Handoff — 2026-07-10 (nach Kern 03)
+# Handoff — 2026-07-10 (nach Kern 04)
 
 ## Aktueller Stand
-NumType (Forschungsprojekt: typsichere n-dim Arrays — TS-Typ-Ebene + from-scratch Rust/WASM-Kerne). Vier Phasen sind implementiert, **unabhängig verifiziert** und committet (Branch `main`, Arbeitsbaum clean; Remote: `github.com/crankfunk/numtype`, privat — Kern-03-Commit ist noch NICHT gepusht):
+NumType (Forschungsprojekt: typsichere n-dim Arrays — TS-Typ-Ebene + from-scratch Rust/WASM-Kerne). Fünf Phasen implementiert, **unabhängig verifiziert** und committet (Branch `main`; Remote: `github.com/crankfunk/numtype`, privat — Kern-03-Commits gepusht, Kern-04-Commit lokal, Push steht aus):
 
-- **Typ-Ebene** (Spike 01): `Broadcast`/`MatMul`/`ReduceAxis`/`Transpose` im Typsystem, graduell, Shape-Fehler am schuldigen Argument.
-- **Rust/WASM-Kerne** (Kern 01): handgerolltes `extern "C"`-ABI (kein wasm-bindgen, leere `[dependencies]`), bit-identisch zur naiven TS-Referenz.
-- **Zero-Copy-Residenz** (Kern 02 + fromArray-Follow-up): `WNDArray` lebt im WASM-Speicher; dispose/FinalizationRegistry-Lifecycle adversarial verifiziert.
-- **Strided Views** (Kern 03, diese Session): `transpose()` ist O(1)-View (geteilter refgezählter Buffer, Shape+Strides revers); fünf strided ABI-Einstiegspunkte + Status 4 (Strides-Bounds-Validierung); alle Resident-Ops laufen über die strided Kernels (Routing gemessen gratis, 0,90–1,03×); `contiguous()`-Escape-Hatch; v1-Kernels byte-für-byte eingefroren. Docs: `docs/kern-03-strided-spec.md` + `-ergebnisse.md` (mit Verifikations-Addendum).
+- **Typ-Ebene** (Spike 01) · **Rust/WASM-Kerne** (Kern 01, handgerolltes ABI, bit-identisch) · **Zero-Copy-Residenz** (Kern 02) · **Strided Views** (Kern 03, O(1)-Transpose, Refcount, Status 4).
+- **Blocked+Packed+SIMD128-Matmul** (Kern 04, diese Session): `nt_matmul_blocked` (f64x2), bit-identisch unter dem „bit-identity law" (Vektorisierung nur QUER zu Output-Elementen; eine Akkumulator-Kette pro Element in aufsteigender k-Ordnung via Memory-Roundtrip; Packing = reine Datenbewegung; kein FMA/relaxed-simd). **2,1–3,25×** über Kern-03-Skalar (wächst mit n), Kern-03-View-Malus durch Packing eliminiert (View jetzt 1,06–1,76× schneller als materialize-first), Kleinst-Größen ok (n=4 = Noise-Floor). Tiles MC=NC=KC=32 (gemessen). Null `unsafe` im neuen Modul.
 
-Gate-Stand (alle grün): `pnpm check` · cargo 63/63 · `test:core` 791/791 · `test:resident` 1412 (+2 ehrliche GC-Skips) · `test:resident:gc` 2/2 · Demo läuft alle drei Backends bit-identisch inkl. View-Showcase.
+Gate-Stand (alle grün): `pnpm check` · cargo 76/76 · `test:core` 791/791 · `test:resident` 1578 (+2 GC-Skips) · `test:resident:gc` 2/2 · Demo bit-identisch.
 
 ## In dieser Session erledigt
-- Kern 03 komplett nach Phasenmuster: bindende Spec → Implementierung → Fresh-Context-Verify (brainroute:verify: „meets its spec", 0 critical/major; alle 4 minor/nit-Befunde behoben, u. a. Raw-ABI-Status-4-Test nachgezogen) → Ergebnisdoc → KB-Capture → Commit `428cdca`.
-- **Ehrlicher Kernbefund (Bench, 3 Läufe):** Views gewinnen ~2× bei consume-once (`Aᵀ.sum()`), verlieren aber ~30 % vor dem Matmul ab n≥256 (strided k-Loop-Reads teurer als die gesparte O(n²)-Kopie — deshalb packt BLAS). Guidance: `contiguous()` vor heißen Matmuls.
-- Determinismus-Falle gelöst: `sum_all` über Views akkumuliert in LOGISCHER Row-Major-Ordnung; nicht-vakuös gepinnt (Absorptions-Muster 1e100/−1e100 — die erste „gemischte Magnituden"-Testdatenwahl unterschied die Ordnungen NICHT, der assert_ne-Guard fing das).
-- OOM-Scratch-Leak in resident.ts nebenbei geschlossen (Scratch-Liste + einzelnes finally); v1-Hälfte bleibt als FOLLOWUP.
-- KB-Capture: 2 neue Notizen (`zero-copy-views-zugriffsmuster-entscheidet`, `float-reduktion-ueber-views-logische-ordnung`), 2 Upserts (FinalizationRegistry-Idiom um Refcount-Sharing erweitert; Differentialtest-Notiz verlinkt), 2 MOCs verdrahtet, Graph rebuilt, Link-Kanten verifiziert.
+- Kern 03 committet & gepusht (`428cdca`, `62504d7`).
+- **Kern 04 nach korrigiertem Routing**: Spec hier (Fable), **Implementierung delegiert an brainroute:deep** (Sonnet 5 xhigh, spec-verankerter Prompt), dann zwei Review-Schichten: eigenes Diff-Review (Bit-Identitäts-Argument Zeile für Zeile) + Fresh-Context-Verify („meets its spec"; Bit-Identitäts-Argument unabhängig neu hergeleitet, `.wasm` disassembliert, compile_error!-Guard absichtlich ausgelöst). Ein Minor-Befund (stale Error-String) gefixt.
+- Bench 3 Läufe; Kern-03-Vorhersage („Packing eliminiert View-Malus") explizit bestätigt und die überholte Guidance in kern-03-ergebnisse.md als superseded markiert.
+- KB: 2 neue Notizen (`simd-blocking-ohne-bit-identitaet-zu-brechen`, `wasm-simd128-stille-skalarisierung-cargo-config-cwd`), Views-Notiz revidiert (Malus war kernel-abhängig), 2 MOCs verdrahtet, Graph rebuilt, Kanten verifiziert.
+- Prozess-Memory: Delegations-Doktrin für Fable-Sessions als Feedback-Memory festgehalten (Ausführung nach unten, Ausnahmen explizit begründen).
 
 ## Offen / in Arbeit
-Nichts halbfertig. Kern-03-Commit lokal — **Push steht aus** (nicht explizit beauftragt).
+Nichts halbfertig. **Kern-04-Commit lokal — Push nicht beauftragt.**
 
-## Nächste Schritte
-1. **SIMD128 + Blocking fürs Matmul** — der nächste reale Performance-Sprung; Kern 03 Serie A ist der direkte Beleg, dass Speicherzugriffsmuster (nicht Architektur) der Matmul-Flaschenhals sind. Blocking/Packing adressiert genau den gemessenen ~30 %-View-Verlust.
-2. Kleine Härtungen: OOM-Pfad v1-`backend.ts`, `test:core`-Listen-Guard, ABI-rank/len-Validierung vor Slice-Konstruktion (betrifft seit Kern 03 fünf weitere Einstiegspunkte).
-3. Bei Gelegenheit: Slicing am TS-Surface (ABI unterstützt Offsets bereits — kein ABI-Bruch nötig).
+## Nächste Schritte (Kandidaten, FOLLOWUPS.md)
+1. **Slicing am TS-Surface** — ABI unterstützt Offsets seit Kern 03; Typ-Ebenen-Frage (Slice-Shapes) ist der interessante Teil.
+2. **Kleine Härtungen als Aufwärm-Scheibe**: OOM-Pfad v1-`backend.ts`, `test:core`-Listen-Guard, ABI-rank/len-Prävalidierung (betrifft inzwischen 6 strided Einstiegspunkte).
+3. **Threads** (COOP/COEP, SharedArrayBuffer) — eigene, größere Phase.
+4. Perf-Hebel notiert: Packing-Buffer-Reuse; SIMD für elementwise/sum erst nach Messung (memory-bound).
 
 ## Bekannte Probleme / Stolperfallen
-- Alles aus dem letzten Handoff gilt weiter (TS 7.0.2-Limits; `AnyNDArray`/`AnyWNDArray` wegen Invarianz; explizite Test-Dateilisten in package.json; nie TypedArray-Views über Allokationen cachen; Reihenfolge-Disziplin für Bit-Identität; v1 transzendentenfrei).
-- **Neu (Kern 03):** Free-Counter-Assertions müssen Handles isolieren — Op-Output-`dispose()` bewegt `getResidentFreeCount()` synchron mit (zweimal in Tests reingefallen, dokumentiert in kern-03-ergebnisse.md).
-- **Neu (Kern 03):** `contiguous()` kopiert IMMER (auch wenn schon kontiguierlich) — bewusste Ownership-Entscheidung, nicht optimieren ohne die Lifecycle-Implikationen zu bedenken.
-- Prozess: Nach `cd` in den Obsidian-Vault (KB-Upserts) das Zurück-`cd` nicht vergessen — `pnpm` löst sonst gegen ein fremdes package.json im Vault-Baum auf und schlägt mit verwirrenden Deps-Fehlern fehl (in dieser Session passiert).
-- Prozess: Delegations-Prompts an Subagenten brauchen Umgebungsregeln (nie /tmp; Session-Scratchpad nutzen); Commit-Hashes nie in Dateien schreiben, die im selben Commit landen.
+- Alles aus den letzten Handoffs gilt weiter (TS-7-Limits, Invarianz/`AnyWNDArray`, explizite Test-Listen, TypedArray-View-Regel, Reihenfolge-Disziplin, Free-Counter-Isolation, `contiguous()` kopiert immer).
+- **Neu (Kern 04):** Ohne `+simd128` skalarisiert LLVM v128-Ops STILL (kein Build-Fehler) — der `compile_error!`-Guard in `matmul_blocked.rs` fängt das. **Cargo-Config-Discovery ist cwd-basiert**: alle Befehle vom Repo-Root ausführen, sonst fehlt das rustflag (Guard feuert dann — gewollt).
+- **Neu (Kern 04):** Native `cargo test` deckt den SIMD-Pfad NICHT (skalarer Micro-Step gleicher Rundungsfolge); das Gate für SIMD ist die TS-Differentialsuite gegen das echte `.wasm`. Coverage-Split ist im Kernel-Doc dokumentiert.
+- Prozess: nach `cd` in den Vault zurück-cd-en (pnpm/cargo lösen sonst falsch auf).
 
 ## Wichtige Dateien & Befehle
-- **Specs & Ergebnisse**: `docs/{spike-01,kern-01,kern-02,kern-03}-*.md` (je Spec + Ergebnisse mit Verifikations-Addendum), `docs/wettbewerbsanalyse-und-usp.md`, Backlog `FOLLOWUPS.md`.
-- **Code**: `spike/src/` (Typ-Ebene + naive Referenz `runtime.ts`), `spike/src/wasm/` (`loader.ts`, `backend.ts` v1 eingefroren, `resident.ts` v2+Views), `crates/core/` (Rust, zero deps: `abi.rs`, `shape.rs`, `kernels/` inkl. `materialize.rs`), Tests `spike/tests-runtime/` (neu: `strided.test.ts`, `strided-lifecycle.test.ts`), Benches `spike/bench-core/` (neu: `strided.ts`).
-- **Befehle**: `pnpm check` · `pnpm test:core` · `pnpm test:resident` (+`:gc`) · `pnpm demo` · `pnpm bench:scaling` / `bench:chain` / `bench:strided` · `cargo test --manifest-path crates/core/Cargo.toml`. Build-Kette: `.wasm` wird von den Scripts automatisch vor Tests/Demo gebaut.
+- **Specs & Ergebnisse**: `docs/{spike-01,kern-01..kern-04}-*.md` (je Spec + Ergebnisse mit Verifikations-Addendum), Backlog `FOLLOWUPS.md`.
+- **Code**: `spike/src/wasm/` (`loader.ts`, `backend.ts` v1 frozen, `resident.ts`), `crates/core/` (`abi.rs`, `shape.rs`, `kernels/` inkl. `matmul_blocked.rs`), `.cargo/config.toml` (simd128-rustflag), Tests `spike/tests-runtime/` (neu: `blocked.test.ts`), Benches `spike/bench-core/` (neu: `blocked.ts`).
+- **Befehle**: `pnpm check` · `pnpm test:core` · `pnpm test:resident` (+`:gc`) · `pnpm demo` · `pnpm bench:scaling` / `bench:chain` / `bench:strided` / `bench:blocked` · `cargo test --manifest-path crates/core/Cargo.toml` — alles vom Repo-Root.

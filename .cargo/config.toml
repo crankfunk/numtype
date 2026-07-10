@@ -1,0 +1,16 @@
+# Kern 04: enable WASM SIMD128 codegen for the wasm32-unknown-unknown target
+# only — native `cargo test`/`cargo check` builds (no --target given) are
+# unaffected, since this section is scoped to that one target triple.
+#
+# Verified empirically (2026-07-10, rustc 1.95.0): Cargo's config-file
+# discovery walks up from the CURRENT WORKING DIRECTORY at invocation, not
+# from --manifest-path's location. So `cargo build --manifest-path
+# crates/core/Cargo.toml --target wasm32-unknown-unknown --release` only
+# picks up this file when invoked with cwd = repo root (an ancestor of this
+# file) — exactly how `pnpm build:wasm` is documented to be run (CLAUDE.md:
+# "Run all pnpm/cargo commands FROM THE REPO ROOT"). Invoking the same
+# command from a directory that is not an ancestor of this file silently
+# drops the flag — confirmed to trip the loud `compile_error!` guard in
+# crates/core/src/kernels/matmul_blocked.rs rather than fail silently.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]
