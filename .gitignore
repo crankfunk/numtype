@@ -14,3 +14,7 @@ crates/**/target/
 # crates/**/target/ above does not match this name, so it needs its own line.
 crates/**/target-threads/
 .claude/worktrees/
+
+# Spike 02: generated editor-latency workload files (gen-workloads.ts is the
+# source of truth; `pnpm bench:editor` regenerates on every run).
+spike/bench-dx/workloads/

@@ -22,7 +22,8 @@
     "bench:blocked": "pnpm build:wasm && node spike/bench-core/blocked.ts",
     "bench:slice": "pnpm build:wasm && node spike/bench-core/slice.ts",
     "bench:threaded": "pnpm build:wasm:threads && node spike/bench-core/threaded.ts",
-    "bench:crossover": "pnpm build:wasm:threads && node spike/bench-core/threaded-crossover.ts"
+    "bench:crossover": "pnpm build:wasm:threads && node spike/bench-core/threaded-crossover.ts",
+    "bench:editor": "node spike/bench-dx/gen-workloads.ts && node spike/bench-dx/editor-latency.ts"
   },
   "devDependencies": {
     "typescript": "^7.0.2"

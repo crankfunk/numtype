@@ -10,5 +10,6 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true
   },
-  "include": ["spike"]
+  "include": ["spike"],
+  "exclude": ["spike/bench-dx/workloads"]
 }

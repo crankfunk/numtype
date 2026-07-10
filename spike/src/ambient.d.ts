@@ -82,3 +82,81 @@ declare module "node:assert" {
   export default assertDefault;
   export { ok, strictEqual, deepStrictEqual, notStrictEqual, throws };
 }
+
+/** Spike 02: the handful of `Buffer` surface the editor-latency LSP client's
+ * JSON-RPC byte-framing needs. `Content-Length` in the LSP wire protocol is
+ * a BYTE count, not a UTF-16 code-unit count — plain JS strings can't keep
+ * that correct once a message contains any non-ASCII byte (this project's
+ * own generated doc comments use em-dashes), so `Buffer` (which `extends
+ * Uint8Array`, itself already ambient from the ES2022 lib) is the minimal
+ * correct tool, not a general Node typings shim. */
+interface Buffer extends Uint8Array {
+  toString(encoding?: string): string;
+  /** Widened to `string | number` (real Node's Buffer.indexOf overloads
+   * both) so this remains a compatible override of `Uint8Array.indexOf`'s
+   * `number`-only signature — a narrower `(value: string) => number` alone
+   * fails TS's interface-extension assignability check. */
+  indexOf(value: string | number, byteOffset?: number): number;
+  subarray(start?: number, end?: number): Buffer;
+}
+declare var Buffer: {
+  from(data: string, encoding?: string): Buffer;
+  byteLength(data: string, encoding?: string): number;
+  concat(list: readonly Uint8Array[]): Buffer;
+};
+
+/** Spike 02: synchronous `fs` calls used by the workload generator and the
+ * harness (reading generated files back, writing the manifest). Deliberately
+ * separate from the existing `node:fs/promises` shim above — sync, not
+ * async, a different module specifier in real Node too. */
+declare module "node:fs" {
+  export function mkdirSync(path: string, options?: { recursive?: boolean }): string | undefined;
+  export function rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void;
+  export function writeFileSync(path: string, data: string): void;
+  export function readFileSync(path: string, encoding: "utf8"): string;
+}
+
+/** Spike 02: the `path` helpers used to build workload/tsconfig file paths
+ * portably (this project runs from a fixed repo-root CWD per CLAUDE.md, but
+ * the generator/harness still compute paths relative to their own module
+ * location via `import.meta.url`, not a hardcoded absolute string). */
+declare module "node:path" {
+  export function dirname(p: string): string;
+  export function join(...paths: string[]): string;
+}
+
+/** Spike 02: `fileURLToPath` — converts `import.meta.url` (a `file://` URL)
+ * to a plain filesystem path, the one `node:url` export this project needs. */
+declare module "node:url" {
+  export function fileURLToPath(url: string): string;
+}
+
+/** Spike 02: the minimal `child_process` surface the LSP harness needs —
+ * `spawn` to run the native `tsc --lsp --stdio` server as a long-lived
+ * subprocess (stdio piped, JSON-RPC framed over stdin/stdout), `execFileSync`
+ * to run one-shot `tsc --extendedDiagnostics` instantiation-count passes.
+ * Modeled loosely/structurally (not the real `ChildProcess` class) — just
+ * the methods/events this file actually calls. */
+declare module "node:child_process" {
+  interface ReadableLike {
+    on(event: "data", listener: (chunk: Buffer) => void): void;
+  }
+  interface WritableLike {
+    write(data: string): boolean;
+    end(): void;
+  }
+  interface ChildProcessLike {
+    readonly stdin: WritableLike;
+    readonly stdout: ReadableLike;
+    readonly stderr: ReadableLike;
+    on(event: "exit", listener: (code: number | null, signal: string | null) => void): void;
+    on(event: "error", listener: (err: Error) => void): void;
+    kill(signal?: string): boolean;
+  }
+  export function spawn(command: string, args: readonly string[], options?: { stdio?: readonly string[]; cwd?: string }): ChildProcessLike;
+  /** Throws on non-zero exit (including when the compiled program itself
+   * reports type errors) — the thrown value still carries `.stdout` with
+   * whatever was written before exit; callers narrow it defensively rather
+   * than relying on this type alone. */
+  export function execFileSync(command: string, args: readonly string[], options: { encoding: "utf8"; cwd?: string }): string;
+}
