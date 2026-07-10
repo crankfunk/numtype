@@ -13,3 +13,4 @@ crates/**/target/
 # the stable build's own target/ and incremental cache are never touched —
 # crates/**/target/ above does not match this name, so it needs its own line.
 crates/**/target-threads/
+.claude/worktrees/
