@@ -8,3 +8,8 @@ graph-a-lama-out/
 # own build output.
 *.wasm
 crates/**/target/
+
+# Kern 06: threads build uses a SEPARATE --target-dir (never "target") so
+# the stable build's own target/ and incremental cache are never touched —
+# crates/**/target/ above does not match this name, so it needs its own line.
+crates/**/target-threads/

@@ -885,4 +885,95 @@ mod tests {
     fn materialize_garbage_len_is_status_3() {
         assert_eq!(nt_materialize(0, 0, 0, 0, 0, u32::MAX, 0, 0), KernelError::SizeOverflow.status());
     }
+    #[test]
+    fn matmul_blocked_partial_garbage_rank_is_status_2() {
+        assert_eq!(
+            nt_matmul_blocked_partial(0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::RankTooLarge.status()
+        );
+    }
+
+    #[test]
+    fn matmul_blocked_partial_garbage_len_is_status_3() {
+        assert_eq!(
+            nt_matmul_blocked_partial(0, 0, 0, 0, 0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::SizeOverflow.status()
+        );
+    }
 }
+
+/// Kern 06: allocation-free row-partial generalization of
+/// `nt_matmul_blocked` — identical 14-argument operand/output convention
+/// (see `kernels::matmul_blocked::matmul_blocked_partial`'s doc comment for
+/// the row-range/bit-identity contract), plus a half-open range
+/// `[row_start, row_end)` over the flat output row space
+/// `[0, batch_size * m)`. Each worker calls this independently with its own
+/// disjoint row range against the SAME shared output buffer; prevalidation
+/// is identical to the other hardened entry points (rank first, then every
+/// `(ptr, len)` region) — the row range itself is validated inside the
+/// kernel (needs shape-derived `batch_size`/`m`, which aren't known yet at
+/// this point), reusing status 3 (`SizeOverflow`, no new status codes).
+///
+/// **Freeze gate.** `#[no_mangle] extern "C"` makes this an unconditional
+/// WASM export the moment it's compiled for `wasm32-unknown-unknown` —
+/// gated `#[cfg(any(not(target_arch = "wasm32"), target_feature =
+/// "atomics"))]` for exactly the reason `kernels::matmul_blocked`'s own
+/// "Freeze gate" doc comment explains: present for native `cargo test` and
+/// the threads wasm32 build (`+atomics`), absent from the plain wasm32
+/// build (`pnpm build:wasm`, `+simd128` only) — which is the frozen
+/// baseline `numtype_core.wasm` must stay byte-identical to.
+#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub extern "C" fn nt_matmul_blocked_partial(
+    a_shape_ptr: u32,
+    a_rank: u32,
+    a_strides_ptr: u32,
+    a_offset: u32,
+    a_data_ptr: u32,
+    a_data_len: u32,
+    b_shape_ptr: u32,
+    b_rank: u32,
+    b_strides_ptr: u32,
+    b_offset: u32,
+    b_data_ptr: u32,
+    b_data_len: u32,
+    out_data_ptr: u32,
+    out_len: u32,
+    row_start: u32,
+    row_end: u32,
+) -> u32 {
+    // Defense-in-depth prevalidation (see module doc): rank first, so a
+    // garbage rank reports status 2 rather than being caught downstream by
+    // the region checks (which would misreport it as status 3).
+    if let Err(e) = validate_rank(a_rank).and(validate_rank(b_rank)) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(a_shape_ptr, a_rank, 4),
+        validate_region(a_strides_ptr, a_rank, 4),
+        validate_region(a_data_ptr, a_data_len, 8),
+        validate_region(b_shape_ptr, b_rank, 4),
+        validate_region(b_strides_ptr, b_rank, 4),
+        validate_region(b_data_ptr, b_data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let a_shape: &[u32] = unsafe { read_slice(a_shape_ptr, a_rank) };
+    let a_strides: &[u32] = unsafe { read_slice(a_strides_ptr, a_rank) };
+    let a_data: &[f64] = unsafe { read_slice(a_data_ptr, a_data_len) };
+    let b_shape: &[u32] = unsafe { read_slice(b_shape_ptr, b_rank) };
+    let b_strides: &[u32] = unsafe { read_slice(b_strides_ptr, b_rank) };
+    let b_data: &[f64] = unsafe { read_slice(b_data_ptr, b_data_len) };
+    let out: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+
+    match kernels::matmul_blocked::matmul_blocked_partial(
+        a_shape, a_strides, a_offset, a_data, b_shape, b_strides, b_offset, b_data, out, row_start, row_end,
+    ) {
+        Ok(()) => STATUS_OK,
+        Err(e) => status_of(e),
+    }
+}
+

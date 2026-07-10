@@ -160,6 +160,101 @@ const registry = new FinalizationRegistry<ResidentBuffer>((buf) => {
  */
 export type AnyWNDArray = WNDArray<any>;
 
+/** Kern 06 addition: the raw resident-buffer descriptor `WNDArray.describe()`
+ * returns — see that method's doc comment. `strides`/`shape` are the SAME
+ * (readonly, aliased) arrays the handle itself carries, never copied. */
+export interface WNDArrayDescriptor {
+  readonly core: CoreExports;
+  readonly ptr: number;
+  readonly lenElems: number;
+  readonly shape: readonly number[];
+  readonly strides: readonly number[];
+  readonly offset: number;
+}
+
+/** Kern 06 addition: the pure shape/promotion/batch-broadcast bookkeeping
+ * `matmul()` below computes inline, factored into a standalone exported
+ * function so `threaded.ts`'s `threadedMatmul` can reuse the IDENTICAL
+ * logic (same 1-D promotion rule, same inner-dim check, same batch
+ * broadcast) without re-deriving it — "mirrors the resident matmul
+ * semantics exactly" per the spec, and reuse (rather than a hand-copied
+ * second implementation) is how that's actually guaranteed rather than
+ * merely intended. Deliberately does NOT touch `matmul()` itself (which
+ * keeps its own inline copy of this same logic, byte-for-byte unchanged
+ * from before this phase) — additive duplication of the CALL, not a
+ * refactor of the existing method, matching this codebase's own stated
+ * precedent for the Rust side and keeping the diff to `matmul()` at zero
+ * lines. Touches no WASM state; pure over shape/stride arrays. */
+export interface MatmulPlan {
+  readonly aShape: number[];
+  readonly bShape: number[];
+  readonly aStrides: number[];
+  readonly bStrides: number[];
+  readonly m: number;
+  readonly k: number;
+  readonly n: number;
+  readonly batchOut: number[];
+  readonly batchRank: number;
+  readonly outFullShape: number[];
+  readonly outLen: number;
+  readonly aPromoted: boolean;
+  readonly bPromoted: boolean;
+}
+
+export function planMatmul(
+  aShapeIn: readonly number[],
+  aStridesIn: readonly number[],
+  bShapeIn: readonly number[],
+  bStridesIn: readonly number[],
+): MatmulPlan {
+  if (aShapeIn.length === 0) {
+    throw new Error(`matmul: scalar operand (rank 0) is not allowed as the first argument (got shape [])`);
+  }
+  if (bShapeIn.length === 0) {
+    throw new Error(`matmul: scalar operand (rank 0) is not allowed as the second argument (got shape [])`);
+  }
+
+  const aPromoted = aShapeIn.length === 1;
+  const bPromoted = bShapeIn.length === 1;
+  const aShape = aPromoted ? [1, aShapeIn[0] ?? 1] : [...aShapeIn];
+  const bShape = bPromoted ? [bShapeIn[0] ?? 1, 1] : [...bShapeIn];
+  const aStrides = aPromoted ? [0, aStridesIn[0] ?? 0] : [...aStridesIn];
+  const bStrides = bPromoted ? [bStridesIn[0] ?? 0, 0] : [...bStridesIn];
+
+  const m = aShape[aShape.length - 2] ?? 1;
+  const k1 = aShape[aShape.length - 1] ?? 1;
+  const k2 = bShape[bShape.length - 2] ?? 1;
+  const n = bShape[bShape.length - 1] ?? 1;
+  if (k1 !== k2) {
+    throw new Error(`matmul: inner dimensions ${k1} and ${k2} do not match`);
+  }
+
+  const batchA = aShape.slice(0, -2);
+  const batchB = bShape.slice(0, -2);
+  const batchOut = runtimeBroadcastShape(batchA, batchB); // throws before any allocation
+  const batchRank = batchOut.length;
+  const outFullShape = [...batchOut, m, n];
+  const outLen = product(outFullShape);
+
+  return { aShape, bShape, aStrides, bStrides, m, k: k1, n, batchOut, batchRank, outFullShape, outLen, aPromoted, bPromoted };
+}
+
+/** Kern 06 addition: the post-kernel-call squeeze `matmul()` applies to
+ * `outFullShape` (undo 1-D promotion) — same reuse rationale as
+ * `planMatmul` above. Squeezing a size-1 axis never changes the flat
+ * (row-major) data layout, only the shape metadata (mirrors `matmulRuntime`
+ * exactly). */
+export function squeezeMatmulShape(plan: MatmulPlan): number[] {
+  let finalShape = plan.outFullShape;
+  if (plan.aPromoted) {
+    finalShape = [...finalShape.slice(0, plan.batchRank), ...finalShape.slice(plan.batchRank + 1)];
+  }
+  if (plan.bPromoted) {
+    finalShape = finalShape.slice(0, -1);
+  }
+  return finalShape;
+}
+
 /**
  * Resident twin of `NDArray<S>`. See module doc comment for the full
  * lifecycle contract. Surface mirrors `NDArray`: `zeros`/`ones`/`fromArray`,
@@ -247,8 +342,20 @@ export class WNDArray<S extends Shape> {
 
   /** Wrap a freshly allocated WASM buffer (ownership transfers: the new
    * handle holds the record's initial `refs = 1`) with natural row-major
-   * metadata. */
-  private static fresh<S extends Shape>(core: CoreExports, shape: S, ptr: number, lenElems: number): WNDArray<S> {
+   * metadata.
+   *
+   * Kern 06: widened from `private` to plain `static` so `threaded.ts`'s
+   * `threadedMatmul` can wrap the output buffer it allocates itself (via
+   * `nt_alloc`, exactly like every other op here) into a real `WNDArray`
+   * without duplicating the refcounted-buffer/`FinalizationRegistry`
+   * bookkeeping the constructor already gets right. This is a
+   * VISIBILITY-ONLY change: TypeScript's `private` is a compile-time-only
+   * check (erased entirely during compilation — Node's native TS
+   * type-stripping confirms this: erasable syntax only), so the emitted/
+   * executed JS for every existing call site is byte-for-byte identical
+   * either way; `pnpm test:resident` staying green (2318+2, unchanged) is
+   * the empirical proof this widening changes no behavior. */
+  static fresh<S extends Shape>(core: CoreExports, shape: S, ptr: number, lenElems: number): WNDArray<S> {
     const buf: ResidentBuffer = { core, ptr, bytes: lenElems * 8, lenElems, refs: 1 };
     return new WNDArray<S>(buf, shape, computeStrides(shape), 0);
   }
@@ -657,6 +764,29 @@ export class WNDArray<S extends Shape> {
     } finally {
       for (const buf of scratch) freeBuf(this.core, buf);
     }
+  }
+
+  /** Kern 06 addition: expose this handle's raw resident-buffer descriptor
+   * (core/ptr/lenElems/shape/strides/offset) for the threaded runtime layer
+   * (`threaded.ts`'s `threadedMatmul`), which must marshal these exact
+   * fields into per-worker job-control blocks directly — the same
+   * information `matmul()` above already marshals into scratch shape/stride
+   * buffers for its own single-threaded `nt_matmul_blocked` call, just
+   * handed back to the caller instead of consumed internally. Purely
+   * additive and read-only: does not change `matmul()` or any other
+   * existing method's behavior (verified: `pnpm test:resident` stays green,
+   * 2318+2 unchanged). `core`/`buf`/`offset` stay `private` fields; this is
+   * the one sanctioned read path to them from outside the class. */
+  describe(): WNDArrayDescriptor {
+    this.assertLive("describe");
+    return {
+      core: this.core,
+      ptr: this.buf.ptr,
+      lenElems: this.buf.lenElems,
+      shape: this.shape,
+      strides: this.strides,
+      offset: this.offset,
+    };
   }
 
   /** Read back as an independent `Float64Array` copy in LOGICAL row-major

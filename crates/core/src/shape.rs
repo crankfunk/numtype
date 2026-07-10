@@ -188,6 +188,102 @@ pub fn aligned_effective_strides(shape: &[u32], strides: &[u32], rank: usize) ->
     effective_strides(&shape_al, &strides_al)
 }
 
+// --- Kern 06: allocation-free counterparts ---------------------------------
+//
+// `nt_matmul_blocked_partial`'s entire call graph must be allocation-free
+// (docs/kern-06-threads-spec.md, ABI addition contract) — each worker calls
+// this kernel independently, and a heap allocation inside a per-worker WASM
+// call is exactly the kind of thing that's easy to overlook (the Kern-06
+// feasibility spike's own audit found `nt_sum_all_strided` allocating
+// internally via `unravel` despite an innocent signature — see that spec's
+// "Feasibility grounding" section). These are line-by-line no-alloc twins of
+// `compute_strides`/`unravel`/`broadcast_shape`/`aligned_effective_strides`
+// above: same arithmetic, same iteration order, but writing into a
+// caller-owned `[u32; MAX_RANK]` stack buffer and returning the logical
+// length instead of allocating a `Vec`. The originals are untouched
+// (existing callers — `matmul`/`matmul_strided`/`matmul_blocked`/`sum_axis*`
+// — keep using the allocating versions; additive duplication per this
+// crate's own precedent, not a refactor).
+//
+// **Freeze gate.** Gated `#[cfg(any(not(target_arch = "wasm32"),
+// target_feature = "atomics"))]` — same condition, same rationale, as
+// `kernels::matmul_blocked`'s own "Freeze gate" doc comment: present for
+// native `cargo test` and the threads wasm32 build, absent from the plain
+// wasm32 build. These four functions are never `#[no_mangle]` (so never a
+// WASM export by themselves), but empirically their mere presence in the
+// crate — even fully unreachable, since only the gated `matmul_blocked_partial`
+// call graph uses them — still shifted the compiled `.wasm`'s bytes before
+// this gate was added (observed directly: a clean `pnpm build:wasm` rebuild
+// hashed differently with these functions present-but-unreferenced vs.
+// absent, even though the exported-symbol SET was already identical either
+// way). Gating them out entirely removes any dependence on LTO/dead-code
+// elimination fully erasing unreferenced code from the final artifact.
+
+/// No-alloc twin of [`compute_strides`]: writes `shape.len()` row-major
+/// strides into `out[0..shape.len()]` and returns that length. Same overflow
+/// precondition as `compute_strides` (`shape` already passed
+/// `checked_element_count`, or is a subshape of one that has).
+#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+pub fn compute_strides_into(shape: &[u32], out: &mut [u32; MAX_RANK]) -> usize {
+    let len = shape.len();
+    let mut acc: u32 = 1;
+    for i in (0..len).rev() {
+        out[i] = acc;
+        acc = acc.wrapping_mul(shape[i]);
+    }
+    len
+}
+
+/// No-alloc twin of [`unravel`]: writes `shape.len()` per-axis indices into
+/// `out[0..shape.len()]` and returns that length. Same precondition as
+/// `unravel` (`flat < product(shape)`).
+#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+pub fn unravel_into(flat: u32, shape: &[u32], strides: &[u32], out: &mut [u32; MAX_RANK]) -> usize {
+    let len = shape.len();
+    for i in 0..len {
+        out[i] = (flat / strides[i]) % shape[i];
+    }
+    len
+}
+
+/// No-alloc twin of [`broadcast_shape`]: writes the broadcast shape into
+/// `out[0..rank]` and returns `rank` (`= max(a.len(), b.len())`), or the same
+/// `ShapeIncompatible` error the allocating version returns. Same
+/// precondition (`a`/`b` individually already rank-validated, so
+/// `rank <= MAX_RANK`).
+#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+pub fn broadcast_shape_into(a: &[u32], b: &[u32], out: &mut [u32; MAX_RANK]) -> KResult<usize> {
+    let rank = a.len().max(b.len());
+    for i in 0..rank {
+        let ai = if i < a.len() { a[a.len() - 1 - i] } else { 1 };
+        let bi = if i < b.len() { b[b.len() - 1 - i] } else { 1 };
+        if ai == bi || ai == 1 || bi == 1 {
+            out[rank - 1 - i] = if ai == 1 { bi } else { ai };
+        } else {
+            return Err(KernelError::ShapeIncompatible);
+        }
+    }
+    Ok(rank)
+}
+
+/// No-alloc twin of [`aligned_effective_strides`] (itself `align_to_rank` +
+/// `effective_strides` fused): writes `rank` effective strides into
+/// `out[0..rank]` and returns `rank`. Padding axes (the first
+/// `rank - shape.len()` slots) always get stride 0 (dim 1 by construction);
+/// remaining axes get 0 if their own dim is 1, else their caller-supplied
+/// stride — identical rule to the allocating version.
+#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+pub fn aligned_effective_strides_into(shape: &[u32], strides: &[u32], rank: usize, out: &mut [u32; MAX_RANK]) -> usize {
+    let pad = rank - shape.len();
+    for slot in out.iter_mut().take(pad) {
+        *slot = 0;
+    }
+    for i in 0..shape.len() {
+        out[pad + i] = if shape[i] == 1 { 0 } else { strides[i] };
+    }
+    rank
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,5 +403,63 @@ mod tests {
         assert_eq!(strides_al, vec![0, 0, 1]);
         let eff = effective_strides(&shape_al, &strides_al);
         assert_eq!(eff, vec![0, 0, 1]);
+    }
+
+    // --- Kern 06: no-alloc twins agree with the allocating originals -------
+
+    #[test]
+    fn compute_strides_into_matches_compute_strides() {
+        for shape in [vec![2u32, 3, 4], vec![], vec![5u32], vec![1u32; 32]] {
+            let want = compute_strides(&shape);
+            let mut buf = [0u32; MAX_RANK];
+            let len = compute_strides_into(&shape, &mut buf);
+            assert_eq!(len, shape.len());
+            assert_eq!(&buf[..len], want.as_slice());
+        }
+    }
+
+    #[test]
+    fn unravel_into_matches_unravel() {
+        let shape = vec![2u32, 3, 4];
+        let strides = compute_strides(&shape);
+        for flat in 0..24u32 {
+            let want = unravel(flat, &shape, &strides);
+            let mut buf = [0u32; MAX_RANK];
+            let len = unravel_into(flat, &shape, &strides, &mut buf);
+            assert_eq!(len, shape.len());
+            assert_eq!(&buf[..len], want.as_slice());
+        }
+    }
+
+    #[test]
+    fn broadcast_shape_into_matches_broadcast_shape_ok_and_err() {
+        let cases: &[(&[u32], &[u32])] = &[
+            (&[2, 3], &[3]),
+            (&[3, 1, 5], &[3, 4, 5]),
+            (&[1], &[5]),
+            (&[], &[2, 3]),
+        ];
+        for &(a, b) in cases {
+            let want = broadcast_shape(a, b).unwrap();
+            let mut buf = [0u32; MAX_RANK];
+            let len = broadcast_shape_into(a, b, &mut buf).unwrap();
+            assert_eq!(len, want.len());
+            assert_eq!(&buf[..len], want.as_slice());
+        }
+        let mut buf = [0u32; MAX_RANK];
+        assert_eq!(broadcast_shape_into(&[2, 3], &[2, 4], &mut buf), Err(KernelError::ShapeIncompatible));
+        assert_eq!(broadcast_shape(&[2, 3], &[2, 4]), Err(KernelError::ShapeIncompatible));
+    }
+
+    #[test]
+    fn aligned_effective_strides_into_matches_aligned_effective_strides() {
+        let cases: &[(&[u32], &[u32], usize)] = &[(&[3], &[1], 3), (&[1, 5], &[5, 1], 2), (&[], &[], 0), (&[4, 1, 6], &[6, 999, 1], 3)];
+        for &(shape, strides, rank) in cases {
+            let want = aligned_effective_strides(shape, strides, rank);
+            let mut buf = [0u32; MAX_RANK];
+            let len = aligned_effective_strides_into(shape, strides, rank, &mut buf);
+            assert_eq!(len, want.len());
+            assert_eq!(&buf[..len], want.as_slice());
+        }
     }
 }
