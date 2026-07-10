@@ -75,6 +75,12 @@ workers=1 configuration — pure protocol overhead by construction — genuinely
 overlapping ranges). Threading pays off for large matmuls only; the single-threaded path remains
 the right default for small ones. No size-based auto-routing was built (out of scope).
 
+Measurement follow-up (same host, idle, post-commit re-run): 2 workers 1.91–1.96×, 4 workers
+3.29–3.61×, 8 workers 3.97–4.29× across n=256/512/1024 — and workers=1 measured 1.01–1.02× at
+every large n, so the 0.75× reading above did not reproduce and was most likely concurrent host
+load during the original run, not protocol cost. The n=64 workers=1 loss (0.88×) persists: at
+small sizes the dispatch round trip remains a real, measured cost.
+
 ## Gotchas (with evidence — each cost real debugging time or was caught by a layer of the process)
 
 1. **Line shifts alone break byte-identity of untouched functions.** Inserting new code above
