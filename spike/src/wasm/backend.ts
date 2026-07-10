@@ -81,13 +81,25 @@ export function wasmAdd(
   const outShape = runtimeBroadcastShape(aShape, bShape); // throws with named shapes on incompatibility
   const outLen = product(outShape);
 
-  const aShapeBuf = writeShape(core, aShape);
-  const bShapeBuf = writeShape(core, bShape);
-  const aDataBuf = writeData(core, aData);
-  const bDataBuf = writeData(core, bData);
-  const outDataBuf = allocBytes(core, outLen * 8);
-
+  // Every scratch allocation happens INSIDE the try and is pushed onto
+  // `scratch` immediately after it succeeds, so a single `finally` frees
+  // exactly the buffers that were actually allocated — including an OOM
+  // that hits partway through marshalling (see resident.ts for the same
+  // pattern; here `outDataBuf` is scratch too, since v1 copies the result
+  // out before freeing).
+  const scratch: ScratchBuf[] = [];
   try {
+    const aShapeBuf = writeShape(core, aShape);
+    scratch.push(aShapeBuf);
+    const bShapeBuf = writeShape(core, bShape);
+    scratch.push(bShapeBuf);
+    const aDataBuf = writeData(core, aData);
+    scratch.push(aDataBuf);
+    const bDataBuf = writeData(core, bData);
+    scratch.push(bDataBuf);
+    const outDataBuf = allocBytes(core, outLen * 8);
+    scratch.push(outDataBuf);
+
     const status = core.nt_add(
       aShapeBuf.ptr,
       aShape.length,
@@ -107,11 +119,7 @@ export function wasmAdd(
     }
     return { shape: outShape, data: readDataCopy(core, outDataBuf.ptr, outLen) };
   } finally {
-    freeBuf(core, aShapeBuf);
-    freeBuf(core, bShapeBuf);
-    freeBuf(core, aDataBuf);
-    freeBuf(core, bDataBuf);
-    freeBuf(core, outDataBuf);
+    for (const buf of scratch) freeBuf(core, buf);
   }
 }
 
@@ -153,14 +161,22 @@ export function wasmMatmul(
   const outFullShape = [...batchOut, m, n];
   const outLen = product(outFullShape);
 
-  const aShapeBuf = writeShape(core, aShape);
-  const bShapeBuf = writeShape(core, bShape);
-  const aDataBuf = writeData(core, aData);
-  const bDataBuf = writeData(core, bData);
-  const outDataBuf = allocBytes(core, outLen * 8);
-
+  // Same scratch-list pattern as wasmAdd: allocate inside try, push after
+  // each success, single finally frees exactly what was allocated.
+  const scratch: ScratchBuf[] = [];
   let outData: Float64Array;
   try {
+    const aShapeBuf = writeShape(core, aShape);
+    scratch.push(aShapeBuf);
+    const bShapeBuf = writeShape(core, bShape);
+    scratch.push(bShapeBuf);
+    const aDataBuf = writeData(core, aData);
+    scratch.push(aDataBuf);
+    const bDataBuf = writeData(core, bData);
+    scratch.push(bDataBuf);
+    const outDataBuf = allocBytes(core, outLen * 8);
+    scratch.push(outDataBuf);
+
     const status = core.nt_matmul(
       aShapeBuf.ptr,
       aShape.length,
@@ -180,11 +196,7 @@ export function wasmMatmul(
     }
     outData = readDataCopy(core, outDataBuf.ptr, outLen);
   } finally {
-    freeBuf(core, aShapeBuf);
-    freeBuf(core, bShapeBuf);
-    freeBuf(core, aDataBuf);
-    freeBuf(core, bDataBuf);
-    freeBuf(core, outDataBuf);
+    for (const buf of scratch) freeBuf(core, buf);
   }
 
   // Squeezing a size-1 axis never changes the flat (row-major) data layout,
@@ -211,17 +223,20 @@ export function wasmSum(
   axis: number | undefined,
 ): { shape: number[]; data: Float64Array } {
   if (axis === undefined) {
-    const aDataBuf = writeData(core, data);
-    const outDataBuf = allocBytes(core, 8);
+    const scratch: ScratchBuf[] = [];
     try {
+      const aDataBuf = writeData(core, data);
+      scratch.push(aDataBuf);
+      const outDataBuf = allocBytes(core, 8);
+      scratch.push(outDataBuf);
+
       const status = core.nt_sum_all(aDataBuf.ptr, data.length, outDataBuf.ptr);
       if (status !== 0) {
         throw new Error(`wasm backend nt_sum_all: unexpected status ${status}`);
       }
       return { shape: [], data: readDataCopy(core, outDataBuf.ptr, 1) };
     } finally {
-      freeBuf(core, aDataBuf);
-      freeBuf(core, outDataBuf);
+      for (const buf of scratch) freeBuf(core, buf);
     }
   }
 
@@ -234,20 +249,22 @@ export function wasmSum(
   const outShape = [...shape.slice(0, normAxis), ...shape.slice(normAxis + 1)];
   const outLen = product(outShape);
 
-  const shapeBuf = writeShape(core, shape);
-  const dataBuf = writeData(core, data);
-  const outDataBuf = allocBytes(core, outLen * 8);
-
+  const scratch: ScratchBuf[] = [];
   try {
+    const shapeBuf = writeShape(core, shape);
+    scratch.push(shapeBuf);
+    const dataBuf = writeData(core, data);
+    scratch.push(dataBuf);
+    const outDataBuf = allocBytes(core, outLen * 8);
+    scratch.push(outDataBuf);
+
     const status = core.nt_sum_axis(shapeBuf.ptr, shape.length, dataBuf.ptr, data.length, axis, outDataBuf.ptr, outLen);
     if (status !== 0) {
       throw new Error(`wasm backend nt_sum_axis: status ${status} for shape [${shape.join(",")}] axis ${axis}`);
     }
     return { shape: outShape, data: readDataCopy(core, outDataBuf.ptr, outLen) };
   } finally {
-    freeBuf(core, shapeBuf);
-    freeBuf(core, dataBuf);
-    freeBuf(core, outDataBuf);
+    for (const buf of scratch) freeBuf(core, buf);
   }
 }
 
@@ -260,20 +277,22 @@ export function wasmTranspose(
   const outShape = [...shape].reverse();
   const outLen = product(outShape);
 
-  const shapeBuf = writeShape(core, shape);
-  const dataBuf = writeData(core, data);
-  const outDataBuf = allocBytes(core, outLen * 8);
-
+  const scratch: ScratchBuf[] = [];
   try {
+    const shapeBuf = writeShape(core, shape);
+    scratch.push(shapeBuf);
+    const dataBuf = writeData(core, data);
+    scratch.push(dataBuf);
+    const outDataBuf = allocBytes(core, outLen * 8);
+    scratch.push(outDataBuf);
+
     const status = core.nt_transpose(shapeBuf.ptr, shape.length, dataBuf.ptr, data.length, outDataBuf.ptr, outLen);
     if (status !== 0) {
       throw new Error(`wasm backend nt_transpose: status ${status} for shape [${shape.join(",")}]`);
     }
     return { shape: outShape, data: readDataCopy(core, outDataBuf.ptr, outLen) };
   } finally {
-    freeBuf(core, shapeBuf);
-    freeBuf(core, dataBuf);
-    freeBuf(core, outDataBuf);
+    for (const buf of scratch) freeBuf(core, buf);
   }
 }
 

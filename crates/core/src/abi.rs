@@ -45,6 +45,31 @@
 //! docs/kern-04-simd-blocking-spec.md for the design. `nt_matmul_strided`
 //! itself stays untouched (frozen Kern-03 baseline, kept as the measurable
 //! "before" and the native equivalence reference for the new kernel).
+//!
+//! **Defense-in-depth hardening (post-Kern-04):** the six entry points above
+//! (`nt_add_strided`, `nt_matmul_strided`, `nt_sum_all_strided`,
+//! `nt_sum_axis_strided`, `nt_matmul_blocked`, `nt_materialize`) additionally
+//! validate their caller-declared `rank` and every `(ptr, len)` operand/
+//! output pair *before* constructing any Rust slice over them — one step
+//! earlier than the existing `validate_strided_bounds` check above, which
+//! only runs once shape/strides/data are already slices. A `rank` exceeding
+//! `shape::MAX_RANK` returns status `2` (`RankTooLarge`); a
+//! `(ptr, len, elem_size)` triple whose implied byte region would violate
+//! `from_raw_parts`'s safety contract (byte size > `isize::MAX`, or
+//! `ptr + bytes` wrapping past the 32-bit address space) returns status `3`
+//! (`SizeOverflow`) — both statuses already exist for exactly these failure
+//! categories, just checked earlier and directly against the raw ABI
+//! arguments. This closes a gap where a garbage-`rank`/garbage-`len` caller
+//! could make `read_slice`/`read_slice_mut` build an invalid slice — UB by
+//! `from_raw_parts`'s own contract the moment the slice is constructed, no
+//! dereference required. No legitimate caller observes a behavior change:
+//! every rank a real `NDArray` can have already satisfies `rank <=
+//! MAX_RANK`, and every buffer `nt_alloc` can return already satisfies both
+//! region checks (see `validate_rank`/`validate_region` below for the
+//! detailed argument). The v1 entry points (`nt_add`, `nt_matmul`,
+//! `nt_sum_all`, `nt_sum_axis`, `nt_transpose`, `nt_fill`) deliberately keep
+//! the original trust-the-caller contract with no such prevalidation — they
+//! are the frozen performance baseline and are out of scope for this pass.
 //! - **The caller (TS) computes output shapes and allocates the output
 //!   buffer** (via `nt_alloc`) *before* calling an op; the op writes into
 //!   that buffer and returns status only (it does not report its own
@@ -78,7 +103,7 @@
 //! byte length itself to do the copy-in/copy-out).
 
 use crate::kernels;
-use crate::shape::KernelError;
+use crate::shape::{KResult, KernelError, MAX_RANK};
 
 const STATUS_OK: u32 = 0;
 
@@ -119,6 +144,81 @@ unsafe fn read_slice_mut<'a, T>(ptr: u32, len: u32) -> &'a mut [T] {
     } else {
         unsafe { std::slice::from_raw_parts_mut(ptr as *mut T, len as usize) }
     }
+}
+
+/// Defense-in-depth (post-Kern-04 hardening): validate a caller-declared
+/// `rank` *before* it is ever used as the length of a shape/strides slice.
+/// Reuses `shape::MAX_RANK` and `KernelError::RankTooLarge` (status 2) — the
+/// exact constant and status the kernels themselves already enforce for an
+/// over-rank shape via `shape::checked_element_count`. A legitimate caller
+/// never observes a behavior change: every real `NDArray` already satisfies
+/// `rank <= MAX_RANK`, so this only makes the rejection happen earlier —
+/// before `rank` is ever handed to `read_slice`/`read_slice_mut` as a slice
+/// length, rather than after a kernel-internal shape check.
+fn validate_rank(rank: u32) -> KResult<()> {
+    if rank as usize > MAX_RANK {
+        return Err(KernelError::RankTooLarge);
+    }
+    Ok(())
+}
+
+/// Defense-in-depth: validate a `(ptr, len, elem_size)` region *before* it is
+/// ever handed to `read_slice`/`read_slice_mut`. `std::slice::from_raw_parts[_mut]`
+/// require the resulting slice's total byte size not to exceed `isize::MAX`
+/// — on `wasm32-unknown-unknown`, `isize` is 32-bit, so that bound is
+/// `i32::MAX` — and constructing a slice that violates it is immediate UB by
+/// that function's own safety contract, with no dereference required at all.
+/// Two checks, both against checked `u64` arithmetic (no wraparound risk: a
+/// `u32` `len`/`ptr` times a small constant `elem_size` fits comfortably in
+/// `u64`):
+/// - `bytes = len as u64 * elem_size as u64` must fit in `i32::MAX`.
+/// - `ptr as u64 + bytes` must not exceed the 32-bit address space (`2^32`)
+///   — the region must not run off the end of linear memory.
+///
+/// Both violations reuse `KernelError::SizeOverflow` (status 3) — the same
+/// status the kernels already return when a shape's byte size doesn't fit
+/// `u32` (`shape::checked_element_count`); this is the same failure
+/// category, just checked earlier and directly against the raw ABI
+/// arguments instead of shape-derived ones. No new ABI status codes.
+///
+/// A legitimate caller never observes a behavior change: every `(ptr, len)`
+/// pair TS ever passes either came from `nt_alloc` — which can only return a
+/// pointer/size that `std::alloc::Layout::from_size_align` accepted, itself
+/// requiring the size to fit `isize::MAX`, well within a 32-bit address
+/// space starting at a real allocation — or is a shape/strides length
+/// already bounded by `validate_rank`. This only ever rejects a region no
+/// `nt_alloc` result could have produced, i.e. caller-side corruption or a
+/// garbage argument.
+///
+/// `len == 0` always passes trivially (`bytes == 0`, so both checks are
+/// vacuous regardless of `ptr`), matching `read_slice`/`read_slice_mut`'s
+/// own "a zero-length pair is valid regardless of pointer" rule.
+fn validate_region(ptr: u32, len: u32, elem_size: u32) -> KResult<()> {
+    let bytes = (len as u64) * (elem_size as u64);
+    if bytes > i32::MAX as u64 {
+        return Err(KernelError::SizeOverflow);
+    }
+    if (ptr as u64) + bytes > 1u64 << 32 {
+        return Err(KernelError::SizeOverflow);
+    }
+    Ok(())
+}
+
+/// Return the first `Err` found in `checks`, in order, or `None` if every
+/// check passed. A small combinator so each hardened entry point can list
+/// its rank/region checks as a flat, auditable array up front instead of a
+/// chain of nested `if let Err`. All the checks in `checks` are pure
+/// numeric comparisons over already-computed `u32` arguments (no pointer is
+/// ever dereferenced by `validate_rank`/`validate_region`), so evaluating
+/// every element of the array before this function inspects them is always
+/// safe, regardless of which one(s) fail.
+fn first_error(checks: &[KResult<()>]) -> Option<KernelError> {
+    for check in checks {
+        if let Err(e) = check {
+            return Some(*e);
+        }
+    }
+    None
 }
 
 /// Allocate `bytes` bytes (8-byte aligned) in linear memory, returning a
@@ -302,9 +402,31 @@ pub extern "C" fn nt_add_strided(
     out_data_ptr: u32,
     out_len: u32,
 ) -> u32 {
+    // Defense-in-depth prevalidation (see module doc): rank first, so a
+    // garbage rank reports status 2 rather than being caught downstream by
+    // the region checks (which would misreport it as status 3).
+    if let Err(e) = validate_rank(a_rank).and(validate_rank(b_rank)) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(a_shape_ptr, a_rank, 4),
+        validate_region(a_strides_ptr, a_rank, 4),
+        validate_region(a_data_ptr, a_data_len, 8),
+        validate_region(b_shape_ptr, b_rank, 4),
+        validate_region(b_strides_ptr, b_rank, 4),
+        validate_region(b_data_ptr, b_data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
     // Safety: same caller contract as nt_add (valid, typed, non-overlapping
     // regions of this module's own memory, stable during the call); the
     // strides arrays are `rank` u32s each, per the strided ABI convention.
+    // rank and every (ptr, len) region above have already been
+    // prevalidated above, so from_raw_parts[_mut]'s safety contract (byte
+    // size <= isize::MAX, no address-space wraparound) cannot be violated
+    // here by a garbage caller argument.
     let a_shape: &[u32] = unsafe { read_slice(a_shape_ptr, a_rank) };
     let a_strides: &[u32] = unsafe { read_slice(a_strides_ptr, a_rank) };
     let a_data: &[f64] = unsafe { read_slice(a_data_ptr, a_data_len) };
@@ -345,6 +467,24 @@ pub extern "C" fn nt_matmul_strided(
     out_data_ptr: u32,
     out_len: u32,
 ) -> u32 {
+    // Defense-in-depth prevalidation (see module doc): rank first, so a
+    // garbage rank reports status 2 rather than being caught downstream by
+    // the region checks (which would misreport it as status 3).
+    if let Err(e) = validate_rank(a_rank).and(validate_rank(b_rank)) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(a_shape_ptr, a_rank, 4),
+        validate_region(a_strides_ptr, a_rank, 4),
+        validate_region(a_data_ptr, a_data_len, 8),
+        validate_region(b_shape_ptr, b_rank, 4),
+        validate_region(b_strides_ptr, b_rank, 4),
+        validate_region(b_data_ptr, b_data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
     let a_shape: &[u32] = unsafe { read_slice(a_shape_ptr, a_rank) };
     let a_strides: &[u32] = unsafe { read_slice(a_strides_ptr, a_rank) };
     let a_data: &[f64] = unsafe { read_slice(a_data_ptr, a_data_len) };
@@ -378,6 +518,21 @@ pub extern "C" fn nt_sum_all_strided(
     data_len: u32,
     out_data_ptr: u32,
 ) -> u32 {
+    // Defense-in-depth prevalidation (see module doc). Output is implicit
+    // len=1 (a single f64), matching the unconditional `read_slice_mut(...,
+    // 1)` below.
+    if let Err(e) = validate_rank(rank) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(shape_ptr, rank, 4),
+        validate_region(strides_ptr, rank, 4),
+        validate_region(data_ptr, data_len, 8),
+        validate_region(out_data_ptr, 1, 8),
+    ]) {
+        return status_of(e);
+    }
+
     let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
     let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
     let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
@@ -405,6 +560,19 @@ pub extern "C" fn nt_sum_axis_strided(
     out_data_ptr: u32,
     out_len: u32,
 ) -> u32 {
+    // Defense-in-depth prevalidation (see module doc).
+    if let Err(e) = validate_rank(rank) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(shape_ptr, rank, 4),
+        validate_region(strides_ptr, rank, 4),
+        validate_region(data_ptr, data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
     let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
     let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
     let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
@@ -444,6 +612,24 @@ pub extern "C" fn nt_matmul_blocked(
     out_data_ptr: u32,
     out_len: u32,
 ) -> u32 {
+    // Defense-in-depth prevalidation (see module doc): rank first, so a
+    // garbage rank reports status 2 rather than being caught downstream by
+    // the region checks (which would misreport it as status 3).
+    if let Err(e) = validate_rank(a_rank).and(validate_rank(b_rank)) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(a_shape_ptr, a_rank, 4),
+        validate_region(a_strides_ptr, a_rank, 4),
+        validate_region(a_data_ptr, a_data_len, 8),
+        validate_region(b_shape_ptr, b_rank, 4),
+        validate_region(b_strides_ptr, b_rank, 4),
+        validate_region(b_data_ptr, b_data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
     let a_shape: &[u32] = unsafe { read_slice(a_shape_ptr, a_rank) };
     let a_strides: &[u32] = unsafe { read_slice(a_strides_ptr, a_rank) };
     let a_data: &[f64] = unsafe { read_slice(a_data_ptr, a_data_len) };
@@ -477,6 +663,19 @@ pub extern "C" fn nt_materialize(
     out_data_ptr: u32,
     out_len: u32,
 ) -> u32 {
+    // Defense-in-depth prevalidation (see module doc).
+    if let Err(e) = validate_rank(rank) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(shape_ptr, rank, 4),
+        validate_region(strides_ptr, rank, 4),
+        validate_region(data_ptr, data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
     let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
     let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
     let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
@@ -555,5 +754,135 @@ mod tests {
     fn read_slice_mut_zero_length_never_dereferences_null() {
         let f: &mut [f64] = unsafe { read_slice_mut(0, 0) };
         assert_eq!(f, &mut [] as &mut [f64]);
+    }
+
+    // --- defense-in-depth prevalidation helpers -----------------------------
+
+    #[test]
+    fn validate_rank_accepts_max_rank_rejects_above() {
+        assert!(validate_rank(MAX_RANK as u32).is_ok());
+        assert_eq!(validate_rank(MAX_RANK as u32 + 1), Err(KernelError::RankTooLarge));
+        assert_eq!(validate_rank(u32::MAX), Err(KernelError::RankTooLarge));
+    }
+
+    #[test]
+    fn validate_region_zero_len_always_ok_regardless_of_ptr() {
+        assert!(validate_region(u32::MAX, 0, 8).is_ok());
+    }
+
+    #[test]
+    fn validate_region_byte_size_boundary() {
+        // Exactly isize::MAX (== i32::MAX on wasm32) bytes: ok. One more: not.
+        assert!(validate_region(0, i32::MAX as u32, 1).is_ok());
+        assert_eq!(validate_region(0, (i32::MAX as u32) + 1, 1), Err(KernelError::SizeOverflow));
+    }
+
+    #[test]
+    fn validate_region_address_space_wraparound_boundary() {
+        // A region ending exactly at 2^32 is allowed; one byte further wraps
+        // past the 32-bit address space and is rejected.
+        assert!(validate_region(u32::MAX - 7, 1, 8).is_ok());
+        assert_eq!(validate_region(u32::MAX - 6, 1, 8), Err(KernelError::SizeOverflow));
+    }
+
+    // --- defense-in-depth prevalidation, per hardened entry point -----------
+    //
+    // NOTE: these garbage-rank/garbage-len cases are host-safe for the exact
+    // reason the caveat above `read_slice_zero_length_never_dereferences_null`
+    // rules out an end-to-end round trip: `cargo test` runs this crate
+    // natively on a 64-bit host, where a real `u32` pointer produced by
+    // truncating a 64-bit `nt_alloc` allocation would be wild if
+    // dereferenced. Every value chosen below makes prevalidation
+    // (`validate_rank`/`validate_region`) fail and return *before* the
+    // function ever reaches a `read_slice`/`read_slice_mut` call — so no
+    // pointer here is ever turned into a slice, let alone dereferenced. All
+    // pointers are the sentinel `0`, which is only safe to pass here because
+    // it is guaranteed to never be dereferenced. Do NOT repurpose these
+    // tests to exercise a path that passes prevalidation and reaches a real
+    // kernel call — that would reintroduce the same native-host hazard the
+    // NOTE above already documents.
+
+    #[test]
+    fn add_strided_garbage_rank_is_status_2() {
+        assert_eq!(
+            nt_add_strided(0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::RankTooLarge.status()
+        );
+    }
+
+    #[test]
+    fn add_strided_garbage_len_is_status_3() {
+        assert_eq!(
+            nt_add_strided(0, 0, 0, 0, 0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::SizeOverflow.status()
+        );
+    }
+
+    #[test]
+    fn matmul_strided_garbage_rank_is_status_2() {
+        assert_eq!(
+            nt_matmul_strided(0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::RankTooLarge.status()
+        );
+    }
+
+    #[test]
+    fn matmul_strided_garbage_len_is_status_3() {
+        assert_eq!(
+            nt_matmul_strided(0, 0, 0, 0, 0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::SizeOverflow.status()
+        );
+    }
+
+    #[test]
+    fn sum_all_strided_garbage_rank_is_status_2() {
+        assert_eq!(nt_sum_all_strided(0, u32::MAX, 0, 0, 0, 0, 0), KernelError::RankTooLarge.status());
+    }
+
+    #[test]
+    fn sum_all_strided_garbage_len_is_status_3() {
+        assert_eq!(nt_sum_all_strided(0, 0, 0, 0, 0, u32::MAX, 0), KernelError::SizeOverflow.status());
+    }
+
+    #[test]
+    fn sum_axis_strided_garbage_rank_is_status_2() {
+        assert_eq!(
+            nt_sum_axis_strided(0, u32::MAX, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::RankTooLarge.status()
+        );
+    }
+
+    #[test]
+    fn sum_axis_strided_garbage_len_is_status_3() {
+        assert_eq!(
+            nt_sum_axis_strided(0, 0, 0, 0, 0, u32::MAX, 0, 0, 0),
+            KernelError::SizeOverflow.status()
+        );
+    }
+
+    #[test]
+    fn matmul_blocked_garbage_rank_is_status_2() {
+        assert_eq!(
+            nt_matmul_blocked(0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::RankTooLarge.status()
+        );
+    }
+
+    #[test]
+    fn matmul_blocked_garbage_len_is_status_3() {
+        assert_eq!(
+            nt_matmul_blocked(0, 0, 0, 0, 0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::SizeOverflow.status()
+        );
+    }
+
+    #[test]
+    fn materialize_garbage_rank_is_status_2() {
+        assert_eq!(nt_materialize(0, u32::MAX, 0, 0, 0, 0, 0, 0), KernelError::RankTooLarge.status());
+    }
+
+    #[test]
+    fn materialize_garbage_len_is_status_3() {
+        assert_eq!(nt_materialize(0, 0, 0, 0, 0, u32::MAX, 0, 0), KernelError::SizeOverflow.status());
     }
 }

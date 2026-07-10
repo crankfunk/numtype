@@ -402,6 +402,31 @@ test("raw ABI: out-of-bounds strides return status 4 across the boundary", () =>
   }
 });
 
+// --- ABI boundary: defense-in-depth prevalidation (rank/len, status 2/3) ----
+// abi.rs hardening finding: the strided/blocked entry points used to build
+// Rust slices from caller-declared rank/len BEFORE any validation ran, so a
+// garbage rank or length could make read_slice/read_slice_mut construct an
+// invalid slice (immediate UB on wasm32's 32-bit isize, no dereference
+// required). Rank and every (ptr, len) pair are now prevalidated first —
+// this exercises that path across the real ABI boundary (through the
+// compiled .wasm, not just the native cargo tests), confirming a garbage
+// caller value returns the documented status instead of trapping.
+test("raw ABI: garbage rank on a strided entry point returns status 2, no trap", () => {
+  // rank = 2**31 is a plausible corrupted/garbage value (well above
+  // MAX_RANK) that still fits a JS number cleanly; every pointer/len below
+  // is otherwise a legitimate zero-length pair, isolating the rank check.
+  const status = core.nt_add_strided(0, 2 ** 31, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+  assert.strictEqual(status, 2, "RankTooLarge must surface as status 2 across the ABI, without trapping");
+});
+
+test("raw ABI: garbage data length on a strided entry point returns status 3, no trap", () => {
+  // rank = 0 (valid) but a_data_len = 2**32 - 1: the implied byte region
+  // (len * 8) vastly exceeds isize::MAX on wasm32, so prevalidation must
+  // reject it before any slice is constructed over data_ptr = 0.
+  const status = core.nt_add_strided(0, 0, 0, 0, 0, 2 ** 32 - 1, 0, 0, 0, 0, 0, 0, 0, 0);
+  assert.strictEqual(status, 3, "SizeOverflow must surface as status 3 across the ABI, without trapping");
+});
+
 // --- chains through views, staying resident ---------------------------------
 // (Aᵛ @ B).T -> sum(0), all resident, views never materialized, compared
 // bit-identically against the same chain on the naive reference.
