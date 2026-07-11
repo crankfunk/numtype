@@ -92,8 +92,9 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
 > (Runtime-`reshape`/`flatten` konsumieren `LiteralShapeProduct`, Guard-Wortlaut wortgleich
 > Runtime ⇄ Compile, Editor-Hover-Messobligation eingelöst — W6 in-family, 0,06 ms;
 > Artefakt-Hash byte-identisch; verifiziert; docs/kern-08-*). Offen aus Item 5: nur noch
-> `keepdims`. Items 6/7 unverändert offen. Achtung fürs nächste Spec: check:diag-Pin-Serie
-> nähert sich der gewählten 250k-Linie (Details kern-08-ergebnisse.md, G2-Trend-Flag).
+> `keepdims`. Items 6/7 unverändert offen. Das Kern-08-G2-Trend-Flag ist AUFGELÖST
+> (Owner-Entscheidung → Infra 01, docs/infra-01-stress-split.md): Stress-Typtests in
+> separat gemessener tsconfig, Haupt-Pin 173 716 / Stress-Pin 94 523, `check` = Verbund.
 
 5. Elementwise-Familie (sub/mul/div), `dot`/Norm/Cosine-Similarity (der Embedding-Use-Case
    braucht genau das), Runtime-`reshape`/`flatten`, `keepdims` (Typ-Ebene existiert und ist

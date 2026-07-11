@@ -23,30 +23,23 @@ type P3 = Expect<Equal<LiteralShapeProduct<readonly [3]>, 3>>;
 // carries huge dims elsewhere.
 
 type P4 = Expect<Equal<LiteralShapeProduct<readonly [0, 5]>, 0>>;
-// 2^52 squared (~2e31, transiently way past the safe-integer cap) times a
-// trailing 0: the true product is exactly 0, not a degrade — the cap check
-// happens ONLY at exhaustion, never on an intermediate partial product.
-type P5 = Expect<Equal<LiteralShapeProduct<readonly [4503599627370496, 4503599627370496, 0]>, 0>>;
+// P5 (2^52 * 2^52 * 0, transiently way past the safe-integer cap) moved to
+// spike/tests-stress/product-stress.test-d.ts (Infra 01 — digit-arithmetic
+// stress split, docs/infra-01-stress-split.md).
 
 // --- carry-heavy multi-digit multiplication ---------------------------------
 
 type P6 = Expect<Equal<LiteralShapeProduct<readonly [999, 999]>, 998001>>;
 type P7 = Expect<Equal<LiteralShapeProduct<readonly [1024, 768]>, 786432>>;
 type P8 = Expect<Equal<LiteralShapeProduct<readonly [65536, 65536]>, 4294967296>>;
-// 7-digit operands: exercises the schoolbook accumulation over more digit
-// positions than any of the above.
-type P9 = Expect<Equal<LiteralShapeProduct<readonly [1000003, 1000003]>, 1000006000009>>;
+// P9 (7-digit operands) moved to spike/tests-stress/product-stress.test-d.ts
+// (Infra 01 — digit-arithmetic stress split, docs/infra-01-stress-split.md).
 
 // --- cap boundary, BOTH sides (Number.MAX_SAFE_INTEGER = 9007199254740991) --
 
-// Exactly AT the cap: still an exact, reportable literal (a plain
-// `Number.isSafeInteger`-style boundary — `==` the cap is safe).
-type P10 = Expect<Equal<LiteralShapeProduct<readonly [6361, 69431, 20394401]>, 9007199254740991>>;
-// One past the cap (2 * 2^52 = 2^53 = 9007199254740992): degrades to
-// `number` — round-tripping this exact digit string through
-// `` `${infer N extends number}` `` would double-round through float64 and
-// silently claim a WRONG literal.
-type P11 = Expect<Equal<LiteralShapeProduct<readonly [2, 4503599627370496]>, number>>;
+// P10 (exactly AT the cap) and P11 (one past the cap) moved to
+// spike/tests-stress/product-stress.test-d.ts (Infra 01 — digit-arithmetic
+// stress split, docs/infra-01-stress-split.md).
 
 // --- degrade rows: every one of the semantics table's "no claim" cases -----
 

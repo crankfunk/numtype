@@ -92,10 +92,10 @@ type RG15 = Expect<Equal<Guard<ReshapeCheck<[6], readonly [2 | 3, 2]>, readonly 
 
 type RG16 = Expect<Equal<Guard<ReshapeCheck<readonly [2, 3] | readonly [4], [6]>, [6]>, [6]>>;
 
-// --- over-cap product on either side -> no claim (LiteralShapeProduct's
-// own MAX_SAFE_INTEGER boundary, degrades to `number` beyond the cap). -----
-
-type RG17 = Expect<Equal<Guard<ReshapeCheck<readonly [2, 4503599627370496], [3, 2]>, [3, 2]>, [3, 2]>>;
+// RG17 (over-cap product on either side, LiteralShapeProduct's own
+// MAX_SAFE_INTEGER boundary) moved to
+// spike/tests-stress/reshape-stress.test-d.ts (Infra 01 — digit-arithmetic
+// stress split, docs/infra-01-stress-split.md).
 
 // --- exponent-form dim: valid integer, unprovable template form — must
 // pass (no claim, neither the stretch nor the core flags it). --------------
@@ -135,18 +135,10 @@ const bigArr = NDArray.zeros([1024, 1024]);
 const bigFlattened = bigArr.flatten();
 type T6 = Expect<Equal<(typeof bigFlattened)["shape"], [1048576]>>;
 
-// --- ok: flatten at the MAX_SAFE_INTEGER cap boundary, reused at the METHOD
-// level from product.test-d.ts's P10/P11 (bare LiteralShapeProduct checks)
-// — `declare const` avoids ever constructing an unrepresentable array while
-// still exercising the real method's return-type wiring end to end. --------
-
-declare const atCapArr: NDArray<readonly [6361, 69431, 20394401]>;
-const atCapFlat = atCapArr.flatten();
-type T7 = Expect<Equal<(typeof atCapFlat)["shape"], [9007199254740991]>>; // exactly AT the cap: still exact
-
-declare const overCapArr: NDArray<readonly [2, 4503599627370496]>;
-const overCapFlat = overCapArr.flatten();
-type T8 = Expect<Equal<(typeof overCapFlat)["shape"], [number]>>; // one past the cap: honest `number` degrade
+// T7/T8 (flatten at the MAX_SAFE_INTEGER cap boundary, method-level reuse of
+// product.test-d.ts's P10/P11) moved to
+// spike/tests-stress/reshape-stress.test-d.ts (Infra 01 — digit-arithmetic
+// stress split, docs/infra-01-stress-split.md).
 
 // --- ok: flatten of rank-0 -> [1], of size-0 -> [0] -------------------------
 
@@ -206,8 +198,6 @@ void to1d;
 void toPadded;
 void flattened;
 void bigFlattened;
-void atCapFlat;
-void overCapFlat;
 void rank0Flat;
 void size0Flat;
 void dynResult;

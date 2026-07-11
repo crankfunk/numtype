@@ -5,8 +5,9 @@
   "description": "NumType — n-dimensional arrays for TypeScript with compile-time shape checking (research spike)",
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && tsc --noEmit -p spike/tests-stress",
     "check:diag": "tsc --noEmit --extendedDiagnostics",
+    "check:diag:stress": "tsc --noEmit -p spike/tests-stress --extendedDiagnostics",
     "check:diag:bench": "tsc --noEmit -p spike/bench --extendedDiagnostics",
     "build:wasm": "cargo build --manifest-path crates/core/Cargo.toml --target wasm32-unknown-unknown --release && mkdir -p spike/src/wasm && cp crates/core/target/wasm32-unknown-unknown/release/numtype_core.wasm spike/src/wasm/numtype_core.wasm",
     "build:wasm:threads": "bash scripts/build-wasm-threads.sh",
