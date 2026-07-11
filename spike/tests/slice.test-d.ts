@@ -11,7 +11,7 @@
  * differential suite instead).
  */
 import { type AnyNDArray, NDArray } from "../src/ndarray.ts";
-import type { LiteralIndexBounds } from "../src/slice-literal.ts";
+import type { LiteralIndexBounds, LiteralStepInvalid } from "../src/slice-literal.ts";
 import type { SliceShape, SliceSpecsGuard } from "../src/slice.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
@@ -21,13 +21,16 @@ import type { Equal, Expect } from "./test-utils.ts";
 type T1 = Expect<Equal<SliceShape<[2, 3, 4], [1]>, [3, 4]>>;
 // null: keeps the literal dim untouched.
 type T2 = Expect<Equal<SliceShape<[2, 3, 4], [null]>, [2, 3, 4]>>;
-// Range object OUTSIDE the stretch's supported subset (non-1 step) still
-// degrades that one axis to `number` (core rule); trailing axes after it
-// are still preserved literally. (A SUPPORTED range object instead computes
-// a literal dim — see the "STRETCH" section below.)
-type T3 = Expect<Equal<SliceShape<[2, 3, 4], [{ step: 2 }]>, [number, 3, 4]>>;
-// Mixed: index + null + range (non-1 step, degrades) in one call.
-type T4 = Expect<Equal<SliceShape<[2, 3, 4], [1, null, { step: 2 }]>, [3, number]>>;
+// Range object OUTSIDE the stretch's supported subset (non-integer step)
+// still degrades that one axis to `number` (core rule); trailing axes after
+// it are still preserved literally. (A SUPPORTED range object instead
+// computes a literal dim — see the "STRETCH" section below. Since Spike 06,
+// a literal step `>= 2` — e.g. the `{ step: 2 }` this test originally used —
+// IS in the supported subset and computes; `1.5` remains genuinely
+// unsupported, preserving this test's original "still degrades" intent.)
+type T3 = Expect<Equal<SliceShape<[2, 3, 4], [{ step: 1.5 }]>, [number, 3, 4]>>;
+// Mixed: index + null + range (non-integer step, degrades) in one call.
+type T4 = Expect<Equal<SliceShape<[2, 3, 4], [1, null, { step: 1.5 }]>, [3, number]>>;
 // Zero specs: every axis is "trailing" -> full shape preserved.
 type T5 = Expect<Equal<SliceShape<[2, 3, 4], []>, [2, 3, 4]>>;
 // Fewer specs than rank: the remaining axes are taken in full, literally.
@@ -77,10 +80,17 @@ type ST9 = Expect<Equal<SliceShape<[100], [{ start: 99 }]>, [1]>>;
 
 // --- STRETCH boundary: outside the supported subset degrades to `number` --
 
-// Negative literal start: explicitly out of scope (would need signed add).
-type SB1 = Expect<Equal<SliceShape<[5], [{ start: -1 }]>, [number]>>;
-// A literal step other than 1: out of scope.
-type SB2 = Expect<Equal<SliceShape<[5], [{ start: 1; stop: 4; step: 2 }]>, [number]>>;
+// Negative literal start: since Spike 06, a plain-digit negative literal
+// (e.g. the `-1` this test originally used) IS computed (see the Spike-06
+// section below) — a non-integer negative literal like `-1.5` remains
+// genuinely out of scope (dot-form, not a plain-digit integer), preserving
+// this test's original "still degrades" intent.
+type SB1 = Expect<Equal<SliceShape<[5], [{ start: -1.5 }]>, [number]>>;
+// A literal step other than 1: since Spike 06, a plain-digit step `>= 2`
+// (e.g. the `2` this test originally used) IS computed (see the Spike-06
+// section below) — a non-integer literal step like `1.5` remains genuinely
+// out of scope, preserving this test's original "still degrades" intent.
+type SB2 = Expect<Equal<SliceShape<[5], [{ start: 1; stop: 4; step: 1.5 }]>, [number]>>;
 // A non-literal (wide) start: can't compute a literal from it.
 declare const wideNum: number;
 type SB3 = Expect<Equal<SliceShape<[2, 3, 4], [{ start: typeof wideNum }]>, [number, 3, 4]>>;
@@ -131,8 +141,11 @@ type T22 = Expect<Equal<(typeof s3)["shape"], [1, 3, 4]>>;
 const s4 = arr.slice();
 type T23 = Expect<Equal<(typeof s4)["shape"], [2, 3, 4]>>;
 
-// Non-1 step: outside the stretch's supported subset -> degrades to `number`.
-const s5 = arr.slice(1, null, { step: 2 });
+// Wide (non-literal) step: outside the computable subset -> degrades to
+// `number` (unaffected by Spike 06 — only LITERAL steps compute; a literal
+// `2` here would now compute `[3, 2]` instead, see the Spike-06 section).
+declare const wideStep: number;
+const s5 = arr.slice(1, null, { step: wideStep });
 type T24 = Expect<Equal<(typeof s5)["shape"], [3, number]>>;
 
 // Composition: slice then transpose, and transpose then slice, both thread
@@ -267,3 +280,159 @@ type T31 = Expect<Equal<(typeof nonInt)["shape"], [3, 4]>>;
 void okBoundary;
 void wideCall;
 void nonInt;
+
+// =============================================================================
+// Spike 06 (docs/spike-06-range-literals-spec.md): negative literal
+// start/stop and literal steps >= 1 for range slices — computed dims
+// (extending `LiteralRangeDim`) plus a compile-time guard for provably
+// invalid literal steps (extending `ValidateSpecsAcc`, the Spike-03 idiom).
+// =============================================================================
+
+// --- negative start/stop: computed, not degraded (d = 5) -------------------
+
+// start = -1: |v| <= d -> d - |v| = 4; stop omitted -> d = 5 -> dim = 5-4 = 1.
+type RN1 = Expect<Equal<SliceShape<[5], [{ start: -1 }]>, [1]>>;
+// start = -d exactly: normalizes to index 0 -> the full axis survives.
+type RN2 = Expect<Equal<SliceShape<[5], [{ start: -5 }]>, [5]>>;
+// start = -(d+1): |v| > d -> CLAMPS to 0 (ranges never throw, unlike
+// indices — Spike 03's `-6` on `d=5` is "out" for an INDEX, but here the
+// same value is a valid, clamped range start).
+type RN3 = Expect<Equal<SliceShape<[5], [{ start: -6 }]>, [5]>>;
+// negative start WITH an explicit (non-negative) stop.
+type RN4 = Expect<Equal<SliceShape<[5], [{ start: -3; stop: 5 }]>, [3]>>;
+// both start AND stop negative.
+type RN5 = Expect<Equal<SliceShape<[5], [{ start: -3; stop: -1 }]>, [2]>>;
+// mixed: positive start, negative stop.
+type RN6 = Expect<Equal<SliceShape<[5], [{ start: 1; stop: -1 }]>, [3]>>;
+// negative stop alone (start omitted -> 0).
+type RN7 = Expect<Equal<SliceShape<[5], [{ stop: -1 }]>, [4]>>;
+// negative stop past the front: clamps to 0 -> an empty (but literal) axis.
+type RN8 = Expect<Equal<SliceShape<[5], [{ stop: -6 }]>, [0]>>;
+// d = 0: a negative start still resolves (clamps to 0), no valid range
+// exists either way -> dim 0, a LITERAL (not `number`).
+type RN9 = Expect<Equal<SliceShape<[0], [{ start: -1 }]>, [0]>>;
+
+// --- literal step >= 1: computed, not degraded ------------------------------
+
+// Non-exact division: diff = 7 (d=8, start=1), step=3 -> ceil(7/3) = 3.
+type RS1 = Expect<Equal<SliceShape<[8], [{ start: 1; step: 3 }]>, [3]>>;
+// step >= diff: ceil(3/5) = 1 (a single, partial "chunk").
+type RS2 = Expect<Equal<SliceShape<[10], [{ start: 0; stop: 3; step: 5 }]>, [1]>>;
+// exact division: ceil(6/3) = 2, no +1 needed.
+type RS3 = Expect<Equal<SliceShape<[10], [{ start: 0; stop: 6; step: 3 }]>, [2]>>;
+// step on a d=0 axis: start' = stop' = 0 before step is even consulted ->
+// dim 0 (the `Compare<StartS,StopS> extends "lt"` branch never taken).
+type RS4 = Expect<Equal<SliceShape<[0], [{ step: 3 }]>, [0]>>;
+// explicit step 1 computes IDENTICALLY to step omitted (both hit the exact
+// same "fast" path — same instantiation chain as the untouched ST5 above).
+type RS5a = Expect<Equal<SliceShape<[10], [{ start: 2; stop: 7 }]>, [5]>>;
+type RS5b = Expect<Equal<SliceShape<[10], [{ start: 2; stop: 7; step: 1 }]>, [5]>>;
+type RS5 = Expect<Equal<RS5a, RS5b>>;
+
+// --- multi-digit dims on the computed (negative-start / stepped) paths -----
+
+// d = 1024 (4 digits), stepped: diff = 1024-100 = 924, step 7 -> exact 132.
+type RM1 = Expect<Equal<SliceShape<[1024], [{ start: 100; step: 7 }]>, [132]>>;
+// d = 65536 (5 digits), stepped, non-exact: ceil(65536/1000) = 66.
+type RM2 = Expect<Equal<SliceShape<[65536], [{ stop: 65536; step: 1000 }]>, [66]>>;
+// d = 1000000 (7 digits), stepped, exact: ceil(999999/3) = 333333.
+type RM3 = Expect<Equal<SliceShape<[1000000], [{ start: 1; step: 3 }]>, [333333]>>;
+// d = 1000000 (7 digits), negative start: |v| <= d -> start' = 1000000 -
+// 999999 = 1; stop defaults to d -> dim = 1000000 - 1 = 999999.
+type RM4 = Expect<Equal<SliceShape<[1000000], [{ start: -999999 }]>, [999999]>>;
+
+// --- degrades: still honestly `number`, never a wrong literal ---------------
+
+// A wide (non-literal) `number` step: no computed claim possible.
+type SD1 = Expect<Equal<SliceShape<[5], [{ step: number }]>, [number]>>;
+// A UNION start literal: the Spike-06 "union boundary filter" behavior
+// SHARPENING — the Kern-05-era code let a union distribute through the
+// unsigned digit pipeline unaudited (this exact case would have computed
+// `[4 | 3]`, a computed UNION of literals: `Min`/`Compare`/`MultiSub` all
+// naturally distribute over a union type argument, so `start: 1 | 2` against
+// `d = 5` would walk through as `MultiSub("5", "1" | "2") = "4" | "3"`).
+// Spike 06 instead boundary-filters `IsUnion<StartT>` FIRST (mirroring the
+// Spike-04 rule for shape products), so this now degrades UNIFORMLY to
+// `Dim` — the safe direction (an honest `number`, never a silently-computed
+// union of literals that isn't audited end-to-end).
+type SD2 = Expect<Equal<SliceShape<[5], [{ start: 1 | 2 }]>, [number]>>;
+// Exponent-form step: `1e21` IS a valid runtime integer step (its own
+// `${T}` form renders as `"1e+21"`, same switchover as JS's own
+// `Number.prototype.toString` for magnitudes >= 1e21) — degrades the
+// COMPUTED dim (no claim) but must NOT be flagged by the guard either (see
+// the guard section below: this compiles with zero errors).
+type SD3 = Expect<Equal<SliceShape<[5], [{ step: 1e21 }]>, [number]>>;
+const sExp = arr.slice({ step: 1e21 }); // must NOT be a compile error
+type SD3Method = Expect<Equal<(typeof sExp)["shape"], [number, 3, 4]>>;
+void sExp;
+
+// --- LiteralStepInvalid: the guard's own classifier (pure type function) ---
+
+// The three PROVABLY-invalid forms (mirrors the runtime's own check
+// `!Number.isInteger(step) || step < 1` exactly on this provable subset).
+type LSI1 = Expect<Equal<LiteralStepInvalid<{ step: 0 }>, "invalid">>;
+type LSI2 = Expect<Equal<LiteralStepInvalid<{ step: -2 }>, "invalid">>;
+type LSI3 = Expect<Equal<LiteralStepInvalid<{ step: 1.5 }>, "invalid">>;
+// Dot-form is sign-agnostic (review fix): -1.5 is a proven non-integer too —
+// the runtime throws for it just as surely as for 1.5.
+type LSI3b = Expect<Equal<LiteralStepInvalid<{ step: -1.5 }>, "invalid">>;
+// Valid / no-claim forms: never "invalid" (never wrong).
+type LSI4 = Expect<Equal<LiteralStepInvalid<{ step: 1 }>, "unknown">>;
+type LSI5 = Expect<Equal<LiteralStepInvalid<{}>, "unknown">>; // omitted -> defaults to 1
+type LSI6 = Expect<Equal<LiteralStepInvalid<{ step: number }>, "unknown">>;
+type LSI7 = Expect<Equal<LiteralStepInvalid<{ step: 1e21 }>, "unknown">>; // valid integer, exponent-form
+type LSI8 = Expect<Equal<LiteralStepInvalid<{ step: 0 | -2 }>, "unknown">>; // union: boundary-filtered even though BOTH members are invalid
+
+// --- SliceSpecsGuard: step errors retyped at the RIGHT argument -------------
+
+type StepZeroMsg = `slice: step 0 for axis 0 is invalid (must be an integer >= 1; negative steps are out of scope) (shape [5])`;
+type G7 = Expect<Equal<SliceSpecsGuard<[5], [{ step: 0 }]>, [{ readonly __shapeError: StepZeroMsg }]>>;
+type StepNegMsg = `slice: step -2 for axis 0 is invalid (must be an integer >= 1; negative steps are out of scope) (shape [5])`;
+type G8 = Expect<Equal<SliceSpecsGuard<[5], [{ step: -2 }]>, [{ readonly __shapeError: StepNegMsg }]>>;
+type StepDotMsg = `slice: step 1.5 for axis 0 is invalid (must be an integer >= 1; negative steps are out of scope) (shape [5])`;
+type G9 = Expect<Equal<SliceSpecsGuard<[5], [{ step: 1.5 }]>, [{ readonly __shapeError: StepDotMsg }]>>;
+// A valid literal step passes through completely unchanged (own type kept).
+type G10 = Expect<Equal<SliceSpecsGuard<[5], [{ step: 3 }]>, [{ step: 3 }]>>;
+// `null` is never step-guard-relevant (skipped before `LiteralStepInvalid`
+// is even invoked).
+type G11 = Expect<Equal<SliceSpecsGuard<[5, 5], [null, { step: 0 }]>, [null, { readonly __shapeError: `slice: step 0 for axis 1 is invalid (must be an integer >= 1; negative steps are out of scope) (shape [5,5])` }]>>;
+// Later position: the error lands on axis 1, not axis 0 (a valid null at
+// axis 0 stays untouched).
+type G12 = Expect<
+  Equal<
+    SliceSpecsGuard<[5, 5], [null, { step: -1 }]>,
+    [null, { readonly __shapeError: `slice: step -1 for axis 1 is invalid (must be an integer >= 1; negative steps are out of scope) (shape [5,5])` }]
+  >
+>;
+// Coexistence: a Spike-03 OOB-index error at axis 0 AND a Spike-06 invalid-
+// step error at axis 1, in ONE call — each retyped with its OWN message.
+// TS7 shows only ONE diagnostic per call per compile pass when MULTIPLE
+// arguments are invalid (CLAUDE.md's TS7 caveat), so this is pinned via the
+// GUARD TYPE (`Equal`), never by counting editor squiggles.
+type G13 = Expect<
+  Equal<
+    SliceSpecsGuard<[2, 5], [5, { step: 0 }]>,
+    [
+      { readonly __shapeError: `slice: index 5 is out of bounds for axis 0 with dim 2 (shape [2,5])` },
+      { readonly __shapeError: `slice: step 0 for axis 1 is invalid (must be an integer >= 1; negative steps are out of scope) (shape [2,5])` },
+    ]
+  >
+>;
+
+// --- NDArray.slice(): method-level error-at-argument ------------------------
+
+// @ts-expect-error - step 0 for axis 0 is invalid
+arr.slice({ step: 0 });
+// @ts-expect-error - step -2 for axis 0 is invalid
+arr.slice({ step: -2 });
+// @ts-expect-error - step 1.5 for axis 0 is invalid (non-integer)
+arr.slice({ step: 1.5 });
+// The error lands at the SECOND argument; the first (valid) is untouched.
+// @ts-expect-error - step 0 for axis 1 is invalid
+arr.slice(null, { step: 0 });
+// A statically-accepted literal step compiles and computes a literal dim —
+// the hover shows a clean `NDArray<[2, 1, 4]>`, not `NDArray<[2, number, 4]>`
+// (axis1: d=3, start=1, step=2 -> diff=2, ceil(2/2)=1).
+const s8 = arr.slice(null, { start: 1, step: 2 });
+type T32 = Expect<Equal<(typeof s8)["shape"], [2, 1, 4]>>;
+void s8;

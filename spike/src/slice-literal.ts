@@ -1,43 +1,61 @@
 /**
- * Kern 05 STRETCH GOAL: statically computed literal dims for range slices,
- * via from-scratch DIGIT-STRING arithmetic — NOT tuple-length arithmetic
- * over dim values (that would be O(n) tuple construction per dim, blowing
- * the ~1000 tail-recursion ceiling for any dim past a few hundred; see
- * docs/kern-05-slicing-spec.md and CLAUDE.md's TS-limits section). Cost axis
- * here is DIGIT COUNT: subtracting two 7-digit numbers costs ~7 recursion
- * steps, not ~1,000,000 — the same "rank/count is fine, value is not"
- * distinction the rest of this codebase already draws, just pushed one
- * level deeper (digits of a value, rather than the value itself).
+ * Kern 05 STRETCH GOAL (extended by Spike 06 — negative literal start/stop
+ * and literal steps >= 1 — docs/spike-06-range-literals-spec.md): statically
+ * computed literal dims for range slices, via from-scratch DIGIT-STRING
+ * arithmetic — NOT tuple-length arithmetic over dim values (that would be
+ * O(n) tuple construction per dim, blowing the ~1000 tail-recursion ceiling
+ * for any dim past a few hundred; see docs/kern-05-slicing-spec.md and
+ * CLAUDE.md's TS-limits section). Cost axis here is DIGIT COUNT: subtracting
+ * two 7-digit numbers costs ~7 recursion steps, not ~1,000,000 — the same
+ * "rank/count is fine, value is not" distinction the rest of this codebase
+ * already draws, just pushed one level deeper (digits of a value, rather
+ * than the value itself).
  *
  * Isolated in its OWN file, deliberately: this is the gated, "allowed to
  * fail and be dropped" part of the phase (spec: go/no-go on
  * Instantiations <= 3x baseline, wall time <= 2x baseline, clean hovers,
- * errors still at the argument). `slice.ts` imports two symbols from here:
- * `LiteralRangeDim` (Kern 05 stretch — dropping it means reverting that one
- * call site back to the core's honest `Dim` degrade) and
- * `LiteralIndexBounds` (Spike 03 — dropping it means reverting
- * `ValidateSpecsAcc`'s bounds branch to an unconditional pass-through). No
- * other file depends on anything below.
+ * errors still at the argument). `slice.ts` imports three symbols from here:
+ * `LiteralRangeDim` (Kern 05 stretch, extended by Spike 06 — dropping it
+ * means reverting that one call site back to the core's honest `Dim`
+ * degrade), `LiteralIndexBounds` (Spike 03 — dropping it means reverting
+ * `ValidateSpecsAcc`'s bounds branch to an unconditional pass-through), and
+ * `LiteralStepInvalid` (Spike 06 — dropping it means reverting
+ * `ValidateSpecsAcc`'s step-guard branch the same way). No other file
+ * depends on anything below.
  *
  * SUPPORTED LITERAL SUBSET (precise, by design — see file body for why):
- *  - `step` must be omitted or the literal `1`. Any other step (including a
- *    literal `!= 1`, or a wide `number`) degrades to `Dim`.
- *  - `start`/`stop`, if present, must be NON-NEGATIVE literal integers.
- *    Negative literals are NOT supported by the stretch (they would need a
- *    signed add — `start + d` — on top of the unsigned subtract/compare
- *    already implemented here; scoped out to keep the arithmetic surface
- *    smaller and the correctness bar easier to clear). A negative literal
- *    start/stop still compiles — it just degrades to `Dim`, identical to
- *    the core rule; this is an honest, gradual narrowing, not a hole.
+ *  - `start`/`stop`, if present, must be literal integers — non-negative
+ *    (unchanged from Kern 05, `min(v, d)`) OR negative (Spike 06:
+ *    `v + d`, clamped to `[0, d]`, exactly mirroring the runtime's own
+ *    normalization). Wide (non-literal) `number`, non-integer (`1.5`), and
+ *    exponent-form (`1e21`) literals are NOT supported and degrade to
+ *    `Dim`, honestly and gradually — identical to the core rule.
+ *  - `step` must be omitted, the literal `1` (existing fast path, kept
+ *    byte-identical), OR a literal plain-digit integer `>= 2` (Spike 06:
+ *    `ceil((stop - start) / step)` via schoolbook long division). A step
+ *    that is PROVABLY invalid at runtime — plain-digit `0`, negative
+ *    (`-${digits}`), or dot-form non-integer (`1.5`) — is instead REJECTED
+ *    at compile time (`LiteralStepInvalid`, wired into `slice.ts`'s
+ *    `ValidateSpecsAcc`, the Spike-03 idiom) rather than silently degraded;
+ *    a wide/union/exponent-form step still degrades the computed dim to
+ *    `Dim` with NO guard claim (never-wrong-only-incomplete — flagging
+ *    `1e21` as invalid would lie, since it IS a valid runtime step).
  *  - The axis's own dim must itself be a literal (an already-dynamic `Dim`
  *    can never yield a computed literal here either way).
- *  - Any wide (non-literal) `start`/`stop` degrades to `Dim`.
+ *  - A union literal (or `never`) for `start`/`stop`/`step` degrades the
+ *    WHOLE computation to `Dim`, uniformly — the Spike-04 "union-free by
+ *    construction" boundary-filter rule, reused here (a deliberate Spike 06
+ *    behavior sharpening: the Kern-05-era code let such unions distribute
+ *    into the digit pipeline unaudited; see
+ *    docs/spike-06-range-literals-spec.md's "Union rule alignment").
  *
- * ALGORITHM (mirrors `normalizeAxisSpec`'s step=1 case in runtime.ts
- * exactly, just at the type level): `start' = min(start, d)`,
- * `stop' = min(stop, d)`, `dim = start' < stop' ? stop' - start' : 0`.
- * (No `+ d` for negative normalization — see the negative-literal scope note
- * above; only non-negative literals reach this arithmetic at all.)
+ * ALGORITHM (mirrors `normalizeAxisSpec` in runtime.ts exactly, at the type
+ * level): `start' = clamp(start, d)` — non-negative: `min(start, d)`;
+ * negative: `d - |start|`, or `0` when `|start| > d` (Spike 06's scoping
+ * insight: this needs only a COMPARISON plus the existing UNSIGNED subtract,
+ * never a signed add — correcting this file's original Kern-05 note below).
+ * `stop'` resolves the same way. `dim = start' < stop' ? (step == 1 ?
+ * stop' - start' : ceil((stop' - start') / step)) : 0`.
  */
 
 import { type Dim, type IsDynamicDim, type IsDynamicRank, type Shape } from "./dim.ts";
@@ -243,19 +261,101 @@ type NonNegDigits<T> = [T] extends [number]
       : "unsupported" // negative / non-integer literal — out of the supported subset
   : "unsupported"; // not a number at all (shouldn't happen once callers pre-check, defensive)
 
-type ResolveStart<StartT> = [StartT] extends [undefined] ? "0" : NonNegDigits<StartT>;
-type ResolveStop<StopT, D extends Dim> = [StopT] extends [undefined] ? `${D}` : NonNegDigits<StopT>;
+/**
+ * Resolve one literal `start`/`stop` boundary against dim digit string `DS`,
+ * or the sentinel `"unsupported"` — shared by `ResolveStart`/`ResolveStop`
+ * (see their thin wrappers below). Boundary-filters `[T] extends [never]`
+ * and `IsUnion<T>` FIRST, before any digit-string form is attempted (Spike
+ * 04's rule, reused: a union/never input degrades the WHOLE computation
+ * uniformly, rather than letting it distribute through the arithmetic
+ * below unaudited — Spike 06's deliberate behavior sharpening of the
+ * Kern-05-era code, pinned by a test). `IsDynamicDim<T>` is checked before
+ * any `` `${T}` `` template destructuring (same defensive ordering
+ * `NonNegDigits` already uses): a wide, non-literal `number`'s template
+ * form can't be walked character-by-character the way `IsPlainDigits`/the
+ * `` `-${infer Abs}` `` pattern need to.
+ *
+ * Spike 06's negative branch (`` `${T}` extends `-${infer Abs}` ``): the
+ * runtime normalizes a negative `start`/`stop` via `v += d`, then clamps to
+ * `[0, d]`. For a negative literal `v = -|v|`, `d + v = d - |v|` — needing
+ * only a COMPARISON (`|v| > d` clamps to `0`, i.e. `v` was past the front
+ * even after normalizing) plus the existing UNSIGNED `MultiSub` (`d - |v|`
+ * when `|v| <= d`) — never a signed add. The non-negative branch reuses
+ * `NonNegDigits` unchanged, adding only the `Min` clamp against `DS` (the
+ * existing Kern-05 behavior, now factored out to this shared helper).
+ */
+type ResolveBoundaryDigits<T, DS extends string, WhenUndefined extends string> = [T] extends [never]
+  ? "unsupported"
+  : [T] extends [undefined]
+    ? WhenUndefined
+    : IsUnion<T> extends true
+      ? "unsupported"
+      : [T] extends [number]
+        ? IsDynamicDim<T> extends true
+          ? "unsupported"
+          : `${T}` extends `-${infer Abs}`
+            ? IsPlainDigits<Abs> extends true
+              ? Compare<Abs, DS> extends "gt"
+                ? "0" // |v| > d: past even v = -d, clamps to the front
+                : MultiSub<DS, Abs> // d - |v| (== v + d, the runtime's own normalization)
+              : "unsupported" // "-1.5" (dot-form), "-1e21" (exponent switchover — NOTE `${-1e5}` renders as plain "-100000" and IS computed; only magnitudes >= 1e21 render with an `e`)
+            : NonNegDigits<T> extends infer TD extends string
+              ? TD extends "unsupported"
+                ? "unsupported"
+                : Min<TD, DS> // existing Kern-05 non-negative clamp, unchanged
+              : "unsupported"
+        : "unsupported"; // not a number at all (defensive; callers pre-filter)
 
-/** `start' = min(start, d)`, `stop' = min(stop, d)`,
- * `dim = start' < stop' ? stop' - start' : 0` — the runtime's own
- * `normalizeAxisSpec` step=1 formula, at the type level. */
-type ComputeRangeDigits<StartS extends string, StopS extends string, DS extends string> = Min<StartS, DS> extends infer StartClamped extends string
-  ? Min<StopS, DS> extends infer StopClamped extends string
-    ? Compare<StartClamped, StopClamped> extends "lt"
-      ? MultiSub<StopClamped, StartClamped>
-      : "0"
+type ResolveStart<StartT, DS extends string> = ResolveBoundaryDigits<StartT, DS, "0">;
+type ResolveStop<StopT, DS extends string> = ResolveBoundaryDigits<StopT, DS, DS>;
+
+/**
+ * Classify a literal `step` for the DIM-COMPUTATION path (the separate,
+ * exported `LiteralStepInvalid<Spec>` below classifies it for the COMPILE-
+ * ERROR guard instead — two different questions about the same value:
+ * "can I compute a number from this" vs. "is this guaranteed to throw").
+ * `"fast"` for omitted/literal `1` (the existing, byte-identical Kern-05
+ * fast path — no division needed); a plain-digit string `>= "2"` for the
+ * `DivCeil` path; `"unsupported"` for everything else — a literal `0` or
+ * negative step (provably invalid: the GUARD flags these, computation just
+ * honestly has nothing to compute), a non-integer/exponent-form/wide/union
+ * step (no claim either way), or `never`. Same boundary-filter ordering as
+ * `ResolveBoundaryDigits` (never, then the fast-path shortcut, then
+ * `IsUnion`, then digit-string forms).
+ */
+type ResolveStepDigits<StepT> = [StepT] extends [never]
+  ? "unsupported"
+  : [StepT] extends [undefined | 1]
+    ? "fast"
+    : IsUnion<StepT> extends true
+      ? "unsupported"
+      : [StepT] extends [number]
+        ? IsDynamicDim<StepT> extends true
+          ? "unsupported"
+          : `${StepT}` extends "0" | "1"
+            ? "unsupported" // "1" is unreachable here (already fast-pathed above); "0": the guard's job
+            : IsPlainDigits<`${StepT}`> extends true
+              ? `${StepT}`
+              : "unsupported" // negative / non-integer / exponent-form
+        : "unsupported";
+
+/** `start' < stop' ? (step == "fast" ? stop' - start' : ceil((stop' -
+ * start') / step)) : 0` — the runtime's own `normalizeAxisSpec` formula
+ * (both its step=1 fast path AND its general ceil-division formula), at the
+ * type level. `StartS`/`StopS` are already fully resolved (clamped,
+ * negative-normalized) by `ResolveStart`/`ResolveStop`; `StepR` is
+ * `ResolveStepDigits`'s classification — `"fast"` or a plain-digit string
+ * `>= "2"`, NEVER `"unsupported"` (the caller filters that out first). The
+ * `"fast"` branch is exactly the original Kern-05 instantiation chain
+ * (`Compare` then `MultiSub`, nothing else threaded through) — byte-
+ * identical results, pinned by the untouched ST1-ST9 tests. */
+type ComputeRangeDigits<StartS extends string, StopS extends string, StepR extends string> = Compare<StartS, StopS> extends "lt"
+  ? MultiSub<StopS, StartS> extends infer Diff extends string
+    ? StepR extends "fast"
+      ? Diff
+      : DivCeil<Diff, StepR>
     : never
-  : never;
+  : "0";
 
 // Extraction via a REQUIRED-property pattern (`{ readonly start: infer T }`,
 // not `start?: infer T`): destructuring an OPTIONAL property against a
@@ -267,15 +367,21 @@ type ComputeRangeDigits<StartS extends string, StopS extends string, DS extends 
 // deliberately roundabout way to get `undefined` for "genuinely absent".
 type ExtractStart<Spec> = Spec extends { readonly start: infer StartT } ? StartT : undefined;
 type ExtractStop<Spec> = Spec extends { readonly stop: infer StopT } ? StopT : undefined;
-type ExtractStep<Spec> = Spec extends { readonly step: infer StepT } ? StepT : undefined;
+/** Exported (Spike 06): `slice.ts`'s step-invalid guard message needs the
+ * step's own literal VALUE to interpolate (`` `slice: step ${step} ...` ``,
+ * mirroring the runtime's message verbatim) — the same extraction this
+ * file already needed internally for `ResolveStepDigits`. */
+export type ExtractStep<Spec> = Spec extends { readonly step: infer StepT } ? StepT : undefined;
 
 /**
  * The stretch: a literal dim for a range spec, when `start`/`stop` are
- * literal non-negative integers (or omitted) and `step` is omitted or the
- * literal `1`. Anything outside that subset (see file header) honestly
- * degrades to `Dim` (`number`) — the exact same fallback the core rule
- * already uses, so dropping this call site entirely is always a safe,
- * behavior-preserving revert.
+ * literal integers (or omitted; non-negative OR — since Spike 06 —
+ * negative) and `step` is omitted, the literal `1`, or — since Spike 06 —
+ * a literal plain-digit integer `>= 2`. Anything outside that subset (see
+ * file header) honestly degrades to `Dim` (`number`) — the exact same
+ * fallback the core rule already uses, so dropping either the Kern-05
+ * stretch or the Spike-06 extension is always a safe, behavior-preserving
+ * revert.
  *
  * `Spec` is intentionally UNCONSTRAINED (not `extends RangeSpecLike`): the
  * call site in `slice.ts` passes its already-inferred `Head` — narrowed
@@ -292,20 +398,22 @@ type ExtractStep<Spec> = Spec extends { readonly step: infer StepT } ? StepT : u
  */
 export type LiteralRangeDim<Spec, D extends Dim> = IsDynamicDim<D> extends true
   ? Dim
-  : [ExtractStep<Spec>] extends [undefined | 1]
-    ? ResolveStart<ExtractStart<Spec>> extends infer StartS extends string
-      ? StartS extends "unsupported"
-        ? Dim
-        : ResolveStop<ExtractStop<Spec>, D> extends infer StopS extends string
-          ? StopS extends "unsupported"
-            ? Dim
-            : ComputeRangeDigits<StartS, StopS, `${D}`> extends infer DimDigits extends string
-              ? DimDigits extends `${infer N extends number}`
-                ? N
+  : ResolveStepDigits<ExtractStep<Spec>> extends infer StepR extends string
+    ? StepR extends "unsupported"
+      ? Dim
+      : ResolveStart<ExtractStart<Spec>, `${D}`> extends infer StartS extends string
+        ? StartS extends "unsupported"
+          ? Dim
+          : ResolveStop<ExtractStop<Spec>, `${D}`> extends infer StopS extends string
+            ? StopS extends "unsupported"
+              ? Dim
+              : ComputeRangeDigits<StartS, StopS, StepR> extends infer DimDigits extends string
+                ? DimDigits extends `${infer N extends number}`
+                  ? N
+                  : Dim
                 : Dim
-              : Dim
-          : Dim
-      : Dim
+            : Dim
+        : Dim
     : Dim;
 
 // ---------------------------------------------------------------------------
@@ -578,3 +686,168 @@ type ProductAcc<S extends Shape, Acc extends string = "1"> = S extends readonly 
  * conditional-type distribution, not special-cased code.
  */
 export type LiteralShapeProduct<S extends Shape> = IsDynamicRank<S> extends true ? number : ProductAcc<S>;
+
+// ---------------------------------------------------------------------------
+// Spike 06 (docs/spike-06-range-literals-spec.md): negative literal
+// start/stop (wired into `LiteralRangeDim`'s `ResolveBoundaryDigits` above —
+// no new arithmetic needed there beyond `Compare` + the existing `MultiSub`)
+// and literal steps >= 1 for range slices. Appended below all pre-existing
+// content, needing only two genuinely NEW arithmetic primitives — `MultiAdd`
+// (the `+1` in "ceil = floor + 1 iff remainder != 0") and `DivCeil`
+// (schoolbook long division, for `ceil((stop-start)/step)`) — plus one new
+// exported classifier, `LiteralStepInvalid`, for the compile-time guard
+// `slice.ts` wires up (the Spike-03 idiom: a provably-invalid literal
+// retypes its own argument to a branded error). No duplication of anything
+// above: reuses `Compare`, `MultiSub`, `StripLeadingZeros`, `ReverseStr`,
+// `IsPlainDigits`, `Digit`, and Spike-04's `AddRev`/`MulDigits`/`IsUnion`.
+// ---------------------------------------------------------------------------
+
+/** `A + B` for non-negative integer digit strings — the addition mirror of
+ * `MultiSub`: both digit-by-digit from the LEAST significant end via
+ * `ReverseStr`/`AddRev` (Spike 04's, no precondition on relative magnitude,
+ * unlike `MultiSub`'s `A >= B`), converting back to normal
+ * (most-significant-first) form at the end. `StripLeadingZeros` is kept for
+ * consistency with every other public arithmetic export here, even though
+ * this file's own call site (`DivCeil`'s `+1`) never actually produces a
+ * leading zero (its LHS is already a stripped quotient digit string). */
+type MultiAdd<A extends string, B extends string> = StripLeadingZeros<ReverseStr<AddRev<ReverseStr<A>, ReverseStr<B>, 0>>>;
+
+/** Does `MulDigits(B, Q) <= Rem`? One bounded trial (a single `Compare`
+ * plus one digit-by-single-digit `MulDigits` call) for `FindQuotientDigit`'s
+ * descending scan. */
+type TryQuotientDigit<B extends string, Rem extends string, Q extends Digit> = Compare<MulDigits<B, Q>, Rem> extends "gt" ? false : true;
+
+/** The largest quotient digit `q` in `0..9` with `MulDigits(B, q) <= Rem` —
+ * schoolbook long division's per-position step. A plain descending chain of
+ * <= 10 bounded trials (`TryQuotientDigit`), not a search structure: `q = 0`
+ * always terminates the chain (`MulDigits(B, "0") = "0" <= Rem` for any
+ * non-negative `Rem`), so this never falls through to `never`. */
+type FindQuotientDigit<B extends string, Rem extends string> = TryQuotientDigit<B, Rem, "9"> extends true
+  ? "9"
+  : TryQuotientDigit<B, Rem, "8"> extends true
+    ? "8"
+    : TryQuotientDigit<B, Rem, "7"> extends true
+      ? "7"
+      : TryQuotientDigit<B, Rem, "6"> extends true
+        ? "6"
+        : TryQuotientDigit<B, Rem, "5"> extends true
+          ? "5"
+          : TryQuotientDigit<B, Rem, "4"> extends true
+            ? "4"
+            : TryQuotientDigit<B, Rem, "3"> extends true
+              ? "3"
+              : TryQuotientDigit<B, Rem, "2"> extends true
+                ? "2"
+                : TryQuotientDigit<B, Rem, "1"> extends true
+                  ? "1"
+                  : "0";
+
+/** Schoolbook long division's accumulator: walks `A`'s digits MOST-
+ * significant-first (`ARest`, peeled directly off the front — `A` is
+ * already in normal form, so unlike `SubRev`/`AddRev`/`MulAccRev` this walk
+ * needs NO `ReverseStr` at all), threading the running remainder `Rem` and
+ * the quotient-so-far `QAcc` (built by APPENDING each new quotient digit at
+ * the end, which — since digits are produced in the same most-significant-
+ * first order they're consumed — naturally yields the quotient in normal
+ * form with no reversal step, unlike every accumulator elsewhere in this
+ * file). At each position: bring down the next digit of `A` into the
+ * remainder (`` `${Rem}${Head}` ``, leading-zero-stripped — `"0"` bringing
+ * down into remainder `"0"` must collapse back to `"0"`, not `"00"`, or the
+ * next `Compare` sees a spuriously "longer" remainder), find that
+ * position's quotient digit, subtract its contribution, and recurse. Once
+ * `A` is exhausted, returns `[quotient digits so far, final remainder]` —
+ * `DivCeil` below strips the quotient's own leading zeros (an all-zero
+ * numerator like `A = "0"` walks out as `"0"` already; a numerator smaller
+ * than `B` walks out with leading zeros in `QAcc`, e.g. `"03"` for `3 / 7`). */
+type DivCeilAcc<ARest extends string, B extends string, Rem extends string, QAcc extends string> = ARest extends `${infer Head extends Digit}${infer Tail}`
+  ? StripLeadingZeros<`${Rem}${Head}`> extends infer NewRem extends string
+    ? FindQuotientDigit<B, NewRem> extends infer Q extends Digit
+      ? DivCeilAcc<Tail, B, MultiSub<NewRem, MulDigits<B, Q>>, `${QAcc}${Q}`>
+      : never
+    : never
+  : readonly [QAcc, Rem];
+
+/** `ceil(A / B)` for non-negative integer digit strings, via schoolbook long
+ * division (`DivCeilAcc`) then `+1` iff the floor-division remainder is
+ * nonzero. PRECONDITION `B >= "1"` (never checked here — every call site in
+ * `ComputeRangeDigits` above passes a `StepR` already classified as a
+ * plain-digit integer `>= "2"` by `ResolveStepDigits`, so this bound holds
+ * with margin; mirrors the "callers establish preconditions" idiom `MultiSub`
+ * already uses for `A >= B`). Cost: O(digits(A) x digits(B)) — <= 10 bounded
+ * trials (`FindQuotientDigit`) per digit of `A`, each trial one
+ * `MulDigits(B, q)` call costing O(digits(B)). */
+type DivCeil<A extends string, B extends string> = DivCeilAcc<A, B, "", ""> extends readonly [infer Q extends string, infer R extends string]
+  ? StripLeadingZeros<Q> extends infer QS extends string
+    ? R extends "0"
+      ? QS
+      : MultiAdd<QS, "1">
+    : never
+  : never;
+
+/** Does `S`'s literal template form contain the character `C` anywhere?
+ * (`` `${string}${C}${string}` `` matches iff SOME split of `S` has `C` at
+ * the split point — the standard template-literal "substring contains"
+ * idiom, distinct from `IsPlainDigits`'s character-by-character walk.) */
+type ContainsChar<S extends string, C extends string> = S extends `${string}${C}${string}` ? true : false;
+
+/** Does `S` — a literal step's `` `${T}` `` form — PROVE a non-integer via
+ * the "dot-form" pattern: contains `.` and does NOT contain `e`. An
+ * integer literal's template form never renders with a decimal point, so
+ * `.` alone would already be a safe signal — the `no e` half specifically
+ * protects `1e21`-style forms: for `T` large enough that `${T}` renders in
+ * JS's own scientific notation (`>= 1e21`, mirroring `Number.prototype
+ * .toString`'s own switchover), the rendered form contains `e` but never a
+ * literal `.` for an actual integer value, so this predicate already
+ * answers `false` for those and never needs to inspect the exponent's own
+ * digits — but the explicit `no e` guard future-proofs against any
+ * mixed dot+exponent form (`1.5e10`) that a re-derivation might introduce,
+ * keeping the "never wrong" guarantee independent of exactly how TS
+ * canonicalizes a given numeric literal's string form. */
+type IsDotFormStep<S extends string> = ContainsChar<S, "."> extends true ? (ContainsChar<S, "e"> extends true ? false : true) : false;
+
+/**
+ * Classify a literal `step` for the COMPILE-TIME GUARD (`slice.ts`'s
+ * `ValidateSpecsAcc`, the Spike-03 idiom): `"invalid"` ONLY for a step the
+ * runtime is GUARANTEED to throw on via ONE of three provable forms —
+ * plain-digit `0`, negative plain-digit (`` `-${digits}` ``), or dot-form
+ * non-integer (`1.5`) — mirroring `normalizeAxisSpec`'s own check
+ * (`!Number.isInteger(step) || step < 1`) exactly on this provable subset.
+ * `"unknown"` for EVERYTHING else, including: omitted/valid steps (`1`, `2`,
+ * ...  — never "invalid", obviously, but also not specially marked here,
+ * since the guard only ever checks for the `"invalid"` verdict); a wide
+ * `number`; exponent-form (`1e21` — `${1e21}` renders as `"1e+21"` in TS,
+ * same as JS's own `Number.prototype.toString` switchover for magnitudes
+ * `>= 1e21` — IS a valid integer step, so flagging it would LIE); and any
+ * union step (boundary-filtered like every other union input in this file
+ * — even a UNIFORMLY-invalid union like `0 | -1` still classifies as
+ * `"unknown"` here, a deliberate scope simplification per the binding spec:
+ * unlike `LiteralIndexBounds`'s subset-check tolerance for uniform union
+ * verdicts, this classifier reuses the Spike-04 boundary-FILTER style
+ * instead, since the semantics table's own last row lists "union" among the
+ * unconditional "no guard claim" categories for `step`). Never wrong, only
+ * incomplete: the runtime backstop stays authoritative for every case this
+ * returns `"unknown"` for.
+ */
+export type LiteralStepInvalid<Spec> = ExtractStep<Spec> extends infer StepT
+  ? [StepT] extends [never]
+    ? "unknown"
+    : [StepT] extends [undefined]
+      ? "unknown" // omitted: defaults to step 1, always valid
+      : IsUnion<StepT> extends true
+        ? "unknown" // boundary-filtered: no uniform claim, even if every member is invalid
+        : [StepT] extends [number]
+          ? IsDynamicDim<StepT> extends true
+            ? "unknown" // wide `number`: no claim
+            : `${StepT}` extends `-${infer Abs}`
+              ? IsPlainDigits<Abs> extends true
+                ? "invalid" // negative plain-digit integer step
+                : IsDotFormStep<`${StepT}`> extends true
+                  ? "invalid" // "-1.5": dot-form is a proven non-integer regardless of sign (review fix — the spec's dot-form row is sign-agnostic)
+                  : "unknown" // "-1e21": negative AND integral in fact, but its template form is "-1e+21" — unprovable (verifier-corrected example: `${-1e5}` renders as plain "-100000" and IS provable/"invalid")
+              : `${StepT}` extends "0"
+                ? "invalid" // the literal 0
+                : IsDotFormStep<`${StepT}`> extends true
+                  ? "invalid" // e.g. "1.5"
+                  : "unknown" // valid steps (1, 2, 3, ...) and exponent-form ("1e+21"): no claim, never wrong
+          : "unknown"
+  : "unknown";

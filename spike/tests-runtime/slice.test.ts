@@ -560,31 +560,67 @@ test("Spike 03 parity: runtime throws exactly where the type layer rejects, succ
 });
 
 test("error: step <= 0 throws through both backends", () => {
+  // Since Spike 06 (docs/spike-06-range-literals-spec.md), a LITERAL
+  // provably-invalid step (plain-digit 0, negative, or dot-form
+  // non-integer) is already a COMPILE error — exactly what this test's
+  // original literal `{ step: 0 }`/`{ step: -1 }` calls started triggering.
+  // The runtime backstop this test pins is the path for steps the type
+  // layer cannot prove anything about, so the values are deliberately
+  // WIDENED to `number` here (the gradual escape hatch, same pattern Spike
+  // 03 uses for OOB indices); the compile-time twin lives in
+  // spike/tests/slice.test-d.ts's Spike-06 section.
   const nd = NDArray.fromArray([5], [1, 2, 3, 4, 5]);
-  assert.throws(() => nd.slice({ step: 0 }), /step/);
-  assert.throws(() => nd.slice({ step: -1 }), /step/);
+  assert.throws(() => nd.slice({ step: 0 as number }), /step/);
+  assert.throws(() => nd.slice({ step: -1 as number }), /step/);
 
   const base = WNDArray.fromArray(core, [5], [1, 2, 3, 4, 5]);
   try {
-    assert.throws(() => base.slice({ step: 0 }), /step/);
+    assert.throws(() => base.slice({ step: 0 as number }), /step/);
   } finally {
     base.dispose();
   }
 });
 
 test("error: non-integer index/start/stop/step throw through both backends (verify finding: paths were untested)", () => {
+  // `start`/`stop` non-integer literals stay OUT of Spike 06's guard scope
+  // (deferred as a symmetric follow-on, FOLLOWUPS) so they need no
+  // widening; a literal non-integer `step` (dot-form, e.g. `1.5`) IS now a
+  // compile error (Spike 06), so it's widened the same way as above.
   const nd = NDArray.fromArray([4], [1, 2, 3, 4]);
   assert.throws(() => nd.slice(1.5), /not an integer/);
   assert.throws(() => nd.slice({ start: 1.5 }), /not an integer/);
   assert.throws(() => nd.slice({ stop: 2.5 }), /not an integer/);
-  assert.throws(() => nd.slice({ step: 1.5 }), /step 1.5.*invalid/);
+  assert.throws(() => nd.slice({ step: 1.5 as number }), /step 1.5.*invalid/);
   const base = WNDArray.fromArray(core, [4], [1, 2, 3, 4]);
   try {
     assert.throws(() => base.slice(1.5), /not an integer/);
     assert.throws(() => base.slice({ start: 1.5 }), /not an integer/);
-    assert.throws(() => base.slice({ step: 1.5 }), /step 1.5.*invalid/);
+    assert.throws(() => base.slice({ step: 1.5 as number }), /step 1.5.*invalid/);
     // a failing slice leaves the handle fully valid
     assert.deepStrictEqual(Array.from(base.toArray()), [1, 2, 3, 4]);
+  } finally {
+    base.dispose();
+  }
+});
+
+// Spike 06 runtime parity (acceptance criterion 3): the exact statically-
+// rejected step forms (0, negative, non-integer dot-form) throw at runtime
+// via the widened calls above; a statically-ACCEPTED literal step (>= 2)
+// must succeed, both as a literal call (computes a literal dim, pinned at
+// the type level in slice.test-d.ts) and produce the runtime-correct data.
+test("Spike 06 parity: a statically-accepted literal step succeeds through both backends", () => {
+  const nd = NDArray.fromArray([7], [1, 2, 3, 4, 5, 6, 7]);
+  const sliced = nd.slice({ start: 1, stop: 7, step: 3 }); // indices 1,4 -> [2,5]
+  assert.deepStrictEqual(Array.from(sliced.data), [2, 5]);
+
+  const base = WNDArray.fromArray(core, [7], [1, 2, 3, 4, 5, 6, 7]);
+  try {
+    const view = base.slice({ start: 1, stop: 7, step: 3 });
+    try {
+      assert.deepStrictEqual(Array.from(view.toArray()), [2, 5]);
+    } finally {
+      view.dispose();
+    }
   } finally {
     base.dispose();
   }

@@ -25,10 +25,15 @@
  *    its dim degrades to `number` (the exact resulting count depends on dim
  *    VALUES, which tuple-recursion here never computes arithmetically).
  *    STRETCH (slice-literal.ts, gated — see that file for the precise
- *    supported subset): a literal non-negative `start`/`stop` with `step`
- *    omitted-or-`1` instead yields a computed LITERAL dim, via digit-string
- *    (not tuple-length) arithmetic; anything outside that subset still
- *    degrades to `number`, identically to the core rule.
+ *    supported subset, extended by Spike 06 for negative literal
+ *    `start`/`stop` and literal `step >= 1`, docs/spike-06-range-literals-spec.md):
+ *    a literal `start`/`stop` (negative or non-negative) with
+ *    `step` omitted, literal `1`, or a literal plain-digit integer `>= 2`
+ *    instead yields a computed LITERAL dim, via digit-string (not
+ *    tuple-length) arithmetic; anything outside that subset still degrades
+ *    to `number`, identically to the core rule. A literal `step` PROVABLY
+ *    invalid at runtime (`0`, negative, or non-integer) is instead a
+ *    COMPILE ERROR at that argument (`SliceSpecsGuard` below, Spike 06).
  *
  * Two independent computations share the (S, Specs) pair:
  *  - `SliceShape<S, Specs>` — the resulting shape (this file's main export).
@@ -51,7 +56,7 @@
  */
 
 import { type Dim, type IsDynamicRank, type Shape, type ShowShape } from "./dim.ts";
-import type { LiteralIndexBounds, LiteralRangeDim } from "./slice-literal.ts";
+import type { ExtractStep, LiteralIndexBounds, LiteralRangeDim, LiteralStepInvalid } from "./slice-literal.ts";
 
 /** One axis's slice specification, at the type level. See file header. */
 export type SliceSpecInput = number | null | { readonly start?: number; readonly stop?: number; readonly step?: number };
@@ -130,9 +135,20 @@ type TooManySpecsMessage<S extends Shape, Specs extends readonly SliceSpecInput[
 type IndexOutOfBoundsMessage<I extends number, Axis extends number, D extends Dim, S extends Shape> =
   `slice: index ${I} is out of bounds for axis ${Axis} with dim ${D} (shape ${ShowShape<S>})`;
 
+/** Spike 06 (docs/spike-06-range-literals-spec.md): the step-invalid message
+ * for a provably-invalid literal range-spec `step` — same wording stem as
+ * the runtime's own throw in `normalizeAxisSpec` (runtime.ts:300), extended
+ * with the full shape for editor context (same convention as
+ * `IndexOutOfBoundsMessage`). `StepV` is the step's own literal value
+ * (`ExtractStep<Head>`, unconstrained at the extraction site but always a
+ * `number` by the time `LiteralStepInvalid<Head>` says `"invalid"`, since
+ * that verdict requires a `step` property to exist at all). */
+type StepInvalidMessage<StepV extends number, Axis extends number, S extends Shape> =
+  `slice: step ${StepV} for axis ${Axis} is invalid (must be an integer >= 1; negative steps are out of scope) (shape ${ShowShape<S>})`;
+
 /** Tail-recursive accumulator: walks `S` and `Specs` in lockstep, passing
- * each in-range spec's OWN type through unchanged. Two error mechanisms,
- * both landing at the offending ARGUMENT:
+ * each in-range spec's OWN type through unchanged. Three error mechanisms,
+ * all landing at the offending ARGUMENT:
  *  - Once `S` is exhausted with `Specs` entries still remaining, every
  *    remaining position is retyped to the shared error object
  *    (`ErrorTuple`) — every excess argument is flagged, not just the first.
@@ -143,6 +159,12 @@ type IndexOutOfBoundsMessage<I extends number, Axis extends number, D extends Di
  *    and `"unknown"` (wide/dynamic/union/non-integer-literal) pass through
  *    unchanged — the static check is never wrong, only incomplete; the
  *    runtime backstop stays authoritative for everything unproven.
+ *  - Spike 06: a range-spec's literal `step` that is PROVABLY invalid
+ *    (`LiteralStepInvalid` = `"invalid"` — plain-digit `0`, negative, or
+ *    dot-form non-integer) is retyped the same way, naming the step, axis,
+ *    and shape. `null` specs skip this check entirely (never step-guard-
+ *    relevant); `"unknown"` (valid/wide/union/exponent-form steps) passes
+ *    through unchanged, same never-wrong-only-incomplete discipline.
  * `FullS` threads the ORIGINAL shape (unconsumed) purely for messages;
  * `Passed["length"]` doubles as the current axis index (one entry is
  * accumulated per consumed spec — rank-bounded, the allowed kind of
@@ -165,7 +187,19 @@ type ValidateSpecsAcc<
             [...Passed, { readonly __shapeError: IndexOutOfBoundsMessage<Head, Passed["length"], SHead, FullS> }]
           >
         : ValidateSpecsAcc<STail, SpecsTail, Msg, FullS, [...Passed, Head]>
-      : ValidateSpecsAcc<STail, SpecsTail, Msg, FullS, [...Passed, Head]>
+      : [Head] extends [null]
+        ? ValidateSpecsAcc<STail, SpecsTail, Msg, FullS, [...Passed, Head]>
+        : [LiteralStepInvalid<Head>] extends ["invalid"]
+          ? ExtractStep<Head> extends infer StepV extends number
+            ? ValidateSpecsAcc<
+                STail,
+                SpecsTail,
+                Msg,
+                FullS,
+                [...Passed, { readonly __shapeError: StepInvalidMessage<StepV, Passed["length"], FullS> }]
+              >
+            : ValidateSpecsAcc<STail, SpecsTail, Msg, FullS, [...Passed, Head]> // defensive: step wasn't actually a number (shouldn't happen)
+          : ValidateSpecsAcc<STail, SpecsTail, Msg, FullS, [...Passed, Head]>
     : [...Passed, ...Specs] // Specs shorter than/equal to the remaining rank: nothing to flag (Specs is empty here)
   : Specs extends readonly []
     ? [...Passed] // exact match: rank and spec count agree exactly
