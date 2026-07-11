@@ -14,6 +14,7 @@ Gate-Stand (nach Infra 01, jeweils vom Verifier unabhängig reproduziert): `pnpm
 - **Infra 01** (Owner-Entscheidung Marvin: „Extremtests separat messen"): Digit-Arithmetik-Stressfälle (P5/P9/P10/P11, RG17/T7/T8) in neue separat gemessene `spike/tests-stress/`-tsconfig; `pnpm check` = VERBUND (root + stress, nichts verrottet — Nicht-Vakuität beidseitig per Korruptions-Test bewiesen, auch vom Verifier unabhängig); Haupt-Pin **173 716** (NEUE Basis, nie über den Schnitt vergleichen), Stress-Pin **94 523**; alle Suiten/Hash unberührt; Verify CONFIRMED; docs/infra-01-stress-split.md (Spec+Ergebnisse+Addendum in einem).
 - KB: 3 Notizen revidiert für Kern 07 (Bit-Identität: Skalar-Kompositionen + NaN-Payload-Ehrlichkeit; Runtime-Fehler-Heben: Union-of-Shapes-Facette; Zeilenshift: vierteiliger Export-Beweis + Insertion-only-Regel) + 1 für Kern 08 (Budget-Gates: Produkt- vs. Stress-Test-Kosten bisektieren); Graph gebaut, Kanten verifiziert.
 - FOLLOWUPS: Spike-04-Messobligation ausgetragen [x]; neu: `-1`-Inferenz, size-0-Materialize-Mini, Union-Guard-Zwei-Facetten-Item (Kern 07).
+- README: Status-Absatz nachgezogen (war bei Spike 03 stehengeblieben) — jetzt inkl. Spikes 04–06, Kern 07/08 mit dem flatten-Hover-Beispiel als neuem Aufhänger (Handoff-Runde).
 
 ## Offen / in Arbeit
 Nichts halbfertig.
