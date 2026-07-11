@@ -483,3 +483,36 @@ export function normSqRuntime(data: Float64Array): number {
   }
   return acc;
 }
+
+// ---------------------------------------------------------------------------
+// Kern 08 (docs/kern-08-reshape-flatten-spec.md): reshape/flatten runtime
+// validator. Appended strictly after all pre-existing content in this file
+// (freeze discipline — every line above this point is byte-for-byte
+// unchanged). `reshape` itself needs NO further runtime.ts code beyond this
+// validator: data movement is a straight copy (naive) or a view/materialize
+// choice (resident, via the already-existing `nt_materialize` entry point) —
+// logical row-major order is invariant under a reshape, so there is no
+// per-element gather/scatter algebra to add here (unlike `sliceRuntime`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Shared reshape/flatten validator: both `NDArray.reshape` and
+ * `WNDArray.reshape` call this BEFORE any allocation (same "validate first"
+ * discipline as `assertVectorPair`/`normalizeSliceSpecs`). Checked in the
+ * message-table order (dim validity first, per-axis left to right, then
+ * product) — mirrors the compile-time `ReshapeCheck` guard's message wording
+ * verbatim (spike/src/reshape.ts). `flatten` never calls this (always valid
+ * by construction: `[product(shape)]` trivially has a matching product).
+ */
+export function assertReshapeArgs(oldShape: readonly number[], newShape: readonly number[]): void {
+  for (const d of newShape) {
+    if (!Number.isInteger(d) || d < 0) {
+      throw new Error(`reshape: invalid dimension ${d} in shape [${newShape.join(",")}] (dims must be non-negative integers)`);
+    }
+  }
+  const oldSize = product(oldShape);
+  const newSize = product(newShape);
+  if (oldSize !== newSize) {
+    throw new Error(`reshape: cannot reshape array of size ${oldSize} into shape [${newShape.join(",")}]`);
+  }
+}

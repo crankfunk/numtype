@@ -851,3 +851,75 @@ export type LiteralStepInvalid<Spec> = ExtractStep<Spec> extends infer StepT
                   : "unknown" // valid steps (1, 2, 3, ...) and exponent-form ("1e+21"): no claim, never wrong
           : "unknown"
   : "unknown";
+
+// ---------------------------------------------------------------------------
+// Kern 08 (docs/kern-08-reshape-flatten-spec.md): the reshape stretch — lift
+// a PROVABLY invalid literal dim of a `reshape()` new shape to a compile
+// error at the argument (the Spike-03/06 idiom, reusing this file's private
+// classification primitives — `IsPlainDigits`, `IsDotFormStep`, `IsUnion` —
+// rather than duplicating them in reshape.ts, which is why this classifier
+// lives here instead). Appended below all pre-existing content.
+//
+// Unlike a slice `step` (where a literal `0` is itself invalid), `0` is a
+// VALID dim here (size-0 shapes are first-class in this codebase) — so the
+// non-negative branch below is simpler than `LiteralStepInvalid`'s: any
+// plain-digit string (including "0") is a valid dim, only a DOT-FORM
+// literal (proven non-integer) is provably invalid on that side.
+// ---------------------------------------------------------------------------
+
+/** Classify one literal dim `D` of a `reshape()` new shape: `"invalid"` for
+ * a PROVABLY invalid literal (negative plain-digit integer, or a sign-
+ * agnostic dot-form non-integer), `"unknown"` for everything else (valid
+ * dims INCLUDING `0`, a wide `number`, exponent-form, union, or `never`) —
+ * never wrong, only incomplete, same discipline as `LiteralStepInvalid`. */
+type LiteralDimInvalid<D extends Dim> = [D] extends [never]
+  ? "unknown"
+  : IsUnion<D> extends true
+    ? "unknown" // boundary-filtered: no uniform claim, even if every member is invalid
+    : [D] extends [number]
+      ? IsDynamicDim<D> extends true
+        ? "unknown" // wide `number`: no claim
+        : `${D}` extends `-${infer Abs}`
+          ? IsPlainDigits<Abs> extends true
+            ? "invalid" // negative plain-digit integer dim
+            : IsDotFormStep<`${D}`> extends true
+              ? "invalid" // "-1.5": dot-form is a proven non-integer regardless of sign
+              : "unknown" // "-1e21": unprovable from its template form
+          : IsDotFormStep<`${D}`> extends true
+            ? "invalid" // e.g. "1.5"
+            : "unknown" // any plain-digit dim (incl. "0") or exponent-form: no claim, never wrong
+      : "unknown";
+
+/** Tail-recursive accumulator: walks `NS`'s dims left to right (mirrors the
+ * runtime's own per-axis loop in `assertReshapeArgs`, runtime.ts) and
+ * returns the FIRST provably-invalid dim's OWN literal value, or the
+ * sentinel `"ok"` if none is found — deliberately NOT `never` (the standard
+ * "never always matches" gotcha this file already guards against
+ * elsewhere, e.g. `NonNegDigits`'s own `"unsupported"` sentinel), and
+ * deliberately NOT the full message string either: this file's own
+ * historical precedent (`LiteralIndexBounds`/`LiteralStepInvalid` return
+ * bare verdicts, never pre-built messages) keeps it free of a `ShowShape`
+ * import, which the append-only freeze discipline for this file forbids
+ * (that would touch the pre-existing import line) — message construction
+ * happens one layer up, in `reshape.ts`, exactly where `slice.ts` already
+ * builds `IndexOutOfBoundsMessage`/`StepInvalidMessage` from this file's
+ * bare verdicts. */
+type ReshapeDimInvalidAcc<NS extends Shape> = NS extends readonly [infer Head extends Dim, ...infer Tail extends Shape]
+  ? LiteralDimInvalid<Head> extends "invalid"
+    ? Head
+    : ReshapeDimInvalidAcc<Tail>
+  : "ok";
+
+/**
+ * Lift a provably-invalid literal dim of a `reshape()` new shape `NS` to
+ * its OWN literal value, or the sentinel `"ok"` if no dim is provably
+ * invalid — `reshape.ts`'s `ReshapeCheckWithStretch` checks this BEFORE the
+ * product check (mirroring `assertReshapeArgs`'s own check order: dim
+ * validity first, per-axis left to right, then product) and builds the
+ * final message itself via `ShowShape<NS>`. A union of whole shapes for
+ * `NS` distributes naturally through `NS extends readonly [Head, ...Tail]`
+ * above (same "not special-cased" precedent as `DotCheckStatic` in
+ * vector.ts) — the systemic whole-shape-union guard bypass is a documented,
+ * shared FOLLOWUPS item, not specific to this classifier.
+ */
+export type LiteralReshapeDimInvalid<NS extends Shape> = ReshapeDimInvalidAcc<NS>;

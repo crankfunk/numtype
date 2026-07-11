@@ -244,4 +244,45 @@ rDiff.dispose();
 rScaled.dispose();
 rHalved.dispose();
 
+// --- Kern 08: reshape/flatten (docs/kern-08-reshape-flatten-spec.md) -------
+// Same elements, new shape — naive always copies; resident views if
+// contiguous (O(1), shares the buffer), else materializes. `flatten()`'s
+// return type is the Spike-04 payoff: a STATICALLY COMPUTED literal rank-1
+// shape (see the `bigFlattened` hover below: `NDArray<[1048576]>`, not
+// `NDArray<[number]>`, for a [1024,1024] input — verified by the assertion
+// right after it, no `as`/manual proof needed).
+console.log("\n=== Kern 08: reshape/flatten ===\n");
+
+const cube234 = NDArray.zeros([2, 3, 4]);
+for (let i = 0; i < cube234.data.length; i++) cube234.data[i] = i + 1;
+const reshaped432 = cube234.reshape([4, 3, 2]);
+printArray("cube234              ", cube234);
+printArray("cube234.reshape([4,3,2])", reshaped432);
+
+const flatCube = cube234.flatten();
+printArray("cube234.flatten()    ", flatCube);
+console.log(`  flatten() hover shape: NDArray<[${flatCube.shape.join(",")}]> (statically computed, not just runtime-correct)\n`);
+
+// Digit-multiplication stress: [1024,1024] -> [1048576], the phase's own
+// headline example — hover shows NDArray<[1048576]>, a computed LITERAL.
+const bigArr = NDArray.zeros([1024, 1024]);
+const bigFlattened = bigArr.flatten();
+const _bigFlattenedHoverCheck: NDArray<[1048576]> = bigFlattened; // compile-time proof the hover is exactly [1048576]
+console.log(`bigArr.flatten() shape = [${bigFlattened.shape.join(",")}] (hover: NDArray<[1048576]>)\n`);
+
+const rCube234 = WNDArray.fromArray(core, cube234.shape, cube234.data);
+const rReshaped = rCube234.reshape([4, 3, 2]);
+assertResidentAgrees("cube234.reshape([4,3,2])", reshaped432, rReshaped);
+const rFlatCube = rCube234.flatten();
+assertResidentAgrees("cube234.flatten()", flatCube, rFlatCube);
+
+// View-routing proof: a contiguous resident handle's reshape/flatten shares
+// the SAME buffer pointer (O(1), no kernel call) — printed, not just tested.
+console.log(`  [resident] reshape ptr match (view, not copy): ${rReshaped.describe().ptr === rCube234.describe().ptr}`);
+console.log(`  [resident] flatten ptr match (view, not copy): ${rFlatCube.describe().ptr === rCube234.describe().ptr}\n`);
+
+rCube234.dispose();
+rReshaped.dispose();
+rFlatCube.dispose();
+
 console.log("=== demo complete: TS, WASM v1, and WASM resident all agree on every showcase op ===");

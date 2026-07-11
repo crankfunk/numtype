@@ -70,7 +70,9 @@ import { type Dim, type Mutable, type Shape } from "../dim.ts";
 import type { Guard, OkShape } from "../ndarray.ts";
 import type { MatMul } from "../matmul.ts";
 import type { ReduceAxis, Transpose } from "../reduce.ts";
-import { assertVectorPair, computeStrides, normalizeSliceSpecs, product, runtimeBroadcastShape, type SliceSpec } from "../runtime.ts";
+import type { ReshapeCheck } from "../reshape.ts";
+import { assertReshapeArgs, assertVectorPair, computeStrides, normalizeSliceSpecs, product, runtimeBroadcastShape, type SliceSpec } from "../runtime.ts";
+import type { LiteralShapeProduct } from "../slice-literal.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "../slice.ts";
 import type { DotCheck } from "../vector.ts";
 import type { CoreExports } from "./loader.ts";
@@ -1017,6 +1019,96 @@ export class WNDArray<S extends Shape> {
       outStrides,
       offset,
     );
+  }
+
+  /** Same elements, new shape (Kern 08, docs/kern-08-reshape-flatten-spec.md)
+   * — resident twin of `NDArray.reshape`. VIEW if contiguous (O(1):
+   * `refs + 1`, same buffer, offset 0, natural row-major strides of the new
+   * shape) — no kernel call, no allocation, no data movement, same
+   * mechanism as `transpose()`/`slice()`. Otherwise MATERIALIZE-COPY via
+   * the existing `nt_materialize` entry point into a fresh buffer, then
+   * wrap under the new shape. Validation (`assertReshapeArgs`) runs BEFORE
+   * any allocation, mirroring every other op here. */
+  reshape<const NS extends Shape>(shape: Guard<ReshapeCheck<S, NS>, NS>): WNDArray<Mutable<NS>> {
+    this.assertLive("reshape");
+    const ns = shape as unknown as NS;
+    assertReshapeArgs(this.shape, ns);
+
+    if (this.isContiguous()) {
+      retainBuffer(this.buf);
+      return new WNDArray<Mutable<NS>>(this.buf, [...ns] as Mutable<NS>, computeStrides(ns), 0);
+    }
+
+    const len = product(ns);
+    const scratch: ScratchBuf[] = [];
+    try {
+      const shapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(shapeBuf);
+      const stridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(stridesBuf);
+      const outDataBuf = allocBytes(this.core, len * 8);
+
+      const status = this.core.nt_materialize(
+        shapeBuf.ptr,
+        this.shape.length,
+        stridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        outDataBuf.ptr,
+        len,
+      );
+      if (status !== 0) {
+        freeBuf(this.core, outDataBuf);
+        throw new Error(`wasm resident nt_materialize (reshape): status ${status} for shape [${this.shape.join(",")}]`);
+      }
+      return WNDArray.fresh<Mutable<NS>>(this.core, [...ns] as Mutable<NS>, outDataBuf.ptr, len);
+    } finally {
+      for (const buf of scratch) freeBuf(this.core, buf);
+    }
+  }
+
+  /** Rank-1 copy/view of every element (Kern 08) — resident twin of
+   * `NDArray.flatten`; same view-if-contiguous/else-materialize routing as
+   * `reshape` above (this IS `reshape([product(shape)])` in behavior — no
+   * guard, always valid, same reasoning as `norm()`/`reshape`'s own
+   * niladic-op precedent). */
+  flatten(): WNDArray<[LiteralShapeProduct<S>]> {
+    this.assertLive("flatten");
+    const len = product(this.shape);
+    const newShape = [len] as unknown as [LiteralShapeProduct<S>];
+
+    if (this.isContiguous()) {
+      retainBuffer(this.buf);
+      return new WNDArray<[LiteralShapeProduct<S>]>(this.buf, newShape, computeStrides(newShape), 0);
+    }
+
+    const scratch: ScratchBuf[] = [];
+    try {
+      const shapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(shapeBuf);
+      const stridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(stridesBuf);
+      const outDataBuf = allocBytes(this.core, len * 8);
+
+      const status = this.core.nt_materialize(
+        shapeBuf.ptr,
+        this.shape.length,
+        stridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        outDataBuf.ptr,
+        len,
+      );
+      if (status !== 0) {
+        freeBuf(this.core, outDataBuf);
+        throw new Error(`wasm resident nt_materialize (flatten): status ${status} for shape [${this.shape.join(",")}]`);
+      }
+      return WNDArray.fresh<[LiteralShapeProduct<S>]>(this.core, newShape, outDataBuf.ptr, len);
+    } finally {
+      for (const buf of scratch) freeBuf(this.core, buf);
+    }
   }
 
   /** Materialize this view into a fresh, independently owned, contiguous

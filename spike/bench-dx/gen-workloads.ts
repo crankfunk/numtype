@@ -478,6 +478,106 @@ function buildW5(): WorkloadSpec {
 }
 
 // ---------------------------------------------------------------------------
+// W6 — reshape/flatten measurement workload (Kern 08,
+// docs/kern-08-reshape-flatten-spec.md): real reshape()/flatten() call
+// sites — a small reshape hover, a flatten hover with a computed literal, a
+// big-dim flatten hover exercising LiteralShapeProduct's schoolbook digit
+// multiplication ([1024,1024] -> [1048576]), a PERMANENT reshape product-
+// mismatch error (never toggled), and the M3 toggle target: a second
+// reshape product mismatch whose new shape's first dim is 3 (matches, no
+// error) or 5 (mismatch, error) — flipped by a single-token full-text
+// didChange, the SAME __shapeError missing-property mechanism (code 2741)
+// as W4's matmul toggle. Closes the Spike-04 FOLLOWUPS hover-measurement
+// obligation now that reshape/flatten actually exist (Kern 08).
+// ---------------------------------------------------------------------------
+
+function buildW6(): WorkloadSpec {
+  function render(toggleDim: 3 | 5): {
+    text: string;
+    smallLine: number;
+    smallName: string;
+    flattenLine: number;
+    flattenName: string;
+    bigFlattenLine: number;
+    bigFlattenName: string;
+    toggleLine: number;
+  } {
+    const b = makeBuilder();
+    b.push(
+      GENERATED_HEADER(
+        "W6 reshape/flatten measurement",
+        "Real reshape()/flatten() call sites (Kern 08, docs/kern-08-reshape-flatten-spec.md):\na small reshape hover, a flatten hover with a computed literal, a big-dim\nflatten hover exercising LiteralShapeProduct's schoolbook digit multiplication\n([1024,1024] -> [1048576]), a PERMANENT reshape product-mismatch error (never\ntoggled), and the M3 toggle target: a second reshape product mismatch whose\nnew shape's first dim is 3 (matches, no error) or 5 (mismatch, error) -\nflipped by a single-token full-text didChange, the same __shapeError\nmissing-property mechanism as W4's matmul toggle.",
+      ),
+    );
+    b.push(`import { NDArray } from "../../src/ndarray.ts";`);
+    b.push(``);
+
+    b.push(`// --- small reshape hover ---`);
+    b.push(`const w6_small_base = NDArray.zeros([2, 3]);`);
+    const smallName = "w6_small_reshaped";
+    b.push(`const ${smallName} = w6_small_base.reshape([3, 2]);`);
+    const smallLine = b.lastIdx();
+    b.push(``);
+
+    b.push(`// --- flatten hover: computed literal product ---`);
+    b.push(`const w6_flatten_base = NDArray.zeros([2, 3]);`);
+    const flattenName = "w6_flattened";
+    b.push(`const ${flattenName} = w6_flatten_base.flatten();`);
+    const flattenLine = b.lastIdx();
+    b.push(``);
+
+    b.push(`// --- big-dim flatten hover: digit-multiplication stress (1024*1024=1048576) ---`);
+    b.push(`const w6_big_base = NDArray.zeros([1024, 1024]);`);
+    const bigFlattenName = "w6_big_flattened";
+    b.push(`const ${bigFlattenName} = w6_big_base.flatten();`);
+    const bigFlattenLine = b.lastIdx();
+    b.push(``);
+
+    b.push(`// --- permanent error: reshape product mismatch (never toggled) ---`);
+    b.push(`const w6_bad_base = NDArray.zeros([4, 3]);`);
+    b.push(`const w6_bad_reshaped = w6_bad_base.reshape([5, 2]); // 5*2=10 != 12`);
+    b.push(``);
+
+    b.push(`// --- M3 toggle target: reshape product mismatch (3<->5) ---`);
+    b.push(`const w6_toggle_base = NDArray.zeros([4, 3]);`);
+    const toggleName = "w6_toggle_reshaped";
+    b.push(`const ${toggleName} = w6_toggle_base.reshape([${toggleDim}, 4]);`);
+    const toggleLine = b.lastIdx();
+    b.push(``);
+
+    return { text: b.lines.join("\n") + "\n", smallLine, smallName, flattenLine, flattenName, bigFlattenLine, bigFlattenName, toggleLine };
+  }
+
+  const rBroken = render(5);
+  const rFixed = render(3);
+
+  const brokenState: ToggleStateSpec = { label: "broken (reshape mismatch)", text: rBroken.text, diagnosticLine: rBroken.toggleLine, expectDiagnosticPresent: true, expectedCode: 2741 };
+  const fixedState: ToggleStateSpec = { label: "fixed (reshape ok)", text: rFixed.text, diagnosticLine: rFixed.toggleLine, expectDiagnosticPresent: false, expectedCode: 2741 };
+
+  const brokenLines = rBroken.text.split("\n");
+  const hovers: HoverSpec[] = [
+    { label: "W6 small reshape", line: rBroken.smallLine, character: charIn(brokenLines[rBroken.smallLine]!, rBroken.smallName), expected: fmtShape([3, 2]) },
+    { label: "W6 flatten computed literal", line: rBroken.flattenLine, character: charIn(brokenLines[rBroken.flattenLine]!, rBroken.flattenName), expected: fmtShape([6]) },
+    {
+      label: "W6 big-dim flatten (digit multiplication)",
+      line: rBroken.bigFlattenLine,
+      character: charIn(brokenLines[rBroken.bigFlattenLine]!, rBroken.bigFlattenName),
+      expected: fmtShape([1048576]),
+    },
+  ];
+  const completion: CompletionSpec = { label: "W6 member access", line: rBroken.smallLine, character: charAfterDot(brokenLines[rBroken.smallLine]!, "reshape") };
+
+  return {
+    id: "w6",
+    fileName: "w6-reshape-flatten.ts",
+    text: brokenState.text,
+    hovers,
+    completion,
+    toggle: { label: "W6 reshape product-mismatch toggle (3<->5)", initialState: brokenState, otherState: fixedState },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Main: build all workloads, write .ts files + tsconfigs + manifest.json.
 // ---------------------------------------------------------------------------
 
@@ -485,7 +585,7 @@ function main(): void {
   rmSync(workloadsDir, { recursive: true, force: true });
   mkdirSync(workloadsDir, { recursive: true });
 
-  const workloads = [buildW1(), buildW2(), buildW3(), buildW4(), buildW5()];
+  const workloads = [buildW1(), buildW2(), buildW3(), buildW4(), buildW5(), buildW6()];
 
   // Self-contained (no "extends") so the language server's auto-discovered
   // project for any workload file is EXACTLY this directory's .ts files plus

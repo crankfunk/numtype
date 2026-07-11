@@ -23,7 +23,9 @@ import type { Broadcast } from "./broadcast.ts";
 import { type Dim, type Mutable, type Shape, type ShapeError } from "./dim.ts";
 import type { MatMul } from "./matmul.ts";
 import type { ReduceAxis, Transpose } from "./reduce.ts";
+import type { ReshapeCheck } from "./reshape.ts";
 import {
+  assertReshapeArgs,
   assertVectorPair,
   computeStrides,
   dotRuntime,
@@ -37,6 +39,7 @@ import {
   sumRuntime,
   transposeRuntime,
 } from "./runtime.ts";
+import type { LiteralShapeProduct } from "./slice-literal.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "./slice.ts";
 import type { DotCheck } from "./vector.ts";
 
@@ -306,6 +309,34 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
     const norm = normalizeSliceSpecs(this.shape, rawSpecs);
     const { shape, data } = sliceRuntime(this.shape, this.data, norm);
     return new NDArray<OkShape<SliceShape<S, Specs>>>(shape as OkShape<SliceShape<S, Specs>>, data);
+  }
+
+  /** Same elements, new shape (Kern 08, docs/kern-08-reshape-flatten-spec.md):
+   * NumPy semantics minus `-1` inference (FOLLOWUPS). Always a fresh COPY
+   * (house invariant: `NDArray` never aliases) — logical row-major order is
+   * preserved, so this is a straight `Float64Array` copy under new shape
+   * metadata, never a per-element reorder. Compile error at the argument
+   * when both shapes' literal element products are known and differ
+   * (`ReshapeCheck`); a provably-invalid literal dim of the new shape is
+   * ALSO a compile error (the Kern-08 stretch, `LiteralReshapeDimInvalid`)
+   * — both mirror `assertReshapeArgs`'s own runtime throw verbatim.
+   * Gradual/dynamic callers fall through to that same runtime backstop. */
+  reshape<const NS extends Shape>(shape: Guard<ReshapeCheck<S, NS>, NS>): NDArray<Mutable<NS>> {
+    const ns = shape as unknown as NS;
+    assertReshapeArgs(this.shape, ns);
+    return new NDArray<Mutable<NS>>([...ns] as Mutable<NS>, new Float64Array(this.data));
+  }
+
+  /** Rank-1 copy of every element (Kern 08): `a.flatten()` behaves exactly
+   * like `a.reshape([product(a.shape)])` (always valid — no guard, same
+   * niladic-method reasoning as `norm()` in Kern 07). Return type is the
+   * Spike-04 payoff: a statically computed literal rank-1 shape (hover
+   * `NDArray<[1048576]>` for `[1024, 1024]`) whenever every dim of `S` is a
+   * supported literal, degrading to the honest `NDArray<[number]>`
+   * whenever the product itself degrades. */
+  flatten(): NDArray<[LiteralShapeProduct<S>]> {
+    const size = product(this.shape);
+    return new NDArray<[LiteralShapeProduct<S>]>([size] as unknown as [LiteralShapeProduct<S>], new Float64Array(this.data));
   }
 
   /** Row-major strides for the current shape (introspection helper). */
