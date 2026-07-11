@@ -70,8 +70,9 @@ import { type Dim, type Mutable, type Shape } from "../dim.ts";
 import type { Guard, OkShape } from "../ndarray.ts";
 import type { MatMul } from "../matmul.ts";
 import type { ReduceAxis, Transpose } from "../reduce.ts";
-import { computeStrides, normalizeSliceSpecs, product, runtimeBroadcastShape, type SliceSpec } from "../runtime.ts";
+import { assertVectorPair, computeStrides, normalizeSliceSpecs, product, runtimeBroadcastShape, type SliceSpec } from "../runtime.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "../slice.ts";
+import type { DotCheck } from "../vector.ts";
 import type { CoreExports } from "./loader.ts";
 
 interface ScratchBuf {
@@ -474,6 +475,179 @@ export class WNDArray<S extends Shape> {
     }
   }
 
+  /** Broadcasting elementwise subtract (Kern 07) — structural clone of
+   * `add` modulo the entry point (`nt_sub_strided`) and message strings;
+   * same scratch-list/`finally` discipline, same fresh-output-buffer rule,
+   * same pre-allocation shape validation. */
+  sub<B extends Shape>(other: Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>> {
+    this.assertLive("sub");
+    const o = other as unknown as WNDArray<B>;
+    o.assertLive("sub");
+    this.assertSameCore(o, "sub");
+
+    const outShape = runtimeBroadcastShape(this.shape, o.shape);
+    const outLen = product(outShape);
+
+    const scratch: ScratchBuf[] = [];
+    try {
+      const aShapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(aShapeBuf);
+      const aStridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(aStridesBuf);
+      const bShapeBuf = writeU32Array(this.core, o.shape);
+      scratch.push(bShapeBuf);
+      const bStridesBuf = writeU32Array(this.core, o.strides);
+      scratch.push(bStridesBuf);
+      const outDataBuf = allocBytes(this.core, outLen * 8);
+
+      const status = this.core.nt_sub_strided(
+        aShapeBuf.ptr,
+        this.shape.length,
+        aStridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        bShapeBuf.ptr,
+        o.shape.length,
+        bStridesBuf.ptr,
+        o.offset,
+        o.buf.ptr,
+        o.buf.lenElems,
+        outDataBuf.ptr,
+        outLen,
+      );
+      if (status !== 0) {
+        freeBuf(this.core, outDataBuf);
+        throw new Error(
+          `wasm resident nt_sub_strided: status ${status} for shapes [${this.shape.join(",")}] and [${o.shape.join(",")}]`,
+        );
+      }
+      return WNDArray.fresh<OkShape<Broadcast<S, B>>>(
+        this.core,
+        outShape as OkShape<Broadcast<S, B>>,
+        outDataBuf.ptr,
+        outLen,
+      );
+    } finally {
+      for (const buf of scratch) freeBuf(this.core, buf);
+    }
+  }
+
+  /** Broadcasting elementwise multiply (Kern 07) — structural clone of
+   * `add` modulo the entry point (`nt_mul_strided`) and message strings. */
+  mul<B extends Shape>(other: Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>> {
+    this.assertLive("mul");
+    const o = other as unknown as WNDArray<B>;
+    o.assertLive("mul");
+    this.assertSameCore(o, "mul");
+
+    const outShape = runtimeBroadcastShape(this.shape, o.shape);
+    const outLen = product(outShape);
+
+    const scratch: ScratchBuf[] = [];
+    try {
+      const aShapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(aShapeBuf);
+      const aStridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(aStridesBuf);
+      const bShapeBuf = writeU32Array(this.core, o.shape);
+      scratch.push(bShapeBuf);
+      const bStridesBuf = writeU32Array(this.core, o.strides);
+      scratch.push(bStridesBuf);
+      const outDataBuf = allocBytes(this.core, outLen * 8);
+
+      const status = this.core.nt_mul_strided(
+        aShapeBuf.ptr,
+        this.shape.length,
+        aStridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        bShapeBuf.ptr,
+        o.shape.length,
+        bStridesBuf.ptr,
+        o.offset,
+        o.buf.ptr,
+        o.buf.lenElems,
+        outDataBuf.ptr,
+        outLen,
+      );
+      if (status !== 0) {
+        freeBuf(this.core, outDataBuf);
+        throw new Error(
+          `wasm resident nt_mul_strided: status ${status} for shapes [${this.shape.join(",")}] and [${o.shape.join(",")}]`,
+        );
+      }
+      return WNDArray.fresh<OkShape<Broadcast<S, B>>>(
+        this.core,
+        outShape as OkShape<Broadcast<S, B>>,
+        outDataBuf.ptr,
+        outLen,
+      );
+    } finally {
+      for (const buf of scratch) freeBuf(this.core, buf);
+    }
+  }
+
+  /** Broadcasting elementwise divide (Kern 07) — structural clone of `add`
+   * modulo the entry point (`nt_div_strided`) and message strings. Pure
+   * IEEE 754 (see `kernels::elementwise` / spec): no zero checks, no
+   * throws for a zero divisor — `x/0`, `0/0` flow through into the output
+   * data as signed infinity / NaN. */
+  div<B extends Shape>(other: Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>> {
+    this.assertLive("div");
+    const o = other as unknown as WNDArray<B>;
+    o.assertLive("div");
+    this.assertSameCore(o, "div");
+
+    const outShape = runtimeBroadcastShape(this.shape, o.shape);
+    const outLen = product(outShape);
+
+    const scratch: ScratchBuf[] = [];
+    try {
+      const aShapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(aShapeBuf);
+      const aStridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(aStridesBuf);
+      const bShapeBuf = writeU32Array(this.core, o.shape);
+      scratch.push(bShapeBuf);
+      const bStridesBuf = writeU32Array(this.core, o.strides);
+      scratch.push(bStridesBuf);
+      const outDataBuf = allocBytes(this.core, outLen * 8);
+
+      const status = this.core.nt_div_strided(
+        aShapeBuf.ptr,
+        this.shape.length,
+        aStridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        bShapeBuf.ptr,
+        o.shape.length,
+        bStridesBuf.ptr,
+        o.offset,
+        o.buf.ptr,
+        o.buf.lenElems,
+        outDataBuf.ptr,
+        outLen,
+      );
+      if (status !== 0) {
+        freeBuf(this.core, outDataBuf);
+        throw new Error(
+          `wasm resident nt_div_strided: status ${status} for shapes [${this.shape.join(",")}] and [${o.shape.join(",")}]`,
+        );
+      }
+      return WNDArray.fresh<OkShape<Broadcast<S, B>>>(
+        this.core,
+        outShape as OkShape<Broadcast<S, B>>,
+        outDataBuf.ptr,
+        outLen,
+      );
+    } finally {
+      for (const buf of scratch) freeBuf(this.core, buf);
+    }
+  }
+
   /** Full NumPy `matmul` — resident twin of `NDArray.matmul`/`wasmMatmul`,
    * routed through the strided kernel. 1-D promotion/squeeze is TS-side
    * shape bookkeeping only (mirrors `matmulRuntime`/`wasmMatmul` exactly);
@@ -660,6 +834,126 @@ export class WNDArray<S extends Shape> {
     } finally {
       for (const buf of scratch) freeBuf(this.core, buf);
     }
+  }
+
+  /** 1-D inner product (Kern 07) — resident twin of `NDArray.dot`/
+   * `dotRuntime`, routed through the strided `nt_dot_strided` reduction
+   * kernel. Returns a plain `number` (deliberately leaves the `WNDArray`
+   * world, same design note as `NDArray.dot`); the scalar result is read
+   * from an ephemeral 1-element scratch buffer — a fresh view derived
+   * AFTER the last allocation (memory rule) — freed in `finally` along
+   * with the rest of this call's scratch. */
+  dot<B extends Shape>(other: Guard<DotCheck<S, B, "dot">, WNDArray<B>>): number {
+    this.assertLive("dot");
+    const o = other as unknown as WNDArray<B>;
+    o.assertLive("dot");
+    this.assertSameCore(o, "dot");
+
+    assertVectorPair("dot", this.shape, o.shape);
+
+    const scratch: ScratchBuf[] = [];
+    try {
+      const aShapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(aShapeBuf);
+      const aStridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(aStridesBuf);
+      const bShapeBuf = writeU32Array(this.core, o.shape);
+      scratch.push(bShapeBuf);
+      const bStridesBuf = writeU32Array(this.core, o.strides);
+      scratch.push(bStridesBuf);
+      const outDataBuf = allocBytes(this.core, 8);
+      scratch.push(outDataBuf); // ephemeral: read below, never returned as a handle
+
+      const status = this.core.nt_dot_strided(
+        aShapeBuf.ptr,
+        this.shape.length,
+        aStridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        bShapeBuf.ptr,
+        o.shape.length,
+        bStridesBuf.ptr,
+        o.offset,
+        o.buf.ptr,
+        o.buf.lenElems,
+        outDataBuf.ptr,
+      );
+      if (status !== 0) {
+        throw new Error(
+          `wasm resident nt_dot_strided: status ${status} for shapes [${this.shape.join(",")}] and [${o.shape.join(",")}]`,
+        );
+      }
+      // Fresh view derived AFTER the last allocation above (memory rule).
+      const view = new Float64Array(this.core.memory.buffer, outDataBuf.ptr, 1);
+      return view[0] ?? 0;
+    } finally {
+      for (const buf of scratch) freeBuf(this.core, buf);
+    }
+  }
+
+  /** L2/Frobenius norm over ALL elements (Kern 07) — resident twin of
+   * `NDArray.norm`: TS-side `Math.sqrt` over the `nt_norm_sq_strided`
+   * reduction kernel's result (pinned composition, spec). Any rank; no
+   * guard (Frobenius over every element is valid for any shape). Same
+   * ephemeral-1-element-scratch-buffer read pattern as `dot`. */
+  norm(): number {
+    this.assertLive("norm");
+
+    const scratch: ScratchBuf[] = [];
+    try {
+      const shapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(shapeBuf);
+      const stridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(stridesBuf);
+      const outDataBuf = allocBytes(this.core, 8);
+      scratch.push(outDataBuf);
+
+      const status = this.core.nt_norm_sq_strided(
+        shapeBuf.ptr,
+        this.shape.length,
+        stridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        outDataBuf.ptr,
+      );
+      if (status !== 0) {
+        throw new Error(`wasm resident nt_norm_sq_strided: status ${status} for shape [${this.shape.join(",")}]`);
+      }
+      const view = new Float64Array(this.core.memory.buffer, outDataBuf.ptr, 1);
+      return Math.sqrt(view[0] ?? 0);
+    } finally {
+      for (const buf of scratch) freeBuf(this.core, buf);
+    }
+  }
+
+  /** Cosine similarity (Kern 07) — resident twin of
+   * `NDArray.cosineSimilarity`. Same operand contract as `dot` (own error
+   * prefix via `assertVectorPair`). Implements the spec's pinned
+   * composition `dot(a,b) / (sqrt(normSq(a)) * sqrt(normSq(b)))` by
+   * reusing `dot()`/`norm()` directly — `norm()` IS `sqrt(normSq(...))` by
+   * its own definition above, so `this.norm() * o.norm()` is exactly the
+   * pinned denominator, and this stays fully differential-tested via those
+   * two already-tested methods rather than a third copy of the WASM
+   * marshalling. The `as unknown as Guard<...>` cast below crosses the
+   * `dot` guard boundary the same direction every other op here already
+   * casts the OTHER way (`other as unknown as WNDArray<B>`) — `o` has
+   * already passed this exact method's own `assertVectorPair` check by the
+   * time it's passed to `dot`, so the cast is sound, not merely
+   * type-silencing. Pure IEEE — no epsilon guards (spec): zero vector(s)
+   * -> NaN; adversarial magnitude splits can underflow the denominator ->
+   * +/-Infinity. */
+  cosineSimilarity<B extends Shape>(other: Guard<DotCheck<S, B, "cosineSimilarity">, WNDArray<B>>): number {
+    this.assertLive("cosineSimilarity");
+    const o = other as unknown as WNDArray<B>;
+    o.assertLive("cosineSimilarity");
+    this.assertSameCore(o, "cosineSimilarity");
+    assertVectorPair("cosineSimilarity", this.shape, o.shape);
+
+    const num = this.dot(o as unknown as Guard<DotCheck<S, B, "dot">, WNDArray<B>>);
+    const den = this.norm() * o.norm();
+    return num / den;
   }
 
   /** Reverse every axis (NumPy's `.T` generalized to N-D). Since Kern 03

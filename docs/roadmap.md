@@ -87,6 +87,11 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
 
 ### Phase B — Minimum Viable Op-Surface (an den Use Cases entlang, nicht an NumPy)
 
+> **Status 2026-07-11: Item 5 zur Hälfte gelandet — Kern 07** (sub/mul/div + dot/norm/
+> cosineSimilarity auf beiden Surfaces, bit-identisch differential-getestet, unabhängig
+> verifiziert CONFIRMED; docs/kern-07-*). Offen aus Item 5: Runtime-`reshape`/`flatten`
+> (+ FOLLOWUPS-Messobligation Editor-Hover) und `keepdims`. Items 6/7 unverändert offen.
+
 5. Elementwise-Familie (sub/mul/div), `dot`/Norm/Cosine-Similarity (der Embedding-Use-Case
    braucht genau das), Runtime-`reshape`/`flatten`, `keepdims` (Typ-Ebene existiert und ist
    getestet).

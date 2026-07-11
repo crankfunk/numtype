@@ -410,3 +410,76 @@ export function transposeRuntime(shape: readonly number[], data: Float64Array): 
   }
   return { shape: outShape, data: out };
 }
+
+// ---------------------------------------------------------------------------
+// Kern 07 (docs/kern-07-elementwise-vector-spec.md): dot/norm vector-op
+// support. Appended strictly after all pre-existing content in this file
+// (freeze discipline — `runtime.ts` is the pinned reference for the frozen
+// v1 differential suite; every line above this point is byte-for-byte
+// unchanged). `sub`/`mul`/`div` themselves need NO new runtime.ts code —
+// they reuse the existing `elementwiseBinary` with a pinned closure
+// (`(x, y) => x - y` etc.), exactly like `add` already does.
+// ---------------------------------------------------------------------------
+
+/**
+ * Shared vector-pair validator for `dot`/`cosineSimilarity`: both operands
+ * must be rank-1 with equal length. SHARED between the naive (`NDArray`)
+ * and resident (`WNDArray`) surfaces — spec parsing/validation is shared,
+ * data paths diverge (same rationale, and the same documented differential
+ * blind spot, as `normalizeSliceSpecs`, Kern 05). Checked in the
+ * message-table order (first operand rank, second operand rank, length
+ * mismatch); mirrors the compile-time `DotCheck` guard's message wording
+ * verbatim (spike/src/vector.ts) — pinned directly by unit tests of these
+ * exact strings, not just by the differential suite.
+ */
+export function assertVectorPair(op: string, aShape: readonly number[], bShape: readonly number[]): void {
+  if (aShape.length !== 1) {
+    throw new Error(`${op}: expected a 1-D vector as the first operand (got shape [${aShape.join(",")}])`);
+  }
+  if (bShape.length !== 1) {
+    throw new Error(`${op}: expected a 1-D vector as the second operand (got shape [${bShape.join(",")}])`);
+  }
+  const aLen = aShape[0] ?? 0;
+  const bLen = bShape[0] ?? 0;
+  if (aLen !== bLen) {
+    throw new Error(`${op}: vector lengths ${aLen} and ${bLen} do not match`);
+  }
+}
+
+/**
+ * 1-D inner product: `sum(a[i] * b[i])`, single accumulator, strictly
+ * ascending index, seed `0` — mirrors `dot_strided`'s bit-identity contract
+ * exactly (no FMA, no reordering; this makes `dotRuntime(a, a)` bit-
+ * identical to `sumRuntime` of the elementwise-squared array, which the
+ * differential suite pins). Callers validate the operand pair via
+ * `assertVectorPair` FIRST (same contract as `sliceRuntime` taking
+ * already-normalized specs) — this function assumes `aShape`/`bShape` are
+ * already known-valid (rank 1, equal length) and does not re-check.
+ */
+export function dotRuntime(aShape: readonly number[], aData: Float64Array, bShape: readonly number[], bData: Float64Array): number {
+  const n = aShape[0] ?? 0;
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    acc += (aData[i] ?? 0) * (bData[i] ?? 0);
+  }
+  return acc;
+}
+
+/**
+ * Sum of squares over every element of `data`, in flat order — single
+ * accumulator, strictly ascending index, seed `0`, `acc += v * v`. For the
+ * naive backend `data` is always already the shape's logical row-major
+ * flattening (every `NDArray` op materializes a fresh contiguous buffer —
+ * see ndarray.ts/module docs), so flat order IS logical order here; mirrors
+ * `norm_sq_strided`'s bit-identity contract. `Math.sqrt` of this result is
+ * `norm()` (TS-side, per the spec's pinned composition). Any rank/size,
+ * including size-0 (-> `0`).
+ */
+export function normSqRuntime(data: Float64Array): number {
+  let acc = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i] ?? 0;
+    acc += v * v;
+  }
+  return acc;
+}

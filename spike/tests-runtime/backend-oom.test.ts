@@ -107,6 +107,11 @@ function makeMockCore(failAtCall?: number): MockCore {
     nt_sum_axis_strided: notImplemented("nt_sum_axis_strided"),
     nt_materialize: notImplemented("nt_materialize"),
     nt_matmul_blocked: notImplemented("nt_matmul_blocked"),
+    nt_sub_strided: notImplemented("nt_sub_strided"),
+    nt_mul_strided: notImplemented("nt_mul_strided"),
+    nt_div_strided: notImplemented("nt_div_strided"),
+    nt_dot_strided: notImplemented("nt_dot_strided"),
+    nt_norm_sq_strided: notImplemented("nt_norm_sq_strided"),
   };
 
   return { core, allocs, frees };

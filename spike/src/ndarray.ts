@@ -24,10 +24,13 @@ import { type Dim, type Mutable, type Shape, type ShapeError } from "./dim.ts";
 import type { MatMul } from "./matmul.ts";
 import type { ReduceAxis, Transpose } from "./reduce.ts";
 import {
+  assertVectorPair,
   computeStrides,
+  dotRuntime,
   elementwiseBinary,
   matmulRuntime,
   normalizeSliceSpecs,
+  normSqRuntime,
   product,
   sliceRuntime,
   type SliceSpec,
@@ -35,6 +38,7 @@ import {
   transposeRuntime,
 } from "./runtime.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "./slice.ts";
+import type { DotCheck } from "./vector.ts";
 
 /** Narrow a possibly-erroring computed shape down to a real `Shape`,
  * excluding the `ShapeError` branch. Only ever evaluated at call sites
@@ -194,6 +198,34 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
     return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, data);
   }
 
+  /** Broadcasting elementwise subtract (Kern 07). Structural mirror of
+   * `add` — same `Broadcast`/`Guard`/`OkShape` pattern, pinned closure
+   * `(x, y) => x - y`. */
+  sub<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> {
+    const o = other as unknown as NDArray<B>;
+    const { shape, data } = elementwiseBinary(this.shape, this.data, o.shape, o.data, (x, y) => x - y);
+    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, data);
+  }
+
+  /** Broadcasting elementwise multiply (Kern 07). Structural mirror of
+   * `add` — pinned closure `(x, y) => x * y`. */
+  mul<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> {
+    const o = other as unknown as NDArray<B>;
+    const { shape, data } = elementwiseBinary(this.shape, this.data, o.shape, o.data, (x, y) => x * y);
+    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, data);
+  }
+
+  /** Broadcasting elementwise divide (Kern 07). Structural mirror of `add`
+   * — pinned closure `(x, y) => x / y`. Pure IEEE 754: no zero checks, no
+   * throws (`x/0 -> +/-Infinity`, `0/0 -> NaN`, signed zeros/infinities
+   * propagate per the standard — a documented divergence from NumPy, which
+   * additionally warns; see spec). */
+  div<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> {
+    const o = other as unknown as NDArray<B>;
+    const { shape, data } = elementwiseBinary(this.shape, this.data, o.shape, o.data, (x, y) => x / y);
+    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, data);
+  }
+
   /** Full NumPy `matmul`: 2-D product, 1-D promotion, batch broadcasting. */
   matmul<B extends Shape>(other: Guard<MatMul<S, B>, NDArray<B>>): NDArray<OkShape<MatMul<S, B>>> {
     const o = other as unknown as NDArray<B>;
@@ -209,6 +241,45 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
     const axisNum = axis as unknown as Axis | undefined;
     const { shape, data } = sumRuntime(this.shape, this.data, axisNum);
     return new NDArray<OkShape<ReduceAxis<S, Axis>>>(shape as OkShape<ReduceAxis<S, Axis>>, data);
+  }
+
+  /** 1-D inner product (Kern 07): `a.dot(b)` for two rank-1 arrays of equal
+   * length. Returns a plain `number` — deliberately leaves the `NDArray`
+   * world (see spec's "dot(other)" design note: `sum()` is a reduction
+   * that stays chainable, `dot`/`norm`/`cosineSimilarity` are scalar
+   * consumer ops that terminate a chain). Rank != 1 (either operand) or a
+   * length mismatch is a compile error at the argument (`DotCheck`) and a
+   * runtime throw (`assertVectorPair`) for the gradual/dynamic cases the
+   * type layer couldn't check statically. */
+  dot<B extends Shape>(other: Guard<DotCheck<S, B, "dot">, NDArray<B>>): number {
+    const o = other as unknown as NDArray<B>;
+    assertVectorPair("dot", this.shape, o.shape);
+    return dotRuntime(this.shape, this.data, o.shape, o.data);
+  }
+
+  /** L2/Frobenius norm over ALL elements (Kern 07), any rank (mirrors
+   * `np.linalg.norm`'s default: flatten, then L2) — no guard, since a
+   * niladic method has no argument to hang one on and every rank is valid
+   * by this op's own semantics. `Math.sqrt` is IEEE-correctly-rounded, so
+   * this is bit-identical to `WNDArray.norm` iff the underlying sum of
+   * squares is (which the differential suite asserts). */
+  norm(): number {
+    return Math.sqrt(normSqRuntime(this.data));
+  }
+
+  /** Cosine similarity (Kern 07): same rank-1/equal-length operand contract
+   * as `dot` (own error-message prefix). The pinned expression (spec,
+   * identical on both surfaces): `num = dot(a,b)`, `den =
+   * sqrt(normSq(a)) * sqrt(normSq(b))`, `return num / den`. Pure IEEE, no
+   * epsilon guards: a zero vector on either side makes `den` (or both
+   * `num` and `den`) `0`, yielding `NaN`; an adversarial magnitude split
+   * can underflow `den` to `0` with `num != 0`, yielding `+/-Infinity`. */
+  cosineSimilarity<B extends Shape>(other: Guard<DotCheck<S, B, "cosineSimilarity">, NDArray<B>>): number {
+    const o = other as unknown as NDArray<B>;
+    assertVectorPair("cosineSimilarity", this.shape, o.shape);
+    const num = dotRuntime(this.shape, this.data, o.shape, o.data);
+    const den = Math.sqrt(normSqRuntime(this.data)) * Math.sqrt(normSqRuntime(o.data));
+    return num / den;
   }
 
   /** Reverse every axis (NumPy's `.T` generalized to N-D). */

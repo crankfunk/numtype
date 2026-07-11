@@ -188,4 +188,60 @@ rViewProduct.dispose();
 rASlice.dispose();
 rSliceSum.dispose();
 
+// --- Kern 07: elementwise sub/mul/div + vector ops (dot/norm/cosineSimilarity) ---
+// Small embedding-flavored vectors (the RAG use case the spec targets):
+// two 4-dim "embeddings" and a per-dimension scaling/offset vector. The v1
+// backend deliberately does NOT appear here — it stays the frozen
+// four-op (add/matmul/sum/transpose) performance baseline (spec: "the v1
+// backend deliberately does NOT appear for the new ops").
+console.log("\n=== Kern 07: elementwise sub/mul/div + dot/norm/cosineSimilarity ===\n");
+
+const embA = NDArray.fromArray([4], [0.2, 0.4, 0.1, 0.8]);
+const embB = NDArray.fromArray([4], [0.5, 0.1, 0.3, 0.2]);
+const scale = NDArray.fromArray([4], [2, 2, 2, 2]);
+
+const diff = embA.sub(embB);
+printArray("embA - embB  ", diff);
+const scaled = embA.mul(scale);
+printArray("embA * scale ", scaled);
+const halved = embA.div(scale);
+printArray("embA / scale ", halved);
+
+const dot = embA.dot(embB);
+const normA = embA.norm();
+const normB = embB.norm();
+const cosine = embA.cosineSimilarity(embB);
+console.log(`embA . embB (dot)        = ${dot}`);
+console.log(`||embA|| (norm)          = ${normA}`);
+console.log(`||embB|| (norm)          = ${normB}`);
+console.log(`cosineSimilarity(A,B)    = ${cosine}\n`);
+
+const rEmbA = WNDArray.fromArray(core, embA.shape, embA.data);
+const rEmbB = WNDArray.fromArray(core, embB.shape, embB.data);
+const rScale = WNDArray.fromArray(core, scale.shape, scale.data);
+
+const rDiff = rEmbA.sub(rEmbB);
+assertResidentAgrees("embA - embB", diff, rDiff);
+const rScaled = rEmbA.mul(rScale);
+assertResidentAgrees("embA * scale", scaled, rScaled);
+const rHalved = rEmbA.div(rScale);
+assertResidentAgrees("embA / scale", halved, rHalved);
+
+const rDot = rEmbA.dot(rEmbB);
+const rNormA = rEmbA.norm();
+const rNormB = rEmbB.norm();
+const rCosine = rEmbA.cosineSimilarity(rEmbB);
+if (!Object.is(dot, rDot)) throw new Error(`dot: TS/resident bit divergence: ${dot} vs ${rDot}`);
+if (!Object.is(normA, rNormA)) throw new Error(`norm(embA): TS/resident bit divergence: ${normA} vs ${rNormA}`);
+if (!Object.is(normB, rNormB)) throw new Error(`norm(embB): TS/resident bit divergence: ${normB} vs ${rNormB}`);
+if (!Object.is(cosine, rCosine)) throw new Error(`cosineSimilarity: TS/resident bit divergence: ${cosine} vs ${rCosine}`);
+console.log(`  [wasm resident] dot=${rDot} norm(A)=${rNormA} norm(B)=${rNormB} cosineSimilarity=${rCosine} — matches TS bit-for-bit\n`);
+
+rEmbA.dispose();
+rEmbB.dispose();
+rScale.dispose();
+rDiff.dispose();
+rScaled.dispose();
+rHalved.dispose();
+
 console.log("=== demo complete: TS, WASM v1, and WASM resident all agree on every showcase op ===");

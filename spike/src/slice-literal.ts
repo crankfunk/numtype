@@ -626,7 +626,7 @@ type MulDigits<A extends string, B extends string> = StripLeadingZeros<ReverseSt
  * propagates through the whole product as `never` instead of an honest
  * `number` degrade — the standard never-always-matches gotcha, empirically
  * confirmed by ablation while building this block.) */
-type IsUnion<T, U = T> = [T] extends [never] ? false : T extends unknown ? ([U] extends [T] ? false : true) : never;
+export type IsUnion<T, U = T> = [T] extends [never] ? false : T extends unknown ? ([U] extends [T] ? false : true) : never;
 
 /**
  * The product of a fixed-rank shape's dims, decided per-dim in this exact

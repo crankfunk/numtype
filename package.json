@@ -12,7 +12,7 @@
     "build:wasm:threads": "bash scripts/build-wasm-threads.sh",
     "demo": "pnpm build:wasm && node spike/demo.ts",
     "test:core": "pnpm build:wasm && node --test spike/tests-runtime/add.test.ts spike/tests-runtime/backend-oom.test.ts spike/tests-runtime/fill.test.ts spike/tests-runtime/matmul.test.ts spike/tests-runtime/negative-paths.test.ts spike/tests-runtime/sum.test.ts spike/tests-runtime/test-scripts-guard.test.ts spike/tests-runtime/transpose.test.ts",
-    "test:resident": "pnpm build:wasm && node --test spike/tests-runtime/resident.test.ts spike/tests-runtime/resident-lifecycle.test.ts spike/tests-runtime/resident-gc.test.ts spike/tests-runtime/fromarray-overload.test.ts spike/tests-runtime/strided.test.ts spike/tests-runtime/strided-lifecycle.test.ts spike/tests-runtime/blocked.test.ts spike/tests-runtime/slice.test.ts",
+    "test:resident": "pnpm build:wasm && node --test spike/tests-runtime/resident.test.ts spike/tests-runtime/resident-lifecycle.test.ts spike/tests-runtime/resident-gc.test.ts spike/tests-runtime/fromarray-overload.test.ts spike/tests-runtime/strided.test.ts spike/tests-runtime/strided-lifecycle.test.ts spike/tests-runtime/blocked.test.ts spike/tests-runtime/slice.test.ts spike/tests-runtime/elementwise.test.ts spike/tests-runtime/vector.test.ts",
     "test:resident:gc": "pnpm build:wasm && node --expose-gc --test spike/tests-runtime/resident-gc.test.ts",
     "test:threaded": "pnpm build:wasm:threads && node --test spike/tests-runtime/threaded.test.ts",
     "bench:core": "pnpm build:wasm && node spike/bench-core/matmul-256.ts",

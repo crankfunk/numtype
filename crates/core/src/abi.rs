@@ -977,3 +977,366 @@ pub extern "C" fn nt_matmul_blocked_partial(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Kern 07 (docs/kern-07-elementwise-vector-spec.md): elementwise sub/mul/div
+// + dot/norm_sq vector reductions. Appended strictly after every
+// pre-existing item in this file (freeze discipline: `nt_matmul_blocked_partial`
+// above is the last pre-existing item; nothing above this comment is
+// touched). NOT cfg-gated (unlike `nt_matmul_blocked_partial`) — these ops
+// belong in BOTH the plain artifact (`pnpm build:wasm`) and the threads
+// artifact, so the plain artifact's hash necessarily changes this phase
+// (Kern-04 precedent, disclosed in the spec's freeze section).
+// ---------------------------------------------------------------------------
+
+/// Kern 07: broadcasting elementwise subtract over two strided views
+/// (`a - b`). Identical operand-quadruple convention, prevalidation order,
+/// and status set to `nt_add_strided` — see that function's doc comment.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub extern "C" fn nt_sub_strided(
+    a_shape_ptr: u32,
+    a_rank: u32,
+    a_strides_ptr: u32,
+    a_offset: u32,
+    a_data_ptr: u32,
+    a_data_len: u32,
+    b_shape_ptr: u32,
+    b_rank: u32,
+    b_strides_ptr: u32,
+    b_offset: u32,
+    b_data_ptr: u32,
+    b_data_len: u32,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    if let Err(e) = validate_rank(a_rank).and(validate_rank(b_rank)) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(a_shape_ptr, a_rank, 4),
+        validate_region(a_strides_ptr, a_rank, 4),
+        validate_region(a_data_ptr, a_data_len, 8),
+        validate_region(b_shape_ptr, b_rank, 4),
+        validate_region(b_strides_ptr, b_rank, 4),
+        validate_region(b_data_ptr, b_data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let a_shape: &[u32] = unsafe { read_slice(a_shape_ptr, a_rank) };
+    let a_strides: &[u32] = unsafe { read_slice(a_strides_ptr, a_rank) };
+    let a_data: &[f64] = unsafe { read_slice(a_data_ptr, a_data_len) };
+    let b_shape: &[u32] = unsafe { read_slice(b_shape_ptr, b_rank) };
+    let b_strides: &[u32] = unsafe { read_slice(b_strides_ptr, b_rank) };
+    let b_data: &[f64] = unsafe { read_slice(b_data_ptr, b_data_len) };
+
+    match kernels::elementwise::sub_strided(a_shape, a_strides, a_offset, a_data, b_shape, b_strides, b_offset, b_data) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// Kern 07: broadcasting elementwise multiply over two strided views
+/// (`a * b`). Identical convention to `nt_sub_strided`/`nt_add_strided`.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub extern "C" fn nt_mul_strided(
+    a_shape_ptr: u32,
+    a_rank: u32,
+    a_strides_ptr: u32,
+    a_offset: u32,
+    a_data_ptr: u32,
+    a_data_len: u32,
+    b_shape_ptr: u32,
+    b_rank: u32,
+    b_strides_ptr: u32,
+    b_offset: u32,
+    b_data_ptr: u32,
+    b_data_len: u32,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    if let Err(e) = validate_rank(a_rank).and(validate_rank(b_rank)) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(a_shape_ptr, a_rank, 4),
+        validate_region(a_strides_ptr, a_rank, 4),
+        validate_region(a_data_ptr, a_data_len, 8),
+        validate_region(b_shape_ptr, b_rank, 4),
+        validate_region(b_strides_ptr, b_rank, 4),
+        validate_region(b_data_ptr, b_data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let a_shape: &[u32] = unsafe { read_slice(a_shape_ptr, a_rank) };
+    let a_strides: &[u32] = unsafe { read_slice(a_strides_ptr, a_rank) };
+    let a_data: &[f64] = unsafe { read_slice(a_data_ptr, a_data_len) };
+    let b_shape: &[u32] = unsafe { read_slice(b_shape_ptr, b_rank) };
+    let b_strides: &[u32] = unsafe { read_slice(b_strides_ptr, b_rank) };
+    let b_data: &[f64] = unsafe { read_slice(b_data_ptr, b_data_len) };
+
+    match kernels::elementwise::mul_strided(a_shape, a_strides, a_offset, a_data, b_shape, b_strides, b_offset, b_data) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// Kern 07: broadcasting elementwise divide over two strided views
+/// (`a / b`). Identical convention to `nt_sub_strided`/`nt_add_strided`.
+/// Pure IEEE 754 (see `kernels::elementwise` module doc) — never returns a
+/// non-zero status for a zero divisor; `x/0.0`, `0.0/0.0` flow through as
+/// signed infinity / NaN in the output data.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub extern "C" fn nt_div_strided(
+    a_shape_ptr: u32,
+    a_rank: u32,
+    a_strides_ptr: u32,
+    a_offset: u32,
+    a_data_ptr: u32,
+    a_data_len: u32,
+    b_shape_ptr: u32,
+    b_rank: u32,
+    b_strides_ptr: u32,
+    b_offset: u32,
+    b_data_ptr: u32,
+    b_data_len: u32,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    if let Err(e) = validate_rank(a_rank).and(validate_rank(b_rank)) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(a_shape_ptr, a_rank, 4),
+        validate_region(a_strides_ptr, a_rank, 4),
+        validate_region(a_data_ptr, a_data_len, 8),
+        validate_region(b_shape_ptr, b_rank, 4),
+        validate_region(b_strides_ptr, b_rank, 4),
+        validate_region(b_data_ptr, b_data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let a_shape: &[u32] = unsafe { read_slice(a_shape_ptr, a_rank) };
+    let a_strides: &[u32] = unsafe { read_slice(a_strides_ptr, a_rank) };
+    let a_data: &[f64] = unsafe { read_slice(a_data_ptr, a_data_len) };
+    let b_shape: &[u32] = unsafe { read_slice(b_shape_ptr, b_rank) };
+    let b_strides: &[u32] = unsafe { read_slice(b_strides_ptr, b_rank) };
+    let b_data: &[f64] = unsafe { read_slice(b_data_ptr, b_data_len) };
+
+    match kernels::elementwise::div_strided(a_shape, a_strides, a_offset, a_data, b_shape, b_strides, b_offset, b_data) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// Kern 07: 1-D inner product of two strided rank-1 views. Output is
+/// implicit len=1 (a single f64), matching `nt_sum_all_strided`'s
+/// convention (no `out_len` parameter). `dot_strided` itself validates
+/// rank==1/equal-length as `ShapeIncompatible` (status 1) — this
+/// prevalidation only covers rank-too-large (status 2) and region/size
+/// overflow (status 3), same division of responsibility as every other
+/// hardened entry point here.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub extern "C" fn nt_dot_strided(
+    a_shape_ptr: u32,
+    a_rank: u32,
+    a_strides_ptr: u32,
+    a_offset: u32,
+    a_data_ptr: u32,
+    a_data_len: u32,
+    b_shape_ptr: u32,
+    b_rank: u32,
+    b_strides_ptr: u32,
+    b_offset: u32,
+    b_data_ptr: u32,
+    b_data_len: u32,
+    out_data_ptr: u32,
+) -> u32 {
+    if let Err(e) = validate_rank(a_rank).and(validate_rank(b_rank)) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(a_shape_ptr, a_rank, 4),
+        validate_region(a_strides_ptr, a_rank, 4),
+        validate_region(a_data_ptr, a_data_len, 8),
+        validate_region(b_shape_ptr, b_rank, 4),
+        validate_region(b_strides_ptr, b_rank, 4),
+        validate_region(b_data_ptr, b_data_len, 8),
+        validate_region(out_data_ptr, 1, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let a_shape: &[u32] = unsafe { read_slice(a_shape_ptr, a_rank) };
+    let a_strides: &[u32] = unsafe { read_slice(a_strides_ptr, a_rank) };
+    let a_data: &[f64] = unsafe { read_slice(a_data_ptr, a_data_len) };
+    let b_shape: &[u32] = unsafe { read_slice(b_shape_ptr, b_rank) };
+    let b_strides: &[u32] = unsafe { read_slice(b_strides_ptr, b_rank) };
+    let b_data: &[f64] = unsafe { read_slice(b_data_ptr, b_data_len) };
+
+    match kernels::vector::dot_strided(a_shape, a_strides, a_offset, a_data, b_shape, b_strides, b_offset, b_data) {
+        Ok(total) => {
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, 1) };
+            dst[0] = total;
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// Kern 07: sum of squares over every element of a strided view (any rank),
+/// accumulated in LOGICAL row-major order. Output implicit len=1, same
+/// convention as `nt_sum_all_strided` (which this otherwise mirrors
+/// exactly, one operand instead of two, `v*v` instead of `v`).
+#[no_mangle]
+pub extern "C" fn nt_norm_sq_strided(
+    shape_ptr: u32,
+    rank: u32,
+    strides_ptr: u32,
+    offset: u32,
+    data_ptr: u32,
+    data_len: u32,
+    out_data_ptr: u32,
+) -> u32 {
+    if let Err(e) = validate_rank(rank) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(shape_ptr, rank, 4),
+        validate_region(strides_ptr, rank, 4),
+        validate_region(data_ptr, data_len, 8),
+        validate_region(out_data_ptr, 1, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
+    let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
+    let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
+
+    match kernels::vector::norm_sq_strided(shape, strides, offset, data) {
+        Ok(total) => {
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, 1) };
+            dst[0] = total;
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// New test module for this phase (Kern 07) — deliberately SEPARATE from the
+/// pre-existing `mod tests` above `nt_matmul_blocked_partial` (freeze
+/// discipline: never insert into that module). Same garbage-rank/garbage-len
+/// prevalidation pattern as its own "defense-in-depth prevalidation, per
+/// hardened entry point" section — every pointer here is the sentinel `0`,
+/// safe only because prevalidation is guaranteed to reject before any
+/// `read_slice`/`read_slice_mut` call is reached (see that section's NOTE
+/// in the pre-existing module for the full native-host-safety argument).
+#[cfg(test)]
+mod kern07_abi_tests {
+    use super::*;
+
+    #[test]
+    fn sub_strided_garbage_rank_is_status_2() {
+        assert_eq!(
+            nt_sub_strided(0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::RankTooLarge.status()
+        );
+    }
+
+    #[test]
+    fn sub_strided_garbage_len_is_status_3() {
+        assert_eq!(
+            nt_sub_strided(0, 0, 0, 0, 0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::SizeOverflow.status()
+        );
+    }
+
+    #[test]
+    fn mul_strided_garbage_rank_is_status_2() {
+        assert_eq!(
+            nt_mul_strided(0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::RankTooLarge.status()
+        );
+    }
+
+    #[test]
+    fn mul_strided_garbage_len_is_status_3() {
+        assert_eq!(
+            nt_mul_strided(0, 0, 0, 0, 0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::SizeOverflow.status()
+        );
+    }
+
+    #[test]
+    fn div_strided_garbage_rank_is_status_2() {
+        assert_eq!(
+            nt_div_strided(0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::RankTooLarge.status()
+        );
+    }
+
+    #[test]
+    fn div_strided_garbage_len_is_status_3() {
+        assert_eq!(
+            nt_div_strided(0, 0, 0, 0, 0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::SizeOverflow.status()
+        );
+    }
+
+    #[test]
+    fn dot_strided_garbage_rank_is_status_2() {
+        assert_eq!(
+            nt_dot_strided(0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::RankTooLarge.status()
+        );
+    }
+
+    #[test]
+    fn dot_strided_garbage_len_is_status_3() {
+        assert_eq!(
+            nt_dot_strided(0, 0, 0, 0, 0, u32::MAX, 0, 0, 0, 0, 0, 0, 0),
+            KernelError::SizeOverflow.status()
+        );
+    }
+
+    #[test]
+    fn norm_sq_strided_garbage_rank_is_status_2() {
+        assert_eq!(nt_norm_sq_strided(0, u32::MAX, 0, 0, 0, 0, 0), KernelError::RankTooLarge.status());
+    }
+
+    #[test]
+    fn norm_sq_strided_garbage_len_is_status_3() {
+        assert_eq!(nt_norm_sq_strided(0, 0, 0, 0, 0, u32::MAX, 0), KernelError::SizeOverflow.status());
+    }
+}
+

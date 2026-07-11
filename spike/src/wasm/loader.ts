@@ -171,3 +171,90 @@ export async function initCore(): Promise<CoreExports> {
   const instance = await instantiate();
   return instance.exports as unknown as CoreExports;
 }
+
+// --- Kern 07 (docs/kern-07-elementwise-vector-spec.md): elementwise
+// sub/mul/div + dot/norm_sq reductions. Declared as a SEPARATE
+// `export interface CoreExports { ... }` block, appended strictly after
+// every pre-existing line in this file (freeze discipline) — TypeScript
+// merges same-named interface declarations in the same module
+// automatically, so this augments the identical `CoreExports` type without
+// touching a single pre-existing line.
+export interface CoreExports {
+  // sub/mul/div: identical 14-argument convention to `nt_add_strided`.
+  nt_sub_strided(
+    aShapePtr: number,
+    aRank: number,
+    aStridesPtr: number,
+    aOffset: number,
+    aDataPtr: number,
+    aDataLen: number,
+    bShapePtr: number,
+    bRank: number,
+    bStridesPtr: number,
+    bOffset: number,
+    bDataPtr: number,
+    bDataLen: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
+  nt_mul_strided(
+    aShapePtr: number,
+    aRank: number,
+    aStridesPtr: number,
+    aOffset: number,
+    aDataPtr: number,
+    aDataLen: number,
+    bShapePtr: number,
+    bRank: number,
+    bStridesPtr: number,
+    bOffset: number,
+    bDataPtr: number,
+    bDataLen: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
+  nt_div_strided(
+    aShapePtr: number,
+    aRank: number,
+    aStridesPtr: number,
+    aOffset: number,
+    aDataPtr: number,
+    aDataLen: number,
+    bShapePtr: number,
+    bRank: number,
+    bStridesPtr: number,
+    bOffset: number,
+    bDataPtr: number,
+    bDataLen: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
+  // dot: two strided-operand quadruples + outDataPtr, output implicitly 1
+  // f64 (no outLen), matching `nt_sum_all_strided`'s convention.
+  nt_dot_strided(
+    aShapePtr: number,
+    aRank: number,
+    aStridesPtr: number,
+    aOffset: number,
+    aDataPtr: number,
+    aDataLen: number,
+    bShapePtr: number,
+    bRank: number,
+    bStridesPtr: number,
+    bOffset: number,
+    bDataPtr: number,
+    bDataLen: number,
+    outDataPtr: number,
+  ): number;
+  // norm_sq: one strided-operand quadruple + outDataPtr, output implicitly
+  // 1 f64 — identical convention to `nt_sum_all_strided`.
+  nt_norm_sq_strided(
+    shapePtr: number,
+    rank: number,
+    stridesPtr: number,
+    offset: number,
+    dataPtr: number,
+    dataLen: number,
+    outDataPtr: number,
+  ): number;
+}
