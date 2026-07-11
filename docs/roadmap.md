@@ -66,6 +66,12 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
 
 ### Phase A — USP absichern (zuerst: das strukturelle Killer-Risiko)
 
+> **Status 2026-07-11: Phase A KOMPLETT, inkl. Kür.** A1 = Spike 02 (Gate PASS), A2 = Spikes
+> 03+04 (Bounds-Checks; Shape-Produkte via Digit-Multiplikation, GO als offengelegte
+> Gate-Abweichung), A3 = Spike 05 (`NDArrayView<out S>`, NDArray bleibt invariant), A4/Kür =
+> Spike 06 (negative literale start/stop + literale steps, Step-Guard). Details in den
+> jeweiligen docs/spike-0X-*-Paaren; Faktenstand wie immer in FOLLOWUPS.md.
+
 1. **Editor-Latenz real messen** (VS Code tsserver, nicht nur der `tsc
    --extendedDiagnostics`-Proxy). Der USP *ist* das Editor-Erlebnis; wird Hover/Squiggle bei
    realistischen Op-Ketten träge, muss das Typ-Design reagieren, bevor irgendetwas anderes
