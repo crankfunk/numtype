@@ -87,14 +87,20 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
 
 ### Phase B — Minimum Viable Op-Surface (an den Use Cases entlang, nicht an NumPy)
 
-> **Status 2026-07-11: Item 5 fast komplett — Kern 07** (sub/mul/div + dot/norm/
-> cosineSimilarity, bit-identisch, verifiziert; docs/kern-07-*) **+ Kern 08**
-> (Runtime-`reshape`/`flatten` konsumieren `LiteralShapeProduct`, Guard-Wortlaut wortgleich
-> Runtime ⇄ Compile, Editor-Hover-Messobligation eingelöst — W6 in-family, 0,06 ms;
-> Artefakt-Hash byte-identisch; verifiziert; docs/kern-08-*). Offen aus Item 5: nur noch
-> `keepdims`. Items 6/7 unverändert offen. Das Kern-08-G2-Trend-Flag ist AUFGELÖST
-> (Owner-Entscheidung → Infra 01, docs/infra-01-stress-split.md): Stress-Typtests in
-> separat gemessener tsconfig, Haupt-Pin 173 716 / Stress-Pin 94 523, `check` = Verbund.
+> **Status 2026-07-12: Phase B KOMPLETT (Items 5–7 alle erledigt & zweifach verifiziert).**
+> Item 5: Kern 07 (sub/mul/div + dot/norm/cosineSimilarity, docs/kern-07-*), Kern 08
+> (Runtime-`reshape`/`flatten` konsumieren `LiteralShapeProduct`, docs/kern-08-*), Kern 09
+> (Runtime-`keepdims` auf `sum()` beider Surfaces, `ReduceAxis<S,Axis,KeepDims>`, docs/kern-09-*).
+> Item 6: **Kern 10** (IEEE-754-Spezialwerte NaN/±Inf/±0/Subnormals in den Differential-
+> generator injiziert — Bit-Identität auch dort belegt, SIMD-matmul erhält Subnormals nachweislich;
+> docs/kern-10-*). Item 7: **Kern 11** (messgetriebener Contiguous-elementwise-Fast-Path,
+> 13–17× durch Überspringen der per-Element-`unravel`-Allokation, bit-identisch; SIMD elementwise
+> + Packing-Reuse-A gemessen NO-GO; docs/kern-11-*). Ab Kern 09 gilt die Zwei-Verifier-Regel
+> (Spec + adversarial, docs/verify-runde-template.md). Pins seit Kern 11: Haupt-`check:diag`
+> **172 392 @ 128** (der Rückgang ggü. Kern 10 ist reihenfolge-abhängiges Mess-Rauschen, gepinnt —
+> docs/kern-11-*), Stress **94 597**, Artefakt-Hash `0b9df4f1…`. Das Kern-08-G2-Trend-Flag ist
+> AUFGELÖST (Infra 01, docs/infra-01-stress-split.md): Stress-Typtests separat gemessen, `check`
+> = Verbund. **Nächstes: Phase C oder D.**
 
 5. Elementwise-Familie (sub/mul/div), `dot`/Norm/Cosine-Similarity (der Embedding-Use-Case
    braucht genau das), Runtime-`reshape`/`flatten`, `keepdims` (Typ-Ebene existiert und ist
