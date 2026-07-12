@@ -26,6 +26,37 @@ steckte in einem frei formulierten Auftrag.
    „out of scope, pre-existing" notieren, nicht als Blocker behandeln.
 6. **Alle Kommandos vom Repo-Root** (cargo-Config-Discovery ist CWD-basiert).
 
+## Baustein 0 — adversarialer Spec-Verifier (VOR der Implementierung)
+
+Läuft nach der Owner-Richtungsabnahme einer bindenden Spec, BEVOR Code entsteht
+(CLAUDE.md „Spec-Verifikation VOR der Implementierung", Owner-Mandat 2026-07-12).
+EIN `brainroute:deep`-Agent, frischer Kontext. Es existiert kein Diff — Gegenstand
+ist die SPEC gegen den ECHTEN bestehenden Code. Auftrag = das Design brechen, nicht
+bestätigen. Zusätzlich zu den gemeinsamen Pflichtregeln:
+
+- **Code-Annahmen der Spec verifizieren**: jede Behauptung der Spec über bestehende
+  Symbole/Signaturen/Dateien am Code prüfen (gelesene Datei:Zeile). Eine falsche
+  Annahme kippt eine Binding-Entscheidung → Blocker (genau der Item-10-Fund:
+  `WNDArray.strides` ist ein Feld, keine Methode).
+- **Design-Löcher**: API-Form/Overload-Auflösung, Cross-Fall-Operanden (falsche
+  Kombinationen), Fehler-/Env-Detektionspfade (erreichbar? statische vs. dynamische
+  Imports, Plattform-Kontamination), Lifecycle-/Dispose-Fallen, Nachbar-Effekte.
+- **Typ-Ebene adversarial**: Varianz (`out S`, Method-Shorthand-Bivarianz), Union-/
+  Degradationskanten, Signatur-Kollisionen mit bestehenden Membern — bei Bedarf
+  EMPIRISCH in einer Scratch-Kopie / eigenem worktree typchecken (nie im Haupt-Tree).
+- **Testplan- & Freeze-Lücken**: fehlende Fälle (Rang 0, size-0, Views, Fehlerpfade,
+  Lifecycle); baut der zugewiesene Test-Task überhaupt das nötige Artefakt (z. B.
+  `build:wasm:threads` vs. `build:wasm`)? Hält die Freeze-Behauptung (fügt IRGENDEIN
+  Teil Rust/ABI-Bedarf hinzu)?
+- **Deliverable**: Report nach Kategorien (falsche Code-Annahmen / Design-Löcher /
+  Testplan-Freeze-Lücken / Nits), je Befund Schweregrad + Konfidenz + Verankerung;
+  die geprüften Annahmen, die HALTEN, knapp. KEINE Gates ausführen (es gibt keine
+  Impl). Der Report IST die Deliverable — nicht auf einer Absicht/Nebensache enden.
+
+Danach: der Orchestrator merged die Befunde, arbeitet Design-Blocker mit dem Owner
+in die Spec ein (Richtungsänderungen abnehmen lassen), pinnt ein „Adversariale
+Spec-Verifikation (Addendum)" in die Spec, DANN erst Implementierung.
+
 ## Baustein A — Spec-Verifier („entspricht es der Spec?")
 
 Auftrag enthält zusätzlich:

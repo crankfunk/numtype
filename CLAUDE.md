@@ -82,6 +82,15 @@ Substanz hielt, aber globale standing orders und Prozess-Feinheiten verlor
 - **Hintergrund-Agenten fassen den Haupt-Working-Tree nie an** — kein `git
   stash`/`git checkout` dort; Messungen und Mutanten in eigenen worktrees/
   Scratch-Kopien.
+- **Spec-Verifikation VOR der Implementierung:** Jede bindende Spec durchläuft
+  nach der Owner-Richtungsabnahme EINEN adversarialen Fresh-Context-Verifier
+  (`brainroute:deep`) GEGEN die Spec — Design brechen, die Code-Annahmen der Spec
+  am echten Code prüfen, Design-Löcher/Testplan-Lücken/Freeze-Behauptungen — BEVOR
+  eine Zeile Code entsteht. Befunde mergen, Design-Blocker mit dem Owner in die
+  Spec einarbeiten (Richtungsänderungen abnehmen lassen), erst dann implementieren.
+  Auftrag aus docs/verify-runde-template.md „Baustein 0", nicht frei formulieren.
+  (Owner-Mandat 2026-07-12, nach der Item-10-Spec-Review, die drei Blocker vor dem
+  Bau fing — u. a. eine falsche Code-Annahme, in die sonst blind gebaut worden wäre.)
 - **Verify-Runde = IMMER zwei Verifier:** einer prüft gegen die Spec
   (Konformität, coverage-first, eigener Mutant), einer arbeitet adversarial
   (aktiv brechen: Grenzfälle, Messrandbedingungen, Mutanten auch abseits der
