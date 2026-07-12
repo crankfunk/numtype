@@ -114,14 +114,39 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
 
 ### Phase C — Plattform-Entscheidungen (können den v0-Scope beschneiden → vor der Paketierung)
 
+> **Status 2026-07-12: Items 8 & 9 entschieden (Owner) — ZURÜCKGESTELLT.** Nach einem
+> Scoping-Slice (Constraint-Recherche, kein Bau; docs/phase-c-threads-scoping.md) fiel die
+> Entscheidung auf **Option 1: Threads bleiben für v0 ein explizit experimentelles,
+> Node-only-Opt-in** — weder Browser-Port (8) noch stable/no_std-Pfad (9) werden jetzt
+> gebaut. Kernbefunde: (9) es gibt HEUTE keinen Weg weg vom pinned nightly — build-std bleibt
+> nightly-only und die 2026-RFCs 3874/3875 decken atomics-target-feature-Rebuilds NICHT ab,
+> `wasm32-wasip1-threads` ist eine Sackgasse (withdrawn Proposal, thread-spawn auf stable
+> kaputt, kein Browser-WASI), no_std entkommt vermutlich nicht (offen, 30-Min-Experiment →
+> FOLLOWUPS); unser Ansatz IST der Ökosystem-Standard (wasm-bindgen-rayon identisch), datierte
+> Nightlies reproduzierbar. (8) Der Port ist machbar/abgegrenzt, aber sein Wert ist durch
+> COOP/COEP-Deployment-Friction begrenzt (Header nur von der konsumierenden App setzbar; ein
+> großer Teil der Zielnutzer — GitHub Pages/Sandboxes/CDNs — kann nicht), und alle
+> Vergleichsprojekte liefern Threading als feature-detektiertes Opt-in, nie als Default.
+> Erfüllt das Release-Gate ("Threads sauber als Node-only/experimentell abgegrenzt").
+> **Nächstes: Item 10.**
+
 8. **Browser-Port des Threads-Pfads** (COOP/COEP, `crossOriginIsolated`, async Dispatch statt
    blockierendem `Atomics.wait` auf Main) — *oder* bewusste Entscheidung: Threads bleiben in
    v0 ein Node-only-Opt-in (vertretbar; das Standard-Artefakt baut heute schon auf stable).
+   **→ ZURÜCKGESTELLT 2026-07-12** (Option 1): Node-only-Opt-in gewählt; Port nur bei realer
+   Nachfrage COOP/COEP-fähiger Konsumenten, FOLLOWUPS.
 9. no_std/stable-Pfad fürs Threads-Artefakt — der Release soll nicht an einem gepinnten
    Nightly hängen; Alternative: Threads als explizit experimentelles Add-on kennzeichnen.
-10. **Backend-Wahl-API**: ein `NDArray`-Surface, Backend-Wahl bei der Erzeugung
-    (Datenplatzierung, primär Umgebungskriterien) — erst nach 8/9; Per-Call-Routing zwischen
-    Cores ist dokumentierte Sackgasse (FOLLOWUPS 2026-07-10, kern-06-Addendum).
+   **→ ZURÜCKGESTELLT 2026-07-12** (Option 1): als experimentelles Add-on gekennzeichnet;
+   kein Stable-Weg existiert heute (s. Scoping-Doc), das no_std-30-Min-Experiment steht in
+   FOLLOWUPS. Die nightly-Abhängigkeit ist Build-/Publish-Zeit, keine Endnutzer-Laufzeit.
+10. **Backend-Wahl-API** (NÄCHSTE Bau-Scheibe): ein `NDArray`-Surface, Backend-Wahl bei der
+    Erzeugung (Datenplatzierung, primär Umgebungskriterien) — durch die 8/9-Entscheidung
+    VEREINFACHT (stable-Backends bleiben synchron, kein async-Umbau): stable-Artefakt als
+    Default überall, Threads als umgebungs-detektiertes Node-only-Opt-in. Per-Call-Routing
+    zwischen Cores bleibt dokumentierte Sackgasse (FOLLOWUPS 2026-07-10, kern-06-Addendum).
+    Beginnt mit Spec/Design; die offene Design-Gabel (ein auto-wählendes Surface vs. explizite
+    Backends) geht VOR dem Spec-Freeze an den Owner.
 
 ### Phase D — Paketierung & Release
 
