@@ -1,0 +1,37 @@
+// V3 (Browser-Smoke-Test, docs/phase-d-vorarbeiten-spec.md D-V3.3): a
+// BUILD-ONLY tsconfig, not part of `pnpm check`'s type-check compound
+// (spike/tests-browser/tsconfig.json is that leg). Emits the raw product
+// source tree (spike/src/**/*.ts) to plain ESM .js so an actual browser —
+// which cannot execute .ts or resolve extensionless/`.ts`-suffixed relative
+// imports — can load it with zero bundler.
+//
+// `rewriteRelativeImportExtensions` (TS 7.0.2, verified via a scratch
+// project: static AND dynamic `./x.ts` imports both rewrite to `.js` in the
+// emitted output, no diagnostics, WITHOUT needing `allowImportingTsExtensions`
+// — that flag in fact forbids real emit, "requires --noEmit or
+// --emitDeclarationOnly" per `tsc --help --all`) rewrites every relative
+// `./foo.ts` import — including the DYNAMIC `import("./wasm/threaded.ts")`
+// in ndarray.ts's `backend()` method, which the browser test never actually
+// reaches — to `./foo.js`.
+//
+// `rootDir: ".."` (= spike/) + `outDir: "./.emit"` preserves the source
+// tree's shape under the emit dir: spike/src/wasm/loader.ts ->
+// .emit/src/wasm/loader.js, matching `WASM_URL`'s module-relative
+// `new URL("./numtype_core.wasm", import.meta.url)` once the .wasm binary
+// is copied next to it (test:browser script, package.json).
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": false,
+    "rewriteRelativeImportExtensions": true,
+    "outDir": "./.emit",
+    "rootDir": "..",
+    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true
+  },
+  "include": ["../src/**/*.ts", "../src/ambient.d.ts"]
+}

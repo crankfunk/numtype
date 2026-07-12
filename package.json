@@ -5,9 +5,10 @@
   "description": "NumType — n-dimensional arrays for TypeScript with compile-time shape checking (research spike)",
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit && tsc --noEmit -p spike/tests-stress",
+    "check": "tsc --noEmit && tsc --noEmit -p spike/tests-stress && tsc --noEmit -p spike/tests-browser",
     "check:diag": "tsc --noEmit --extendedDiagnostics",
     "check:diag:stress": "tsc --noEmit -p spike/tests-stress --extendedDiagnostics",
+    "check:diag:browser": "tsc --noEmit -p spike/tests-browser --extendedDiagnostics",
     "check:diag:bench": "tsc --noEmit -p spike/bench --extendedDiagnostics",
     "build:wasm": "cargo build --manifest-path crates/core/Cargo.toml --target wasm32-unknown-unknown --release && mkdir -p spike/src/wasm && cp crates/core/target/wasm32-unknown-unknown/release/numtype_core.wasm spike/src/wasm/numtype_core.wasm",
     "build:wasm:threads": "bash scripts/build-wasm-threads.sh",
@@ -16,6 +17,7 @@
     "test:resident": "pnpm build:wasm && node --test spike/tests-runtime/resident.test.ts spike/tests-runtime/resident-lifecycle.test.ts spike/tests-runtime/resident-gc.test.ts spike/tests-runtime/fromarray-overload.test.ts spike/tests-runtime/strided.test.ts spike/tests-runtime/strided-lifecycle.test.ts spike/tests-runtime/blocked.test.ts spike/tests-runtime/slice.test.ts spike/tests-runtime/elementwise.test.ts spike/tests-runtime/vector.test.ts spike/tests-runtime/reshape.test.ts spike/tests-runtime/keepdims.test.ts spike/tests-runtime/special-values.test.ts spike/tests-runtime/backend-api.test.ts",
     "test:resident:gc": "pnpm build:wasm && node --expose-gc --test spike/tests-runtime/resident-gc.test.ts",
     "test:threaded": "pnpm build:wasm:threads && node --test spike/tests-runtime/threaded.test.ts spike/tests-runtime/backend-api-threaded.test.ts",
+    "test:browser": "pnpm build:wasm && rm -rf spike/tests-browser/.emit && pnpm exec tsc -p spike/tests-browser/tsconfig.emit.json && mkdir -p spike/tests-browser/.emit/src/wasm && cp spike/src/wasm/numtype_core.wasm spike/tests-browser/.emit/src/wasm/numtype_core.wasm && pnpm exec playwright test spike/tests-browser/smoke.test.ts",
     "bench:core": "pnpm build:wasm && node spike/bench-core/matmul-256.ts",
     "bench:scaling": "pnpm build:wasm && node spike/bench-core/scaling.ts",
     "bench:strided": "pnpm build:wasm && node spike/bench-core/strided.ts",
@@ -28,6 +30,7 @@
     "bench:editor": "node spike/bench-dx/gen-workloads.ts && node spike/bench-dx/editor-latency.ts"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "typescript": "^7.0.2"
   }
 }

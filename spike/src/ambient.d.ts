@@ -136,6 +136,32 @@ declare module "node:url" {
   export function fileURLToPath(url: string): string;
 }
 
+/** V3 (Phase-D-Vorarbeiten, Browser-Smoke-Test): the minimal `node:http`
+ * surface the browser test fixture's static file server needs — same
+ * "scoped shim, not a general Node typings shim" discipline as every other
+ * declaration in this file. Just enough to serve a directory of static
+ * files (js/wasm/html) with per-response headers, on an OS-assigned
+ * ephemeral port (`listen(0, ...)` + `.address()`), and shut down cleanly. */
+declare module "node:http" {
+  interface IncomingMessageLike {
+    readonly url?: string;
+    readonly method?: string;
+  }
+  interface ServerResponseLike {
+    writeHead(statusCode: number, headers?: Record<string, string>): void;
+    end(data?: string | Uint8Array): void;
+  }
+  interface AddressInfoLike {
+    readonly port: number;
+  }
+  interface ServerLike {
+    listen(port: number, hostname: string, callback?: () => void): ServerLike;
+    close(callback?: (err?: Error) => void): void;
+    address(): AddressInfoLike | null;
+  }
+  export function createServer(handler: (req: IncomingMessageLike, res: ServerResponseLike) => void): ServerLike;
+}
+
 /** Spike 02: the minimal `child_process` surface the LSP harness needs —
  * `spawn` to run the native `tsc --lsp --stdio` server as a long-lived
  * subprocess (stdio piped, JSON-RPC framed over stdin/stdout), `execFileSync`

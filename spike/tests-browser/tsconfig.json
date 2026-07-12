@@ -10,6 +10,6 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true
   },
-  "include": ["spike"],
-  "exclude": ["spike/bench-dx/workloads", "spike/tests-stress", "spike/tests-browser"]
+  "include": [".", "../src/ambient.d.ts", "../../playwright.config.ts"],
+  "exclude": ["./.emit"]
 }
