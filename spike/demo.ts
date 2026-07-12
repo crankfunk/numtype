@@ -95,6 +95,11 @@ printArray("cube         ", cube);
 printArray("cube.sum(1)  ", reduced);
 assertBackendsAgree("cube.sum(1)", reduced, wasmSum(core, cube.shape, cube.data, 1));
 
+// Kern 09: keepdims keeps the reduced axis as size-1 (rank preserved) — same
+// data as cube.sum(1), shape [2,1,4] instead of [2,4].
+const reducedKeep = cube.sum(1, true);
+printArray("cube.sum(1,keep)", reducedKeep);
+
 // --- Transpose: [2,3] -> [3,2] ----------------------------------------------
 const transposed = a.transpose();
 printArray("A.transpose()", transposed);
@@ -147,6 +152,10 @@ const rCube = WNDArray.fromArray(core, cube.shape, cube.data);
 const rReduced = rCube.sum(1);
 assertResidentAgrees("cube.sum(1)", reduced, rReduced);
 
+// Kern 09: keepdims twin — same [2,1,4] shape and data as the reference above.
+const rReducedKeep = rCube.sum(1, true);
+assertResidentAgrees("cube.sum(1, keepdims)", reducedKeep, rReducedKeep);
+
 const rTransposed = rA.transpose();
 assertResidentAgrees("A.transpose()", transposed, rTransposed);
 
@@ -182,6 +191,7 @@ rM2.dispose();
 rProduct.dispose();
 rCube.dispose();
 rReduced.dispose();
+rReducedKeep.dispose();
 rTransposed.dispose();
 rM2View.dispose();
 rViewProduct.dispose();

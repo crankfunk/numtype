@@ -1,5 +1,6 @@
 import type { Shape } from "../src/dim.ts";
 import { type AnyNDArray, NDArray, type NDArrayView } from "../src/ndarray.ts";
+import type { WNDArray } from "../src/wasm/resident.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
 // --- const type params: callers never write `as const` ------------------
@@ -32,6 +33,41 @@ type T6 = Expect<Equal<(typeof summed)["shape"], [2, 4]>>;
 
 const summedAll = s.sum();
 type T7 = Expect<Equal<(typeof summedAll)["shape"], []>>;
+
+// --- keepdims (Kern 09): reduced axis kept as size-1, rank preserved -------
+// Type layer (`ReduceAxis<S, Axis, KeepDims>`) already pinned in
+// reduce.test-d.ts; these pin the `sum` method wiring (the `const KeepDims`
+// param must reach the return type).
+const summedKeep = s.sum(1, true);
+type T7a = Expect<Equal<(typeof summedKeep)["shape"], [2, 1, 4]>>;
+
+const summedAllKeep = s.sum(undefined, true);
+type T7b = Expect<Equal<(typeof summedAllKeep)["shape"], [1, 1, 1]>>;
+
+const summedNegKeep = s.sum(-1, true);
+type T7c = Expect<Equal<(typeof summedNegKeep)["shape"], [2, 3, 1]>>;
+
+const summedFalse = s.sum(1, false); // explicit `false` == default (axis removed)
+type T7d = Expect<Equal<(typeof summedFalse)["shape"], [2, 4]>>;
+
+// gradual: a dynamic (non-literal) boolean `keepdims` degrades to the union of
+// keep/non-keep shapes — the same deliberate degradation as a dynamic axis
+// (`const KeepDims` only pins LITERAL booleans; a variable stays `boolean`).
+declare const dynKeep: boolean;
+const summedDynKeep = s.sum(1, dynKeep);
+type T7e = Expect<Equal<(typeof summedDynKeep)["shape"], [2, 4] | [2, 1, 4]>>;
+
+// @ts-expect-error - axis 3 out of range even with keepdims: error stays at the axis argument
+s.sum(3, true);
+
+// resident twin: `WNDArray.sum` declares the `keepdims` signature independently
+// of `NDArray.sum`, so pin its return type separately (shares `ReduceAxis` +
+// `OkShape`, but a wiring typo in resident.ts wouldn't be caught above).
+declare const rw: WNDArray<[2, 3, 4]>;
+const rwKeep = rw.sum(1, true);
+type T7f = Expect<Equal<(typeof rwKeep)["shape"], [2, 1, 4]>>;
+const rwKeepAll = rw.sum(undefined, true);
+type T7g = Expect<Equal<(typeof rwKeepAll)["shape"], [1, 1, 1]>>;
 
 const transposed = s.transpose();
 type T8 = Expect<Equal<(typeof transposed)["shape"], [4, 3, 2]>>;

@@ -30,6 +30,7 @@ import {
   computeStrides,
   dotRuntime,
   elementwiseBinary,
+  keepDimsShape,
   matmulRuntime,
   normalizeSliceSpecs,
   normSqRuntime,
@@ -237,13 +238,22 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
   }
 
   /** Sum-reduce along `axis` (negative counts from the end); omit `axis` to
-   * sum every element down to a rank-0 array. */
-  sum<const Axis extends number | undefined = undefined>(
+   * sum every element down to a rank-0 array. Pass `keepdims = true` (NumPy
+   * `keepdims`) to keep the reduced axis as size-1 instead of removing it
+   * (rank preserved) — `undefined` axis + keepdims reduces every axis to an
+   * all-ones shape. keepdims is pure shape metadata: the summed DATA is
+   * byte-identical to the non-keepdims result (Kern 09). */
+  sum<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
     axis?: Guard<ReduceAxis<S, Axis>, Axis>,
-  ): NDArray<OkShape<ReduceAxis<S, Axis>>> {
+    keepdims?: KeepDims,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>> {
     const axisNum = axis as unknown as Axis | undefined;
     const { shape, data } = sumRuntime(this.shape, this.data, axisNum);
-    return new NDArray<OkShape<ReduceAxis<S, Axis>>>(shape as OkShape<ReduceAxis<S, Axis>>, data);
+    const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : shape;
+    return new NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>(
+      outShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
+      data,
+    );
   }
 
   /** 1-D inner product (Kern 07): `a.dot(b)` for two rank-1 arrays of equal

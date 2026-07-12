@@ -516,3 +516,22 @@ export function assertReshapeArgs(oldShape: readonly number[], newShape: readonl
     throw new Error(`reshape: cannot reshape array of size ${oldSize} into shape [${newShape.join(",")}]`);
   }
 }
+
+/**
+ * Output shape for a `keepdims=True` sum-reduction (Kern 09, NumPy semantics):
+ * the axis-reduced result of `sumRuntime`, but with the reduced axis kept as
+ * size-1 instead of removed. The reduction DATA is byte-identical either way —
+ * an axis of length 1 contributes nothing to the row-major order and leaves
+ * `product`/`data.length` unchanged — so callers run the ordinary reduce and
+ * swap in this shape (`NDArray.sum` and `WNDArray.sum` share this one helper,
+ * making the two surfaces shape-identical by construction). `axis === undefined`
+ * reduces every axis ⇒ all-ones of the input rank. `axis` is assumed already
+ * range-validated by the caller's reduce path (same axis normalization as
+ * `sumRuntime`); this is metadata only and throws nothing itself.
+ */
+export function keepDimsShape(shape: readonly number[], axis: number | undefined): number[] {
+  if (axis === undefined) return shape.map(() => 1);
+  const rank = shape.length;
+  const normAxis = axis < 0 ? rank + axis : axis;
+  return shape.map((d, i) => (i === normAxis ? 1 : d));
+}

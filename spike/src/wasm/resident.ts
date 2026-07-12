@@ -71,7 +71,7 @@ import type { Guard, OkShape } from "../ndarray.ts";
 import type { MatMul } from "../matmul.ts";
 import type { ReduceAxis, Transpose } from "../reduce.ts";
 import type { ReshapeCheck } from "../reshape.ts";
-import { assertReshapeArgs, assertVectorPair, computeStrides, normalizeSliceSpecs, product, runtimeBroadcastShape, type SliceSpec } from "../runtime.ts";
+import { assertReshapeArgs, assertVectorPair, computeStrides, keepDimsShape, normalizeSliceSpecs, product, runtimeBroadcastShape, type SliceSpec } from "../runtime.ts";
 import type { LiteralShapeProduct } from "../slice-literal.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "../slice.ts";
 import type { DotCheck } from "../vector.ts";
@@ -753,10 +753,16 @@ export class WNDArray<S extends Shape> {
    * sum every element down to a rank-0 array. Resident twin of
    * `NDArray.sum`/`wasmSum`, routed through the strided kernels. The full
    * sum accumulates in this view's LOGICAL row-major order (kernel
-   * contract) — bit-identical to summing the materialized equivalent. */
-  sum<const Axis extends number | undefined = undefined>(
+   * contract) — bit-identical to summing the materialized equivalent. Pass
+   * `keepdims = true` (NumPy `keepdims`) to keep the reduced axis as size-1
+   * instead of removing it — pure shape metadata via the shared
+   * `keepDimsShape` helper, so the summed DATA is unchanged (Kern 09); the
+   * kernel call and result length are identical (a size-1 axis leaves
+   * `product` unchanged). */
+  sum<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
     axis?: Guard<ReduceAxis<S, Axis>, Axis>,
-  ): WNDArray<OkShape<ReduceAxis<S, Axis>>> {
+    keepdims?: KeepDims,
+  ): WNDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>> {
     this.assertLive("sum");
     const axisNum = axis as unknown as Axis | undefined;
 
@@ -782,9 +788,10 @@ export class WNDArray<S extends Shape> {
           freeBuf(this.core, outDataBuf);
           throw new Error(`wasm resident nt_sum_all_strided: status ${status} for shape [${this.shape.join(",")}]`);
         }
-        return WNDArray.fresh<OkShape<ReduceAxis<S, Axis>>>(
+        const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : [];
+        return WNDArray.fresh<OkShape<ReduceAxis<S, Axis, KeepDims>>>(
           this.core,
-          [] as OkShape<ReduceAxis<S, Axis>>,
+          outShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
           outDataBuf.ptr,
           1,
         );
@@ -801,6 +808,9 @@ export class WNDArray<S extends Shape> {
 
     const outShape = [...this.shape.slice(0, normAxis), ...this.shape.slice(normAxis + 1)];
     const outLen = product(outShape);
+    // keepdims is metadata only: `outLen` (kernel element count) is unchanged —
+    // a size-1 axis leaves `product` unchanged — only the reported shape differs.
+    const resultShape = keepdims ? keepDimsShape(this.shape, axisNum) : outShape;
 
     const scratch: ScratchBuf[] = [];
     try {
@@ -827,9 +837,9 @@ export class WNDArray<S extends Shape> {
           `wasm resident nt_sum_axis_strided: status ${status} for shape [${this.shape.join(",")}] axis ${axisNum}`,
         );
       }
-      return WNDArray.fresh<OkShape<ReduceAxis<S, Axis>>>(
+      return WNDArray.fresh<OkShape<ReduceAxis<S, Axis, KeepDims>>>(
         this.core,
-        outShape as OkShape<ReduceAxis<S, Axis>>,
+        resultShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
         outDataBuf.ptr,
         outLen,
       );
