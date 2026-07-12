@@ -78,6 +78,29 @@ pub fn add_strided(
     let rank = out_shape.len();
     let size = checked_element_count(&out_shape)?;
 
+    // Kern 11: contiguous fast path. When both operands are contiguous
+    // (natural C-contiguous strides), share the exact output shape (no
+    // broadcast), and start at offset 0, `flat == a_off == b_off` for every
+    // element — so the general loop below reduces to `out[flat] = a[flat] +
+    // b[flat]`. Skipping straight to that avoids the per-element `unravel`
+    // allocation (see docs/kern-11-elementwise-fastpath-spec.md D2/D3).
+    // Checked AFTER all validations above, so error semantics (status
+    // 1/2/3/4, ordering, messages) are byte-for-byte unchanged for every
+    // input — this is a pure post-validation optimization of the success
+    // path. `validate_strided_bounds` above guarantees `data_len >= size`
+    // for both operands here (max_reach == size - 1), so the direct slice
+    // indexing below is in-bounds by construction.
+    if a_shape == b_shape && a_offset == 0 && b_offset == 0 && a_strides == compute_strides(a_shape) && b_strides == compute_strides(b_shape) {
+        let n = size as usize;
+        let a = &a_data[..n];
+        let b = &b_data[..n];
+        let mut out = vec![0f64; n];
+        for i in 0..n {
+            out[i] = a[i] + b[i];
+        }
+        return Ok((out_shape, out));
+    }
+
     let a_eff = aligned_effective_strides(a_shape, a_strides, rank);
     let b_eff = aligned_effective_strides(b_shape, b_strides, rank);
 
@@ -229,5 +252,53 @@ mod tests {
         let (shape0, data0) = add_strided(&[], &[], 0, &[5.0], &[3], &[1], 0, &[1.0, 2.0, 3.0]).unwrap();
         assert_eq!(shape0, vec![3]);
         assert_eq!(data0, vec![6.0, 7.0, 8.0]);
+    }
+
+    // --- Kern 11: contiguous fast path vs. general path equivalence --------
+
+    /// Offset-window equivalence: the SAME logical data (including IEEE
+    /// special values), once addressed with offset 0 + natural strides
+    /// (hits the new fast path) and once addressed as a nonzero-offset
+    /// window into a larger buffer with the SAME natural strides (fails
+    /// only the `a_offset == 0 && b_offset == 0` fast-path condition, so it
+    /// is forced onto the untouched general `unravel`-based loop) — must be
+    /// bit-identical. This is the "beide-Pfade-stimmen-überein" proof named
+    /// in docs/kern-11-elementwise-fastpath-spec.md's D4/Testplan.
+    #[test]
+    fn strided_fast_path_matches_general_path_offset_window() {
+        let a: Vec<f64> = (0..24).map(|i| (i as f64) * 1.5 - 12.0).collect();
+        let mut b: Vec<f64> = (0..24).map(|i| (i as f64) * -0.75 + 3.0).collect();
+        b[5] = f64::NAN;
+        b[9] = f64::INFINITY;
+        b[13] = -0.0;
+        let shape = [4u32, 6u32];
+        let strides = compute_strides(&shape);
+
+        // Fast path: offset 0 on both operands, natural strides.
+        let (fast_shape, fast_data) = add_strided(&shape, &strides, 0, &a, &shape, &strides, 0, &b).unwrap();
+
+        // General path: embed the identical logical data at a nonzero
+        // offset inside larger buffers (natural strides still hold for the
+        // windowed shape, but a_offset/b_offset != 0 fails the fast-path
+        // guard by construction, not by any stride/shape change).
+        const PAD: usize = 7;
+        let mut a_padded = vec![-999.0; PAD];
+        a_padded.extend_from_slice(&a);
+        let mut b_padded = vec![-999.0; PAD];
+        b_padded.extend_from_slice(&b);
+        let (gen_shape, gen_data) =
+            add_strided(&shape, &strides, PAD as u32, &a_padded, &shape, &strides, PAD as u32, &b_padded).unwrap();
+
+        assert_eq!(fast_shape, gen_shape);
+        assert_eq!(fast_shape, shape.to_vec());
+        assert_eq!(
+            fast_data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            gen_data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+        );
+        // Sanity: the special values actually propagated (not both sides
+        // vacuously equal on all-zero data). a[5]=(-4.5), a[9]=1.5, a[13]=7.5.
+        assert!(fast_data[5].is_nan());
+        assert_eq!(fast_data[9], f64::INFINITY);
+        assert_eq!(fast_data[13], 7.5); // 7.5 + (-0.0) == 7.5, sign unaffected
     }
 }

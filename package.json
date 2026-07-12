@@ -21,6 +21,7 @@
     "bench:strided": "pnpm build:wasm && node spike/bench-core/strided.ts",
     "bench:chain": "pnpm build:wasm && node spike/bench-core/chain.ts",
     "bench:blocked": "pnpm build:wasm && node spike/bench-core/blocked.ts",
+    "bench:elementwise": "pnpm build:wasm && node spike/bench-core/elementwise.ts",
     "bench:slice": "pnpm build:wasm && node spike/bench-core/slice.ts",
     "bench:threaded": "pnpm build:wasm:threads && node spike/bench-core/threaded.ts",
     "bench:crossover": "pnpm build:wasm:threads && node spike/bench-core/threaded-crossover.ts",
