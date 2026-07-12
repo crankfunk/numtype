@@ -1,34 +1,83 @@
-# Handoff — 2026-07-12, Session-Ende (Kern 09 + Kern 10 + Kern 11, Phase B komplett)
+# Handoff — 2026-07-12, Session-Ende (Phase C komplett: Scoping + Item 10)
 
 ## Aktueller Stand
-NumType (Forschungsprojekt: typsichere n-dim Arrays — TS-Typ-Ebene + from-scratch Rust/WASM-Kerne). Remote `github.com/crankfunk/numtype`, privat. **Phase B (Minimum Viable Op-Surface) ist KOMPLETT** — alle Items 1–7 erledigt, jede Scheibe zweifach verifiziert (Spec + adversarial), committet und gepusht. Tree sauber, `main` in Sync mit origin. Gates grün: `pnpm check` (Verbund) exit 0 · `test:core` 817 · `test:resident` 4265+2 · `cargo` 161 · `demo` all-agree · Artefakt-Pin `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` · `check:diag` 172 392 @ 128 / stress 94 597.
+NumType (Forschungsprojekt: typsichere n-dim Arrays — TS-Typ-Ebene + from-scratch
+Rust/WASM-Kerne). Remote `github.com/crankfunk/numtype`, privat. **Phasen A, B und C sind
+komplett.** Item 10 (Backend-Wahl-API) gerade abgeschlossen, zweifach post-verifiziert,
+committet & gepusht (5b0f951). `main` in Sync mit origin; Tree sauber (bis auf diesen
+Handoff-Doku-Commit). Alle Gates grün: `pnpm check` (Verbund) exit 0 · `test:core` 817 ·
+`test:resident` 4279 (fail 0) · `test:threaded` 69 · `cargo` 161 · `demo` all-agree ·
+Artefakt-Hash `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d`
+byte-identisch · `check:diag` 175.634 @ 132 / stress 103.882 @ 82. **Nächstes: Phase D
+(Paketierung/Release).**
 
 ## In dieser Session erledigt
-- **Kern 09 — Runtime `keepdims` auf `sum()`** (Commit 1c046cd): beide Surfaces, ein appended Shape-Helper `keepDimsShape` (runtime.ts, append-only), `const KeepDims`-Typparam speist das vorhandene `ReduceAxis<S,Axis,KeepDims>`; Daten byte-identisch zu non-keepdims (ZERO Rust, Hash byte-identisch); 367 nicht-zirkuläre Differentialtests inkl. Views; owner-bestätigte D3-Abweichung (bestehende `sum`-Methode erweitern). docs/kern-09-*.
-- **Kern 10 — Spezialwerte im Differential-Generator** (Commit e64aed6): `SPECIAL_VALUES`/`nextF64Special`/`genDataSpecial` append-only in prng.ts, neue special-values.test.ts (619 Fälle über alle Whitelist-Ops × 3 Surfaces); **Schlüsselbefund: SIMD-matmul erhält Subnormals** (per Mutation als fangbar bewiesen); TEST-ONLY, Hash byte-identisch. docs/kern-10-*.
-- **Kern 11 — Contiguous elementwise Fast-Path** (Commit d02f06f): `add_strided`+`binary_strided` überspringen die per-Element-`unravel`-Allokation bei gleicher Shape/offset 0/natural strides → **13–17×**, bit-identisch (mathematisch + committete `.to_bits()`-Äquivalenztests). MESSGETRIEBEN: SIMD elementwise + Packing-A gemessen NO-GO. Neuer Artefakt-Pin `0b9df4f1…`. docs/kern-11-*.
-- **check:diag-Anomalie GEPINNT** (Commit 94493dc): der Rückgang beim Datei-Hinzufügen ist **check-order-abhängig** (leere `export {}`-Datei reproduziert ihn; umbenennen ändert den Betrag; nicht-monoton) — Zerlegung −2 043 Reihenfolge / +44 echte Kosten; erklärt rückwirkend Infra 01. Konsequenz in Doku + coding-kb.
-- **Prozess-Upgrade** (in der Kern-09-Session verankert): Zwei-Verifier-Regel (docs/verify-runde-template.md), CLAUDE.md-Sektion „Qualitätssicherung, modellunabhängig" (fable-doctrine laden, Graph vor Read, Worktree-Messregel, Abweichungs-Eskalation, kein Live-Tree-Griff für Agenten).
-- **Doku (diese Handoff-Runde):** README-Status auf Kern 09/10/11 + „Phase B complete"; roadmap-Phase-B-Block auf KOMPLETT.
+- **Phase-C-Scoping** (Commit 40c2bfd): Items 8/9 (Browser-Threads-Port / stable-no_std)
+  nach belegter Constraint-Recherche als **Node-only/experimentelles Opt-in zurückgestellt**
+  — es gibt HEUTE keinen Weg vom pinned nightly weg (build-std nightly-only, RFCs 3874/3875
+  decken atomics-Rebuilds nicht ab, wasm32-wasip1-threads Sackgasse, no_std vermutlich nicht),
+  und der Browser-Port ist durch COOP/COEP-Deployment-Friction wertbegrenzt. Erfüllt das
+  Release-Gate. docs/phase-c-threads-scoping.md.
+- **Neue verbindliche Work-Ethic** (Commit 3bce153): „Spec-Verifikation VOR der
+  Implementierung" — ein adversarialer `brainroute:deep`-Verifier gegen jede bindende Spec
+  BEVOR Code entsteht (CLAUDE.md QA-Sektion + verify-runde-template.md **Baustein 0**).
+- **Item 10 — Backend-Wahl-API** (Commit 5b0f951): `NDArray.backend("wasm"|"threaded")` →
+  `WasmBackend`/`ThreadedBackend` als explizites, **browser-sicheres** Opt-in-Backend
+  (empirisch bewiesen via `process.moduleLoadList`-Trace: der JS-`NDArray`-Default zieht
+  `threaded.ts`s statische node-Imports nie eager); JS-`NDArray` bleibt Default; **null Rust,
+  Hash byte-identisch**. Zweifach post-verifiziert (Baustein A + B). docs/item-10-backend-api-*.
+- **Handoff-Doku** (dieser Commit): README/roadmap/CLAUDE.md auf „Phase C komplett, Item 10
+  done"; Pins nachgezogen.
 
 ## Offen / in Arbeit
-Nichts halbfertig. Alle Slices sind abgeschlossen. Offene Punkte leben bewusst deferred in FOLLOWUPS.md.
+Nichts halbfertig — Item 10 ist vollständig (DoD durch inkl. KB-Capture). Bewusst deferred in
+`FOLLOWUPS.md`: no_std-30-Min-Experiment, Browser-Threads-Port (nur bei realer Nachfrage),
+Browser-Smoke-Test des Standard-Surface (Phase D), `NDArrayView`-Konformität auf WNDArray
+(Spike-05-Followup, mit dem konkreten `strides`-Feld-vs-Methode-Blocker), `Backend.from`-Kür,
+`test:resident`-Test-Timeout, `unravel_into`-Generalisierung (größter offener Perf-Hebel),
+Union-Guard-Soundness-Gap (MAJOR).
 
-## Nächste Schritte (priorisiert)
-**Richtung entschieden (Owner, 2026-07-12): Phase C.**
-1. **Phase C starten — erst Scoping, kein Bau** (roadmap.md, Items 8–10). Items 8 & 9 abwägen: Browser-Port des Threads-Pfads (COOP/COEP, `crossOriginIsolated`, async Dispatch statt blockierendem `Atomics.wait`) + no_std/stable-Pfad JETZT umsetzen ODER Threads für v0 bewusst als Node-only-/experimentelles Opt-in zurückstellen (beide Fallbacks stehen in roadmap.md; das Standard-Artefakt baut heute schon auf stable, der Threads-Build hängt an pinned nightly-2026-07-09 + `-Z build-std`). Constraints recherchieren, dann Empfehlung an den Owner VOR der Umsetzung — Item 10 (Backend-Wahl-API, ein NDArray-Surface mit Backend-Wahl bei der Erzeugung) hängt am Ausgang von 8/9.
-2. **Größter offener Perf-Hebel (parallel/später): `unravel_into`-Generalisierung** (FOLLOWUPS) — der breitere Verwandte von Kern 11: `unravel` (shape.rs:105, allozierend) durch das nicht-allozierende Muster über ALLE strided Kernel ersetzen. Eigene Scheibe MIT eigener Messung VOR der Freeze-Zeremonie (general-Case-Payoff ist hergeleitet, nicht gemessen). Freeze-Warnung: die `#[cfg(atomics)]`-gegateten `_into`-Twins NICHT entgatern (Präsenz verschiebt Bytes).
-3. Kür/klein aus FOLLOWUPS: NaN-Payload-Erhalt für reshape/slice/fromArray regressionstesten (Kern-10-Befund); `keepDimsShape` defensiver Achsen-Assert; die vorbestehende Union-Guard-Latenz (drei Facetten, eigene Scheibe).
+## Nächste Schritte
+1. **Phase D — Paketierung & Release** (roadmap Items 11–14): aus `spike/` ein Paket mit EINEM
+   öffentlichen Surface (`exports`-Map, `.wasm`-Bundling, `d.ts`-Hover-Qualität prüfen — die
+   Hovers sind Teil des Produkts). Dazu der **Browser-Smoke-Test** des Standard-Surface
+   (COOP-frei, unabhängig von der Threads-Frage) und **CI** mit allen Gates inkl.
+   Freeze-Hash-Check + `bench:editor`-Latenz-Gate.
+2. Alternativ vorab: der **Union-Guard-Soundness-Gap** (MAJOR, vorbestehend — `NDArray<[2,3] |
+   [2,3,4]>.sum(2)` typt still & falsch; eigene Scheibe) oder der Perf-Hebel
+   **`unravel_into`-Generalisierung** (eigene Scheibe MIT eigener Messung vor der
+   Freeze-Zeremonie).
 
 ## Bekannte Probleme / Stolperfallen
-- **check:diag ist check-order-abhängig** (diese Session gepinnt): jede datei-hinzufügende/-entfernende Scheibe trägt einen Reihenfolge-Rauschterm bis ~±2 000, der NICHT die echten Typ-Kosten sind. Pin nur bei festem Datei-Set exakt; saubere Attribution = erst LEER hinzufügen + messen, dann füllen + messen. Ein echter Regress bleibt sichtbar (≫2 000, monoton).
-- **Freeze-Zeremonie**: der Beweis ist der Ganz-Artefakt-Clean-Rebuild-Hash (nicht Per-Funktion-Bytes — jede Quelländerung verschiebt crate-weit `i32.const`-Panic-Location-Zeiger, WAT-Diff zeigt null Opcodes). Vor jeder Kernel-Änderung: Pre-Edit-Clean-Rebuild muss den alten Pin reproduzieren. `#[cfg(test)]`-Tests landen NICHT im Release-wasm.
-- **Zwei-Verifier-Regel gilt** ab jetzt für jede substanzielle Scheibe (Aufträge aus docs/verify-runde-template.md, nicht frei formulieren).
-- **Mess-Hausregel**: Baselines/Pins nur in frischem `git worktree` des Zielcommits (`git stash` lässt untracked Dateien liegen → kontaminiert); immer Exit-Code prüfen, nie nur die Kennzahl greppen. Hintergrund-Agenten fassen den Haupt-Tree nie an.
-- **Vorbestehender Soundness-Gap** (FOLLOWUPS, MAJOR): mixed-rank Shape-Union IM Typparameter einer Instanz (`NDArray<[2,3]|[2,3,4]>`) akzeptiert `.sum(2)` still & typt konfident falsch — liegt in `ReduceAxis`/`Guard`/`OkShape`, eigene Scheibe.
-- **Unverändert gültig**: Threads-Build-Regeln (nightly-2026-07-09 + build-std, env-RUSTFLAGS ersetzt config), cargo-Config CWD-basiert (alle Befehle vom Repo-Root), Test-Explizitlisten in package.json mit Guard, shared-Validator-Blind-Spots.
+- **Spec-Verify VOR Impl ist jetzt Pflicht** (Baustein 0) — hat sich in Item 10 sofort
+  bezahlt gemacht (3 Blocker vor dem Bau, u. a. `WNDArray.strides` ist ein FELD, keine
+  Methode). **Zwei-Verifier-Regel** (Spec + adversarial) gilt weiter Post-Impl.
+- **Delegierte Agenten enden oft auf `git status` statt dem Report** — im Delegations-Prompt
+  „Der Report ist deine ALLERLETZTE Nachricht, git-status DAVOR" explizit vorgeben (verifiziert
+  wirksam). **Subagenten spawnen KEINE Subagenten** — nur der Haupt-Loop fannt aus.
+- **Freeze** = Ganz-Artefakt-Clean-Rebuild-Hash. Item 10 war null Rust → Hash unverändert
+  (`0b9df4f1…`).
+- **check:diag ist check-order-abhängig** (±~2.000 Rauschen bei Datei-Adds); Attribution via
+  empty-then-fill / Ablation. Item-10-Befund: `check:diag:stress`-Anstieg dominant durch
+  `threaded.ts`-Generics (D1 zieht Backend-Typen in jede NDArray-importierende Datei), nicht
+  `ambient.d.ts`.
+- **Mess-Hausregel**: Baselines/Pins nur im frischen `git worktree` des Zielcommits, immer
+  Exit-Code prüfen (zsh: `${pipestatus}`, nicht `${PIPESTATUS}`). Hintergrund-Agenten fassen
+  den Haupt-Tree nie an.
+- **Threads-Build**: pinned nightly-2026-07-09 + `-Z build-std` + rust-src (`test:threaded`,
+  `scripts/build-wasm-threads.sh`); env-RUSTFLAGS ersetzt config (`+simd128` mitführen).
+- **Kommunikation mit dem Owner auf Deutsch**; Code/README/Spec-Docs bleiben Englisch.
 
 ## Wichtige Dateien & Befehle
-- **Specs & Ergebnisse:** `docs/{spike-01..06,kern-01..11}-*.md` · `docs/roadmap.md` (Phase-Blöcke) · `docs/verify-runde-template.md` · `docs/infra-01-stress-split.md` · Backlog `FOLLOWUPS.md`.
-- **Code:** Typ-Ebene `spike/src/` (`reduce.ts`, `reshape.ts`, `vector.ts`, `slice-literal.ts` = Digit-Arithmetik, `ndarray.ts`/`wasm/resident.ts` = Klassen); Kernel `crates/core/src/kernels/{add,elementwise,vector,matmul_blocked}.rs`; `crates/core/src/shape.rs` (unravel/compute_strides/validate_strided_bounds + die gegateten `_into`-Twins); Test-Infra `spike/tests-runtime/{prng,assert-helpers}.ts`.
-- **Befehle (alle vom Repo-Root):** `pnpm check` (Verbund root+stress) · `check:diag` (Pin 172 392 @ 128) / `check:diag:stress` (94 597) · `pnpm test:core` (817) · `pnpm test:resident` (4265+2; +`:gc`) · `pnpm test:threaded` (65, nightly) · `pnpm demo` · `pnpm bench:{scaling,chain,strided,blocked,slice,threaded,crossover,editor,elementwise}` · `cargo test --manifest-path crates/core/Cargo.toml` (161). Artefakt-Freeze-Check: `shasum -a 256 spike/src/wasm/numtype_core.wasm` = `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d`.
+- **Item 10:** `spike/src/wasm/backend-api.ts` (`WasmBackend`, `checkThreadedEnv`),
+  `spike/src/wasm/threaded.ts` (`ThreadedBackend`), `spike/src/ndarray.ts` (`static backend`),
+  `spike/src/index.ts` (Exports). Tests: `spike/tests-runtime/backend-api.test.ts` (test:resident,
+  inkl. M3 D2-ordering Browser-Sicherheit), `…/backend-api-threaded.test.ts` (test:threaded,
+  inkl. M6 dispose-Plateau). Docs: `docs/item-10-backend-api-{spec,ergebnisse}.md`.
+- **Prozess:** `docs/verify-runde-template.md` (Bausteine 0/A/B) · `docs/roadmap.md`
+  (Phasen; C komplett) · `docs/phase-c-threads-scoping.md` · `FOLLOWUPS.md` (Backlog).
+- **Befehle (alle vom Repo-Root):** `pnpm check` (Verbund root+stress) · `check:diag` 175.634
+  @ 132 / `check:diag:stress` 103.882 @ 82 · `test:core` 817 · `test:resident` 4279
+  (+`:gc`) · `test:threaded` 69 (nightly) · `demo` · `cargo test --manifest-path
+  crates/core/Cargo.toml` (161). Freeze-Check: `shasum -a 256 spike/src/wasm/numtype_core.wasm`
+  = `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d`.

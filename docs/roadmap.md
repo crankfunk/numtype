@@ -128,7 +128,16 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
 > großer Teil der Zielnutzer — GitHub Pages/Sandboxes/CDNs — kann nicht), und alle
 > Vergleichsprojekte liefern Threading als feature-detektiertes Opt-in, nie als Default.
 > Erfüllt das Release-Gate ("Threads sauber als Node-only/experimentell abgegrenzt").
-> **Nächstes: Item 10.**
+>
+> **Item 10 (Backend-Wahl-API) ERLEDIGT & zweifach post-verifiziert (2026-07-12,
+> Commit 5b0f951):** `NDArray.backend('wasm'|'threaded')` exponiert WASM/Threads als
+> explizites, browser-sicheres (empirisch bewiesenes) Opt-in-Backend; das reine-JS
+> `NDArray` bleibt der Default; null Rust, Artefakt-Hash byte-identisch; neue Pins
+> check:diag 175.634 @ 132 / stress 103.882 @ 82 (docs/item-10-backend-api-*). Diese
+> Scheibe pilotierte die neue Work-Ethic-Regel „Spec-Verifikation VOR der
+> Implementierung" (Baustein 0) — die Pre-Build-Spec-Review fing DREI Blocker vor dem
+> Bau. **Damit ist Phase C inhaltlich abgeschlossen; als Nächstes stünde Phase D
+> (Paketierung/Release) an.**
 
 8. **Browser-Port des Threads-Pfads** (COOP/COEP, `crossOriginIsolated`, async Dispatch statt
    blockierendem `Atomics.wait` auf Main) — *oder* bewusste Entscheidung: Threads bleiben in
@@ -140,7 +149,7 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
    **→ ZURÜCKGESTELLT 2026-07-12** (Option 1): als experimentelles Add-on gekennzeichnet;
    kein Stable-Weg existiert heute (s. Scoping-Doc), das no_std-30-Min-Experiment steht in
    FOLLOWUPS. Die nightly-Abhängigkeit ist Build-/Publish-Zeit, keine Endnutzer-Laufzeit.
-10. **Backend-Wahl-API** (NÄCHSTE Bau-Scheibe): ein `NDArray`-Surface, Backend-Wahl bei der
+10. **Backend-Wahl-API** (**ERLEDIGT 2026-07-12**, Commit 5b0f951 — docs/item-10-backend-api-*): ein `NDArray`-Surface, Backend-Wahl bei der
     Erzeugung (Datenplatzierung, primär Umgebungskriterien) — durch die 8/9-Entscheidung
     VEREINFACHT (stable-Backends bleiben synchron, kein async-Umbau): stable-Artefakt als
     Default überall, Threads als umgebungs-detektiertes Node-only-Opt-in. Per-Call-Routing
