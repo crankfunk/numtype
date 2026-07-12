@@ -7,10 +7,11 @@
  *
  * Structure mirrors two existing house patterns rather than inventing a
  * third:
- *  - the `IsDynamicRank` guard on EITHER operand, checked first and
- *    unconditionally degrading to "no claim" (pass) — identical to
- *    `Broadcast`/`MatMul`'s own dynamic-rank handling (broadcast.ts,
- *    matmul.ts);
+ *  - the `RankUnknowable` guard on EITHER operand (dynamic rank OR a
+ *    mixed-rank shape union, D-V1.3, docs/phase-d-vorarbeiten-spec.md),
+ *    checked first and unconditionally degrading to "no claim" (pass) —
+ *    identical to `Broadcast`/`MatMul`'s own `RankUnknowable` gate
+ *    (broadcast.ts, matmul.ts);
  *  - the rank-1 destructuring check `S extends readonly [infer D extends Dim]`
  *    — MatMul's own "rank(A) === 1" idiom (matmul.ts) — used here as a NAKED
  *    check on the bare type parameter so a union OF SHAPES (e.g.
@@ -27,7 +28,7 @@
  * a union dim on either side is *never* misread as a verdict, it degrades
  * to "no claim" instead, same as a dynamic (`number`) dim.
  */
-import { type Dim, type IsDynamicDim, type IsDynamicRank, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
+import { type Dim, type IsDynamicDim, type RankUnknowable, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
 import { type IsUnion } from "./slice-literal.ts";
 
 /** Non-error sentinel `DotCheck`/`VectorLenCheck` resolve to on every "pass"
@@ -74,15 +75,16 @@ type DotCheckStatic<S extends Shape, B extends Shape, Op extends string> = S ext
 
 /**
  * The `dot`/`cosineSimilarity` operand guard: both operands must be rank-1
- * with equal length. Dynamic RANK on either side degrades unconditionally
- * to "no claim" (pass; the runtime backstop is `assertVectorPair` in
- * runtime.ts). Used as `Guard<DotCheck<S, B, "dot">, NDArray<B>>` (resp.
+ * with equal length. Dynamic RANK on either side, OR a MIXED-rank shape
+ * union (D-V1.3, `RankUnknowable`, docs/phase-d-vorarbeiten-spec.md),
+ * degrades unconditionally to "no claim" (pass; the runtime backstop is
+ * `assertVectorPair` in runtime.ts). Used as `Guard<DotCheck<S, B, "dot">, NDArray<B>>` (resp.
  * `WNDArray<B>`, `"cosineSimilarity"`) — a receiver-side (`S`) violation
  * still surfaces AT THE ARGUMENT, same as every other op here, because
  * that is where `Guard` itself puts the compile error.
  */
-export type DotCheck<S extends Shape, B extends Shape, Op extends string> = IsDynamicRank<S> extends true
+export type DotCheck<S extends Shape, B extends Shape, Op extends string> = RankUnknowable<S> extends true
   ? Pass
-  : IsDynamicRank<B> extends true
+  : RankUnknowable<B> extends true
     ? Pass
     : DotCheckStatic<S, B, Op>;

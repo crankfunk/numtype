@@ -15,7 +15,7 @@
  * form required for TS's tail-call elimination (PR #45711).
  */
 
-import { type CompatDim, type Dim, type IsDynamicRank, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
+import { type CompatDim, type Dim, type RankUnknowable, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
 
 type BroadcastAcc<A extends readonly Dim[], B extends readonly Dim[], Acc extends readonly Dim[]> = A extends readonly [
   ...infer AInit extends readonly Dim[],
@@ -37,12 +37,13 @@ type BroadcastAcc<A extends readonly Dim[], B extends readonly Dim[], Acc extend
 /**
  * Broadcast two shapes per NumPy rules. Resolves to the broadcast shape, or
  * a `ShapeError<...>` naming the incompatible shapes. A dynamic-RANK operand
- * (`number[]`, `[2, ...number[]]`) makes the result rank unknowable —
- * degrade to `Dim[]` (gradual), never guess and never error.
+ * (`number[]`, `[2, ...number[]]`) OR a MIXED-rank shape union (D-V1.3,
+ * `RankUnknowable`) makes the result rank unknowable — degrade to `Dim[]`
+ * (gradual), never guess and never error.
  */
-export type Broadcast<A extends Shape, B extends Shape> = IsDynamicRank<A> extends true
+export type Broadcast<A extends Shape, B extends Shape> = RankUnknowable<A> extends true
   ? readonly Dim[]
-  : IsDynamicRank<B> extends true
+  : RankUnknowable<B> extends true
     ? readonly Dim[]
     : BroadcastStatic<A, B>;
 

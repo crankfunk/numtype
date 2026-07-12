@@ -1,5 +1,6 @@
+import type { Broadcast } from "../src/broadcast.ts";
 import type { Shape } from "../src/dim.ts";
-import { type AnyNDArray, NDArray, type NDArrayView } from "../src/ndarray.ts";
+import { type AnyNDArray, type Guard, NDArray, type NDArrayView } from "../src/ndarray.ts";
 import type { WNDArray } from "../src/wasm/resident.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
@@ -166,3 +167,86 @@ void narrowedView;
 declare function shapeOf<S extends Shape>(v: NDArrayView<S>): S;
 const inferredShape = shapeOf(nd23);
 type T14 = Expect<Equal<typeof inferredShape, [2, 3]>>;
+
+// =============================================================================
+// Phase-D V1 (docs/phase-d-vorarbeiten-spec.md, Union-Guard-Fix): call-site DX
+// for Facette (c) (mixed-rank shape union) and the Kontroll-Pins for the
+// (already-rejected, unaffected by V1) instance-union form.
+// =============================================================================
+
+// --- Facette (c): NDArray<[2,3]|[2,3,4]>.sum(2) -----------------------------
+// Pre-fix (Kern-09 finding 1): silently accepted and returned the CONFIDENT
+// `NDArray<[2,3]>` (only the rank-3 member's axis-2 removal actually
+// succeeds; the rank-2 member's out-of-range `ShapeError` was silently
+// discarded by the distributive `Guard`/`OkShape` pipeline — the axis
+// PARAMETER's own `Guard<ReduceAxis<S,Axis>,Axis>` already accepted the call
+// because ONE branch of the receiver-shape distribution was error-free).
+// Post-fix: `RankUnknowable` degrades the WHOLE computation to `readonly
+// Dim[]` before any per-member distribution happens — accepted (no-claim,
+// runtime-backstopped), never a confident single-shape claim.
+declare const mixedRankRecv: NDArray<[2, 3] | [2, 3, 4]>;
+const mixedRankSummed = mixedRankRecv.sum(2);
+type UC1 = Expect<Equal<(typeof mixedRankSummed)["shape"], readonly number[]>>;
+void mixedRankSummed;
+
+// --- Kontroll-Pins: union of whole NDArray<A>|NDArray<B> INSTANCES ---------
+// (as opposed to a shape-union IN ONE type parameter, the form V1 actually
+// fixes — see broadcast.test-d.ts's Facette-(b) pins). This form is
+// rejected already TODAY by TS's own generic inference / class-invariance,
+// unrelated to Guard/CompatDim/DimEq and unreachable/unfixable through this
+// codebase's Guard design (Baustein-0 finding, spec's Adversariale
+// Spec-Verifikation addendum). Pinned as a REGRESSION control, not a V1 fix.
+declare const instanceUnionArg: NDArray<[2, 3]> | NDArray<[7, 3]>;
+// @ts-expect-error - instance union NDArray<A>|NDArray<B> as ARGUMENT is rejected by TS's own generic inference (control pin, not a V1 fix target)
+a.add(instanceUnionArg);
+// @ts-expect-error - instance union NDArray<A>|NDArray<B> as RECEIVER is rejected too (no common call signature TS will synthesize)
+instanceUnionArg.add(a);
+
+// =============================================================================
+// WNDArray-side: the SAME facette pins, at least for add/matmul/sum, as
+// explicit WNDArray assertions (spec requirement — "gleiche importierte
+// Maschinerie wird bewiesen, nicht angenommen": WNDArray consumes the exact
+// same Guard/OkShape/Broadcast/MatMul/ReduceAxis/CompatDim/DimEq/RankUnknowable
+// machinery from ndarray.ts/broadcast.ts/matmul.ts/reduce.ts/dim.ts, so a fix
+// there covers WNDArray with zero resident.ts edits — proven here, not assumed).
+// =============================================================================
+
+// add: Facette (b) corrected, gemischt accepted.
+declare const wAddBase: WNDArray<[2, 3]>;
+declare const wAddMixedArg: WNDArray<[2, 3] | [7, 3]>;
+const wAdded = wAddBase.add(wAddMixedArg);
+type UW1 = Expect<Equal<(typeof wAdded)["shape"], [2, 3]>>;
+void wAdded;
+
+// add: Facette (b), WNDArray-side uniform-fehlerhaft -> combined message
+// (mirrors broadcast.test-d.ts's UB2 construction/assertion idiom exactly,
+// only the `Actual`/receiver type param swapped from NDArray to WNDArray;
+// verify-round B-F4 closure. Empirically probed against the real
+// Guard/Broadcast/WNDArray machinery via the marker-probe technique
+// documented in docs/phase-d-vorarbeiten-v1-ergebnisse.md's "PRE-FIX-ROT-
+// BEWEIS/Methodik" — the message came back byte-identical to UB2's
+// `AllBadMsg`, confirming `Guard`'s error branch depends only on `Result`
+// (Broadcast<S,B>), never on `Actual`).
+type AllBadMsgW =
+  | "cannot broadcast shapes [2,3] and [7,3]: dims 2 and 7 are not broadcast-compatible (neither equal nor 1)"
+  | "cannot broadcast shapes [2,3] and [7,3]: dims 2 and 9 are not broadcast-compatible (neither equal nor 1)"
+  | "cannot broadcast shapes [2,3] and [9,3]: dims 2 and 7 are not broadcast-compatible (neither equal nor 1)"
+  | "cannot broadcast shapes [2,3] and [9,3]: dims 2 and 9 are not broadcast-compatible (neither equal nor 1)";
+type UW4 = Expect<
+  Equal<Guard<Broadcast<[2, 3], [9, 3] | [7, 3]>, WNDArray<[9, 3] | [7, 3]>>, { readonly __shapeError: AllBadMsgW }>
+>;
+
+// matmul: Facette (a), union dim at the CONTRACTION axis -> accepted,
+// confident (the union dim is contracted away, never survives to output).
+declare const wMatMul1: WNDArray<[2, 3 | 7]>;
+declare const wMatMul2: WNDArray<[3, 4]>;
+const wMatmulResult = wMatMul1.matmul(wMatMul2);
+type UW2 = Expect<Equal<(typeof wMatmulResult)["shape"], [2, 4]>>;
+void wMatmulResult;
+
+// sum: Facette (c), mixed-rank receiver -> accepted, degraded to `readonly
+// number[]` (never the pre-fix confident-but-wrong single shape).
+declare const wMixedRankRecv: WNDArray<[2, 3] | [2, 3, 4]>;
+const wMixedRankSummed = wMixedRankRecv.sum(2);
+type UW3 = Expect<Equal<(typeof wMixedRankSummed)["shape"], readonly number[]>>;
+void wMixedRankSummed;

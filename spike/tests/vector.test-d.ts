@@ -150,3 +150,22 @@ const divResult = s1.div(s2);
 type T9 = Expect<Equal<(typeof divResult)["shape"], [2, 3]>>;
 // @ts-expect-error - [2,3] and [4] don't broadcast
 s1.div(badBroadcast);
+
+// ---------------------------------------------------------------------------
+// Phase-D V1 (docs/phase-d-vorarbeiten-spec.md, Union-Guard-Fix): Facette (c)
+// — a MIXED-rank shape union on EITHER `DotCheck` operand (receiver `S` or
+// argument `B`) degrades to no-claim (`Pass`) via `RankUnknowable`, same
+// treatment as a dynamic rank. Pre-fix this was already "gemischt accepted"
+// (natural distribution mixed a `Pass` branch with a `ShapeError` branch,
+// and the pre-existing distributive `Guard` already let a mixed union
+// through) — not a confidently-wrong bug for `dot` specifically, but the fix
+// still replaces the ad-hoc per-branch distribution with one clean gate.
+// ---------------------------------------------------------------------------
+
+type UC1 = Expect<Equal<DotCheck<[3] | [3, 4], [3], "dot">, true>>; // mixed-rank RECEIVER
+type UC2 = Expect<Equal<DotCheck<readonly [number], [3] | [3, 4], "dot">, true>>; // mixed-rank ARGUMENT
+
+declare const dotMixedRankRecv: NDArray<[3] | [3, 4]>;
+const dotMixedResult = dotMixedRankRecv.dot(va); // must NOT error (mixed-rank receiver, no-claim)
+type UC3 = Expect<Equal<typeof dotMixedResult, number>>;
+void dotMixedResult;

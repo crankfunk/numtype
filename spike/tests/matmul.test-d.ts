@@ -41,3 +41,27 @@ type T18 = Expect<Equal<MatMul<number[], number[]>, readonly number[]>>;
 // ndarray-errors.test-d.ts — that's the actual, error-message-in-the-editor
 // surface the spec asks to paste into the findings doc.
 
+// =============================================================================
+// Phase-D V1 (docs/phase-d-vorarbeiten-spec.md, Union-Guard-Fix): Facette (a)
+// applied through MatMul's two DimEq/CompatDim consumers — the CONTRACTION
+// axis (via DimEq, matmul.ts's own inner-dim check) and the BATCH dims (via
+// Broadcast/CompatDim, reused as-is from broadcast.ts). Pre-fix, a union dim
+// at the contraction axis was WRONGLY REJECTED outright (`DimEq` distributes
+// to plain `boolean`, which fails `extends true` even when one member DOES
+// match) — worse than Facette (a)'s add/broadcast case, which at least
+// mixed-accepted; this was a confidently-wrong REJECTION, not just an
+// overly-confident accept.
+// =============================================================================
+
+// A union dim at the CONTRACTION axis: no-claim -> accept unconditionally
+// (DimEq<3|7,3> = true). The union dim itself never survives into the
+// output (matmul's inner dims are always contracted away), so the result
+// stays a CONFIDENT literal — no widening needed here, unlike a union dim
+// that survives via broadcast (see the batch-dim case below).
+type UA1 = Expect<Equal<MatMul<[2, 3 | 7], [3, 4]>, [2, 4]>>;
+
+// A union dim in a BATCH position (survives via Broadcast/CompatDim, same
+// mechanism as broadcast.test-d.ts's own Facette-(a) pin): degrades that
+// axis to `number` (wide), never a confident literal for either member.
+type UA2 = Expect<Equal<MatMul<[2 | 9, 3, 4], [2, 4, 5]>, [number, 3, 5]>>;
+

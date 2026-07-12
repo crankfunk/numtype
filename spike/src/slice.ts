@@ -55,7 +55,7 @@
  *    within-rank call stays untouched by this mechanism.
  */
 
-import { type Dim, type IsDynamicRank, type Shape, type ShowShape } from "./dim.ts";
+import { type Dim, type RankUnknowable, type Shape, type ShowShape } from "./dim.ts";
 import type { ExtractStep, LiteralIndexBounds, LiteralRangeDim, LiteralStepInvalid } from "./slice-literal.ts";
 
 /** One axis's slice specification, at the type level. See file header. */
@@ -102,11 +102,12 @@ type SliceShapeAcc<
   : [...Acc, ...S]; // Specs exhausted: append S's remaining (trailing) axes literally, in full
 
 /**
- * Resulting shape of `arr.slice(...specs)`. Wide `S` (unknown rank) and wide
- * `Specs` (unknown spec count) both degrade wholly to `readonly Dim[]` —
- * checked first, before any tuple recursion (spec: "wide-type guard FIRST").
+ * Resulting shape of `arr.slice(...specs)`. Wide `S` (unknown rank), a
+ * MIXED-rank shape union (D-V1.3, `RankUnknowable`), and wide `Specs`
+ * (unknown spec count) all degrade wholly to `readonly Dim[]` — checked
+ * first, before any tuple recursion (spec: "wide-type guard FIRST").
  */
-export type SliceShape<S extends Shape, Specs extends readonly SliceSpecInput[]> = IsDynamicRank<S> extends true
+export type SliceShape<S extends Shape, Specs extends readonly SliceSpecInput[]> = RankUnknowable<S> extends true
   ? readonly Dim[]
   : IsDynamicLength<Specs> extends true
     ? readonly Dim[]
@@ -213,8 +214,15 @@ type ValidateSpecsAcc<
  * `tsc` reports a "missing property" error naming the rank and spec count,
  * landing on the first excess argument; a valid call's `Specs` passes
  * through completely unchanged (every element keeps its own inferred type).
+ * A MIXED-rank shape union (D-V1.3, `RankUnknowable`) passes `Specs` through
+ * unchanged too — without this, a mixed-rank receiver could silently accept
+ * an arity that is only valid for SOME of its rank union's members (each
+ * member distributes its own arity check independently; a literal call
+ * matching one member's shape sails through even when another member would
+ * reject it) — gradual, runtime-checked instead, same honesty rule as
+ * `SliceShape`.
  */
-export type SliceSpecsGuard<S extends Shape, Specs extends readonly SliceSpecInput[]> = IsDynamicRank<S> extends true
+export type SliceSpecsGuard<S extends Shape, Specs extends readonly SliceSpecInput[]> = RankUnknowable<S> extends true
   ? Specs
   : IsDynamicLength<Specs> extends true
     ? Specs

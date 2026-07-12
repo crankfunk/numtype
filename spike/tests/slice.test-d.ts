@@ -436,3 +436,37 @@ arr.slice(null, { step: 0 });
 const s8 = arr.slice(null, { start: 1, step: 2 });
 type T32 = Expect<Equal<(typeof s8)["shape"], [2, 1, 4]>>;
 void s8;
+
+// =============================================================================
+// Phase-D V1 (docs/phase-d-vorarbeiten-spec.md, Union-Guard-Fix): Facette (c)
+// — a MIXED-rank shape union degrades BOTH `SliceShape` and `SliceSpecsGuard`
+// wholly via `RankUnknowable`, same treatment as a dynamic rank.
+//
+// Pre-fix, `SliceShape` itself was already "distributively correct" for a
+// single-integer spec (`[3] | [3,4]`, a genuine per-member answer, not a
+// confidently-wrong single type) — the uniform degradation here is a
+// disclosed precision trade-off, same as Transpose (reduce.test-d.ts).
+//
+// `SliceSpecsGuard`, however, had a REAL arity-check leak: distributing the
+// too-many-specs check per rank-union member meant a literal call matching
+// ONE member's rank (e.g. 3 specs, valid for the rank-3 member) sailed
+// through UNCHANGED even though the OTHER member (rank-2) would have too
+// many specs for that same call. Post-fix, `SliceSpecsGuard` passes `Specs`
+// through unconditionally for a mixed-rank receiver (gradual, honestly
+// unchecked, runtime-backstopped) instead of this accidental per-member match.
+// =============================================================================
+
+type UC1 = Expect<Equal<SliceShape<[2, 3] | [2, 3, 4], [1]>, readonly number[]>>;
+type UC2 = Expect<Equal<SliceSpecsGuard<[2, 3] | [2, 3, 4], [1, null, 2]>, [1, null, 2]>>;
+
+declare const mixedRankArr: NDArray<[2, 3] | [2, 3, 4]>;
+const mixedRankSliced = mixedRankArr.slice(1); // must NOT error (mixed rank, no-claim)
+type UC3 = Expect<Equal<(typeof mixedRankSliced)["shape"], readonly number[]>>;
+void mixedRankSliced;
+
+// The arity leak's call-site form: 3 specs is too many for the rank-2
+// member, but valid for the rank-3 member — pre-fix this compiled (silently
+// wrong for the rank-2 branch); post-fix it ALSO compiles, but honestly (no
+// static arity claim at all for a mixed-rank receiver, same as dynamic
+// rank), backstopped by `normalizeSliceSpecs`'s own runtime check.
+mixedRankArr.slice(1, null, 2); // must NOT error (mixed rank: arity unchecked, gradual)

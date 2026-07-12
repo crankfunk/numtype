@@ -60,8 +60,26 @@ export type OkShape<S> = S extends ShapeError<string> ? never : S extends Shape 
 /** The argument-side guard: forces a "missing property" error, naming the
  * shape mismatch, at the *argument* when `Result` is a `ShapeError`.
  *
+ * Tuple-wrapped (D-V1.4, docs/phase-d-vorarbeiten-spec.md): `[Result]
+ * extends [ShapeError<infer Message>]` checks `Result` as a WHOLE, never
+ * distributing over a union `Result` the way a naked `Result extends
+ * ShapeError<...>` check would. This matters when `Result` is itself a
+ * union produced by a shape-union operand (uniform rank, e.g.
+ * `Broadcast<S, [2,3] | [7,3]>`): a MIXED union (some members ok, some
+ * `ShapeError`) now resolves the tuple-wrapped check to `false` as a whole
+ * (not every member extends `ShapeError`) and falls through to `Actual` —
+ * accepted, gradual, runtime-backstopped, same policy as before but via a
+ * cleaner mechanism. A UNIFORM error union (every member a `ShapeError`)
+ * resolves the check to `true`, and `infer Message` over a non-distributed
+ * union source infers the UNION of every matched branch's message, so the
+ * rejection is ONE combined `{ __shapeError: M1 | M2 | ... }` object naming
+ * every member's failure, instead of the old distributive form's union of
+ * SEPARATE single-message objects (which also rejected, just with a
+ * structurally messier diagnostic). A non-union `Result` (the overwhelming
+ * common case) is unaffected either way — nothing to distribute over.
+ *
  * Exported (type-only, Kern 02): see `OkShape` above. */
-export type Guard<Result, Actual> = Result extends ShapeError<infer Message> ? { readonly __shapeError: Message } : Actual;
+export type Guard<Result, Actual> = [Result] extends [ShapeError<infer Message>] ? { readonly __shapeError: Message } : Actual;
 
 /**
  * A minimal, checker-ENFORCED covariant read view (Spike 05,

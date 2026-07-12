@@ -1,5 +1,6 @@
 import type { Broadcast } from "../src/broadcast.ts";
-import { type IsShapeError } from "../src/dim.ts";
+import { type CompatDim, type DimEq, type IsShapeError } from "../src/dim.ts";
+import { type Guard, NDArray } from "../src/ndarray.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
 // --- Acceptance table: Broadcast ---------------------------------------
@@ -39,3 +40,66 @@ type T13 = Expect<Equal<Broadcast<number[], [2, 3]>, readonly number[]>>;
 type T14 = Expect<Equal<Broadcast<[2, 3], number[]>, readonly number[]>>;
 type T15 = Expect<Equal<Broadcast<number[], number[]>, readonly number[]>>;
 type T16 = Expect<Equal<Broadcast<[2, ...number[]], [3]>, readonly number[]>>;
+
+// =============================================================================
+// Phase-D V1 (docs/phase-d-vorarbeiten-spec.md, Union-Guard-Fix): Facette (a)
+// (union DIM -> no-claim/wide) and Facette (b) corrected (shape-union IN ONE
+// type parameter of a single NDArray instance) — the reproducible form of
+// the guard leak; a union of whole `NDArray<A>|NDArray<B>` INSTANCES is a
+// separate, already-rejected control case, pinned in ndarray.test-d.ts.
+// =============================================================================
+
+// --- Facette (a): union DIM on either side -> no-claim, `true`/`Dim` -------
+// (D-V1.2 house pattern: `VectorLenCheck` in vector.ts.) Pre-fix, `DimEq`
+// distributed to `boolean` (rejecting even a member that DOES match) and
+// `CompatDim` distributed to a raw `Dim | ShapeError<...>` union.
+
+type UA1 = Expect<Equal<DimEq<2 | 7, 2>, true>>;
+type UA2 = Expect<Equal<CompatDim<2 | 7, 2>, number>>;
+type UA3 = Expect<Equal<DimEq<2, 2 | 7>, true>>; // symmetric: union on the OTHER side
+type UA4 = Expect<Equal<CompatDim<2, 2 | 7>, number>>;
+
+// A union dim that would otherwise SURVIVE into the broadcast result
+// degrades that one axis to `number` (wide) — never a confident literal for
+// either union member, and never the pre-fix leak (a raw `2 | ShapeError<...>`
+// mixed union that `Guard`/`OkShape` collapsed to a confidently-wrong [2,3]).
+type UA5 = Expect<Equal<Broadcast<readonly [2 | 7, 3], [2, 3]>, [number, 3]>>;
+
+const uaBase = NDArray.zeros([2, 3]);
+declare const uaUnionDimArg: NDArray<readonly [2 | 7, 3]>;
+const uaAdded = uaBase.add(uaUnionDimArg); // must NOT error (no-claim, gradual)
+type UA6 = Expect<Equal<(typeof uaAdded)["shape"], [number, 3]>>;
+void uaAdded;
+
+// --- Facette (b), corrected form: shape-union IN ONE TYPE PARAMETER --------
+// (`x: NDArray<[2,3]|[7,3]>`) — uniform rank. Policy: gemischt (some members
+// compatible, some not) -> accept, runtime backstop, result = union of the
+// VALID members' results; ALL members incompatible -> reject at the
+// argument with a COMBINED message (D-V1.4, tuple-wrapped `Guard`).
+
+declare const baseAB: NDArray<[2, 3]>;
+declare const mixedArg: NDArray<[2, 3] | [7, 3]>;
+declare const allBadArg: NDArray<[9, 3] | [7, 3]>;
+
+// gemischt: accepted, result is the union of valid members only (here: a
+// single valid member, so it collapses to one confident shape).
+const mixedAdded = baseAB.add(mixedArg);
+type UB1 = Expect<Equal<(typeof mixedAdded)["shape"], [2, 3]>>;
+void mixedAdded;
+
+// uniform error union: ALL members incompatible -> rejected at the argument.
+// The exact combined-message shape (D-V1.4's tuple-wrapped `infer` over a
+// non-distributed union source infers the UNION of every matched branch's
+// message — including the pre-existing "kreuzmultiplizierte Dim-Paare" nit,
+// Kern-09 Nit 3: `ShowShape` of a whole shape-union operand also distributes
+// independently of which specific member failed, so all 4 shape/message
+// combinations appear, not just the 2 "real" ones).
+type AllBadMsg =
+  | "cannot broadcast shapes [2,3] and [7,3]: dims 2 and 7 are not broadcast-compatible (neither equal nor 1)"
+  | "cannot broadcast shapes [2,3] and [7,3]: dims 2 and 9 are not broadcast-compatible (neither equal nor 1)"
+  | "cannot broadcast shapes [2,3] and [9,3]: dims 2 and 7 are not broadcast-compatible (neither equal nor 1)"
+  | "cannot broadcast shapes [2,3] and [9,3]: dims 2 and 9 are not broadcast-compatible (neither equal nor 1)";
+type UB2 = Expect<Equal<Guard<Broadcast<[2, 3], [9, 3] | [7, 3]>, NDArray<[9, 3] | [7, 3]>>, { readonly __shapeError: AllBadMsg }>>;
+
+// @ts-expect-error - both members of the argument's shape union are broadcast-incompatible with [2,3]
+baseAB.add(allBadArg);

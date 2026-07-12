@@ -15,18 +15,19 @@
  * into the result without a redundant `Broadcast<[], X>` call.
  */
 
-import { type Dim, type DimEq, type IsDynamicRank, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
+import { type Dim, type DimEq, type RankUnknowable, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
 import type { Broadcast } from "./broadcast.ts";
 
 type InnerMismatch<K1 extends Dim, K2 extends Dim> = ShapeError<`matmul: inner dimensions ${K1} and ${K2} do not match`>;
 
-/** A dynamic-RANK operand makes core-dim extraction and batch broadcasting
+/** A dynamic-RANK operand OR a MIXED-rank shape union (D-V1.3,
+ * `RankUnknowable`) makes core-dim extraction and batch broadcasting
  * unknowable — degrade to `Dim[]` (gradual, runtime-checked). Without this
  * guard, `number[]` falls through every tuple destructure to `never`,
  * making the op uncallable. */
-export type MatMul<A extends Shape, B extends Shape> = IsDynamicRank<A> extends true
+export type MatMul<A extends Shape, B extends Shape> = RankUnknowable<A> extends true
   ? readonly Dim[]
-  : IsDynamicRank<B> extends true
+  : RankUnknowable<B> extends true
     ? readonly Dim[]
     : MatMulStatic<A, B>;
 

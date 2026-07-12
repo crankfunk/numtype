@@ -46,37 +46,87 @@ export type IsDynamicDim<T extends Dim> = number extends T ? true : false;
 export type IsDynamicRank<S extends Shape> = number extends S["length"] ? true : false;
 
 /**
+ * Private copy of `IsUnion` (canonical source: slice-literal.ts:629, Spike
+ * 04/06's boundary-filter primitive). Duplicated here — NOT imported —
+ * because dim.ts is the foundational module of the import graph
+ * (broadcast.ts/matmul.ts/reduce.ts/slice.ts/vector.ts all import FROM
+ * dim.ts) while slice-literal.ts already imports FROM dim.ts
+ * (`IsDynamicDim`/`Dim`/`Shape`/`ShapeError`) — a reverse import would risk
+ * a type-only cycle (D-V1.1, docs/phase-d-vorarbeiten-spec.md). Not
+ * exported: only this file's own `CompatDim`/`DimEq`/`RankUnknowable`
+ * consume it; keep textually identical to the source.
+ */
+type IsUnion<T, U = T> = [T] extends [never] ? false : T extends unknown ? ([U] extends [T] ? false : true) : never;
+
+/**
+ * Is S's RANK "unknowable" for the purposes of a rank-gate — either
+ * genuinely dynamic (`IsDynamicRank`) OR a MIXED-rank shape union (S's own
+ * `length` resolves to a proper union of rank literals, e.g. `2 | 3` for
+ * `[2, 3] | [2, 3, 4]`)? A mixed-rank union defeats `IsDynamicRank` on its
+ * own: `number extends (2 | 3)` is false (a union of literals is not the
+ * wide `number` type), so that gate does not fire, and the shape falls
+ * through into rank-indexed tuple destructuring several call-frames down,
+ * where OTHER helpers (e.g. `RemoveAtFront`, `Reverse`) DO have their tuple
+ * parameter naked in their own body and so DO distribute — silently
+ * producing a per-member-confident, cross-member-wrong verdict (Kern-09
+ * finding 1 / Facette (c), docs/phase-d-vorarbeiten-spec.md). `RankUnknowable`
+ * degrades a mixed-rank union the SAME WAY as a dynamic rank — one rule,
+ * checked once, before any tuple recursion — instead of chasing the leak at
+ * every downstream distributive helper (owner-decided: uniform degradation
+ * at every rank-gate, including `Transpose`, 2026-07-12; `IsDynamicRank`
+ * itself stays unchanged — other consumers rely on its narrower meaning).
+ */
+export type RankUnknowable<S extends Shape> = IsDynamicRank<S> extends true ? true : IsUnion<S["length"]>;
+
+/**
  * Per-axis broadcast compatibility (NumPy rule): equal, or one of them is 1.
  * A dynamic dim on either side is accepted unconditionally (gradual — we
  * can't know statically, so we don't error, and the result degrades to
- * dynamic too, since we no longer know the resolved dim statically).
+ * dynamic too, since we no longer know the resolved dim statically). A
+ * UNION dim on either side (D-V1.2, Facette (a)) is filtered FIRST, before
+ * the dynamic-dim check, same treatment: no-claim, degrade to wide `Dim` —
+ * never a raw distributed union/`ShapeError` verdict (the pre-existing
+ * `VectorLenCheck` in vector.ts is the house pattern this mirrors).
  */
-export type CompatDim<A extends Dim, B extends Dim> = IsDynamicDim<A> extends true
+export type CompatDim<A extends Dim, B extends Dim> = IsUnion<A> extends true
   ? Dim
-  : IsDynamicDim<B> extends true
+  : IsUnion<B> extends true
     ? Dim
-    : A extends B
-      ? A
-      : B extends A
-        ? B
-        : A extends 1
-          ? B
-          : B extends 1
-            ? A
-            : ShapeError<`dims ${A} and ${B} are not broadcast-compatible (neither equal nor 1)`>;
+    : IsDynamicDim<A> extends true
+      ? Dim
+      : IsDynamicDim<B> extends true
+        ? Dim
+        : A extends B
+          ? A
+          : B extends A
+            ? B
+            : A extends 1
+              ? B
+              : B extends 1
+                ? A
+                : ShapeError<`dims ${A} and ${B} are not broadcast-compatible (neither equal nor 1)`>;
 
 /**
  * Strict dim equality for contraction axes (matmul inner dims): NO
  * broadcast "1" special-casing — a dynamic dim on either side matches
- * unconditionally (checked at runtime instead).
+ * unconditionally (checked at runtime instead). A UNION dim on either side
+ * (D-V1.2, Facette (a)) is filtered FIRST, same treatment: no-claim ->
+ * `true` (never reject a contraction axis just because one union member
+ * would mismatch — the pre-fix hazard: `A extends B` distributes over a
+ * naked union and collapses to plain `boolean`, which then fails `extends
+ * true` even when SOME member matches).
  */
-export type DimEq<A extends Dim, B extends Dim> = IsDynamicDim<A> extends true
+export type DimEq<A extends Dim, B extends Dim> = IsUnion<A> extends true
   ? true
-  : IsDynamicDim<B> extends true
+  : IsUnion<B> extends true
     ? true
-    : A extends B
-      ? (B extends A ? true : false)
-      : false;
+    : IsDynamicDim<A> extends true
+      ? true
+      : IsDynamicDim<B> extends true
+        ? true
+        : A extends B
+          ? (B extends A ? true : false)
+          : false;
 
 /** Tail-recursive (accumulator) reverse of a tuple. Used by Transpose and by
  * Broadcast's right-to-left alignment. */

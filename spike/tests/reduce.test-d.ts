@@ -33,3 +33,29 @@ type T15 = Expect<Equal<ReduceAxis<[2, 3, 4], number>, readonly number[]>>;
 type T16 = Expect<Equal<ReduceAxis<number[]>, []>>; // full reduction is [] for EVERY rank, known or not
 type T17 = Expect<Equal<ReduceAxisKeepDims<number[]>, 1[]>>; // rank unknown, but every dim is 1
 type T18 = Expect<Equal<Transpose<number[]>, readonly number[]>>;
+
+// =============================================================================
+// Phase-D V1 (docs/phase-d-vorarbeiten-spec.md, Union-Guard-Fix): Facette (c)
+// — a MIXED-rank shape union (`S["length"]` itself a proper union of rank
+// literals, e.g. `[2,3] | [2,3,4]`) degrades uniformly at every rank-gate via
+// `RankUnknowable`, exactly like a dynamic rank. This is the fix for the
+// Kern-09 finding: pre-fix, `ReduceAxis<[2,3]|[2,3,4], 2>` silently resolved
+// to the CONFIDENT `[2, 3]` (only the rank-3 member's removal succeeded; the
+// rank-2 member's `ShapeError` got silently discarded by the distributive
+// `Guard`/`OkShape` pipeline at the `NDArray.sum()` call site — see
+// ndarray.test-d.ts for that call-site pin). `Transpose` is a disclosed,
+// owner-decided precision trade-off rather than a bug fix: pre-fix it was
+// already distributively CORRECT (`[3,2] | [4,3,2]`, a genuine per-member
+// answer), but the uniform-degradation rule applies to every rank-gate
+// without exception, for structural simplicity (docs/phase-d-vorarbeiten-spec.md,
+// "Begründung der Uniform-Degradation").
+// =============================================================================
+
+type UC1 = Expect<Equal<ReduceAxis<[2, 3] | [2, 3, 4], 2>, readonly number[]>>;
+type UC2 = Expect<Equal<Transpose<[2, 3] | [2, 3, 4]>, readonly number[]>>;
+
+// Uniform-rank shape unions are NOT mixed-rank: `RankUnknowable` stays
+// `false` for them, so natural per-member distribution still applies
+// (Policy table row 2 — "natürliche Distribution bleibt"). Transpose of a
+// uniform-rank union is genuinely, distributively correct.
+type UC3 = Expect<Equal<Transpose<[2, 3] | [4, 5]>, [3, 2] | [5, 4]>>;

@@ -15,7 +15,7 @@
  * trivial `Decrement<N> = N-1` is needed, which is safe and simple.
  */
 
-import { type Dim, type IsDynamicRank, type Reverse, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
+import { type Dim, type RankUnknowable, type Reverse, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
 
 // ---- rank-scale tuple counting helpers (never applied to dim values) ----
 
@@ -84,8 +84,8 @@ export type ReduceAxis<S extends Shape, Axis extends number | undefined = undefi
     ? AllOnes<S> // note: statically correct even for dynamic rank (`number[]` -> `1[]`)
     : [] // full reduction is `[]` for EVERY rank, known or not
   : Axis extends number
-    ? IsDynamicRank<S> extends true
-      ? readonly Dim[] // dynamic rank: axis validity/position unknowable -> gradual, runtime-checked
+    ? RankUnknowable<S> extends true
+      ? readonly Dim[] // dynamic rank OR mixed-rank union (D-V1.3): axis validity/position unknowable -> gradual, runtime-checked
       : number extends Axis
         ? readonly Dim[] // dynamic AXIS on a known shape: which dim goes is unknowable -> gradual (without this guard, `0 extends number` silently removes axis 0)
         : ResolveAndApply<S, Axis, KeepDims> extends infer R
@@ -100,5 +100,9 @@ export type ReduceAxisKeepDims<S extends Shape, Axis extends number | undefined 
 
 /** Reverse all axes (NumPy's `.T` generalized to N-D). Dynamic rank cannot
  * be reversed axis-by-axis (Reverse would silently return `[]`) — degrade
- * to `Dim[]`. */
-export type Transpose<S extends Shape> = IsDynamicRank<S> extends true ? readonly Dim[] : Reverse<S>;
+ * to `Dim[]`. A MIXED-rank shape union (D-V1.3, `RankUnknowable`) degrades
+ * the SAME way, by owner decision — even though `Reverse` would otherwise
+ * distribute to a per-member-correct union (e.g. `[3,2] | [4,3,2]` for
+ * `[2,3] | [2,3,4]`): one uniform rule at every rank-gate, disclosed
+ * precision loss for this exotic case, docs/phase-d-vorarbeiten-spec.md. */
+export type Transpose<S extends Shape> = RankUnknowable<S> extends true ? readonly Dim[] : Reverse<S>;

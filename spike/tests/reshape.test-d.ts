@@ -192,6 +192,38 @@ arr12.reshape([wideNegDim, 4]); // must NOT error (no static claim on a wide dim
 const flatDyn = dynRankArr.flatten();
 type T12 = Expect<Equal<(typeof flatDyn)["shape"], [number]>>;
 
+// =============================================================================
+// Phase-D V1 (docs/phase-d-vorarbeiten-spec.md, Union-Guard-Fix): Facette (c)
+// for `reshape`/`flatten` specifically — deliberately NOT routed through
+// `RankUnknowable` (D-V1.3 explicitly excludes `LiteralShapeProduct`,
+// slice-literal.ts:688, frozen). `ReshapeCheck` already has its OWN
+// `IsUnion`-based product-boundary filter (reshape.ts:64-67) that degrades a
+// mixed-rank RECEIVER to no-claim on its own — these are "already-safe"
+// regression pins (no source change here), not a V1 fix.
+// =============================================================================
+
+declare const mixedRankRecv: NDArray<[2, 3] | [2, 3, 4]>;
+
+// `.reshape([6])`: accepted, CONFIDENTLY typed `NDArray<[6]>` — correct on
+// the non-throwing path (the rank-2 member's product IS 6; the rank-3
+// member's product is 24, which would throw at runtime for THAT branch, the
+// same never-wrong-only-incomplete backstop every other gradual op relies
+// on). `ReshapeCheck`'s product check itself no-claims here (LiteralShapeProduct
+// distributes to `6 | 24`, a union -> its own IsUnion filter passes), but
+// `reshape()`'s return type is always the user-supplied NS verbatim, so the
+// hover stays clean and confident regardless of the guard's verdict.
+const reshapedMixed = mixedRankRecv.reshape([6]);
+type UC1 = Expect<Equal<(typeof reshapedMixed)["shape"], [6]>>;
+void reshapedMixed;
+
+// `.flatten()`: the Spike-04 product machinery distributes NATURALLY and
+// CORRECTLY over the mixed-rank union — `NDArray<[6 | 24]>` is a genuine
+// per-member-correct result (product of [2,3] is 6, of [2,3,4] is 24), an
+// "already-safe" case with nothing to degrade.
+const flattenedMixed = mixedRankRecv.flatten();
+type UC2 = Expect<Equal<(typeof flattenedMixed)["shape"], [6 | 24]>>;
+void flattenedMixed;
+
 void reshaped;
 void identity;
 void to1d;
