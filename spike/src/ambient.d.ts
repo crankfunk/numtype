@@ -72,15 +72,20 @@ declare module "node:assert" {
    * a validation function receiving the thrown value and returning
    * whether it's acceptable (both forms used by this project's tests). */
   function throws(fn: () => unknown, error?: RegExp | ((err: unknown) => boolean), message?: string): void;
+  /** Item 10: the async twin of `throws` — awaits a rejecting `Promise`
+   * (e.g. `NDArray.backend("threaded")`'s env-detection throw, which is
+   * async because `backend()` itself is). */
+  function rejects(fn: () => Promise<unknown>, error?: RegExp | ((err: unknown) => boolean), message?: string): Promise<void>;
   const assertDefault: {
     ok: typeof ok;
     strictEqual: typeof strictEqual;
     deepStrictEqual: typeof deepStrictEqual;
     notStrictEqual: typeof notStrictEqual;
     throws: typeof throws;
+    rejects: typeof rejects;
   };
   export default assertDefault;
-  export { ok, strictEqual, deepStrictEqual, notStrictEqual, throws };
+  export { ok, strictEqual, deepStrictEqual, notStrictEqual, throws, rejects };
 }
 
 /** Spike 02: the handful of `Buffer` surface the editor-latency LSP client's

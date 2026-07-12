@@ -43,6 +43,9 @@ import {
 import type { LiteralShapeProduct } from "./slice-literal.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "./slice.ts";
 import type { DotCheck } from "./vector.ts";
+import { checkThreadedEnv, WasmBackend, type BackendKind, type ThreadedBackendOptions } from "./wasm/backend-api.ts";
+import { initCore } from "./wasm/loader.ts";
+import type { ThreadedBackend } from "./wasm/threaded.ts";
 
 /** Narrow a possibly-erroring computed shape down to a real `Shape`,
  * excluding the `ShapeError` branch. Only ever evaluated at call sites
@@ -193,6 +196,52 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
     }
     const data = values instanceof Float64Array ? new Float64Array(values) : Float64Array.from(values);
     return new NDArray<Mutable<S>>([...shape] as Mutable<S>, data);
+  }
+
+  /** Explicit, opt-in performance backends (Item 10 — Backend-Wahl-API,
+   * docs/item-10-backend-api-spec.md, D1). `NDArray` itself stays the
+   * synchronous, browser-safe JS default and carries the USP (compile-time
+   * shape checks) everywhere; this is the discoverable async entry point
+   * into the WASM-resident world (`WNDArray`, `spike/src/wasm/resident.ts`)
+   * and its further Node-only worker-thread opt-in. Overloaded so each
+   * `kind` resolves to its own precise backend type — no widened union at
+   * the call site (D1, overload resolution verified empirically).
+   *
+   * `"wasm"`: instantiates a FRESH WASM core (`initCore()`) and wraps it in
+   * a `WasmBackend` — `backend.fromArray/zeros/ones` hand that `core`
+   * straight through to the existing `WNDArray.*(core, ...)` statics,
+   * unchanged (D1).
+   *
+   * `"threaded"`: env-detected Node-only opt-in (D2). `./wasm/threaded.ts`
+   * has top-level `node:os`/`node:fs/promises`/`node:worker_threads`
+   * imports — a STATIC import of it here would contaminate the
+   * browser-safe `NDArray` default and `backend("wasm")` path, so it is
+   * loaded with a DYNAMIC `import()` that runs strictly AFTER the env
+   * check below passes: missing Node or the threads artifact throws with
+   * the pinned message stem (detail decision 4), never a silent fallback
+   * and never a bare crash from the module's own top-level imports.
+   *
+   * `kind` must be a LITERAL (`"wasm"` or `"threaded"`) at the call site —
+   * ordinary TS overload resolution, nothing special to this method: a
+   * caller holding a dynamically-typed `BackendKind` value (the `"wasm" |
+   * "threaded"` union) gets rejected ("No overload matches this call"),
+   * because a union isn't assignable to either overload's literal
+   * parameter type (verified empirically). Narrow with an `if`/`switch` on
+   * `kind` first, so each branch calls `backend` with a literal. */
+  static async backend(kind: "wasm"): Promise<WasmBackend>;
+  static async backend(kind: "threaded", opts?: ThreadedBackendOptions): Promise<ThreadedBackend>;
+  static async backend(kind: BackendKind, opts?: ThreadedBackendOptions): Promise<WasmBackend | ThreadedBackend> {
+    if (kind === "wasm") {
+      const core = await initCore();
+      return new WasmBackend(core);
+    }
+    const reason = await checkThreadedEnv();
+    if (reason !== null) {
+      throw new Error(`NDArray.backend("threaded"): threaded backend requires Node with the threads artifact (${reason})`);
+    }
+    const mod = await import("./wasm/threaded.ts");
+    const pool = await mod.initThreadedCore(opts?.workers, opts?.matmulTimeoutMs);
+    return new mod.ThreadedBackend(pool, opts?.minPoolWork);
   }
 
   /** Broadcasting elementwise add. */

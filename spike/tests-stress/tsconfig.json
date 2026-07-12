@@ -10,5 +10,5 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true
   },
-  "include": ["."]
+  "include": [".", "../src/ambient.d.ts"]
 }

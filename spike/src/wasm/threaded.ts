@@ -83,7 +83,7 @@ import { availableParallelism } from "node:os";
 import { readFile } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
 import { type Guard, type OkShape } from "../ndarray.ts";
-import { type Shape } from "../dim.ts";
+import { type Mutable, type Shape } from "../dim.ts";
 import type { MatMul } from "../matmul.ts";
 import type { CoreExports } from "./loader.ts";
 import { planMatmul, squeezeMatmulShape, WNDArray, type WNDArrayDescriptor } from "./resident.ts";
@@ -752,4 +752,95 @@ export function threadedMatmul<S extends Shape, B extends Shape>(
 
   const finalShape = squeezeMatmulShape(plan);
   return WNDArray.fresh<OkShape<MatMul<S, B>>>(pool.core, finalShape as OkShape<MatMul<S, B>>, outPtr, plan.outLen);
+}
+
+/**
+ * Item 10 — Backend-Wahl-API (docs/item-10-backend-api-spec.md, D2): the
+ * threaded performance-backend facade. Wraps a `ThreadedPool` and hands its
+ * `pool.core` straight through to the EXISTING `WNDArray.*(core, ...)`
+ * statics for `fromArray`/`zeros`/`ones` — the created arrays are normal
+ * `WNDArray`s (their instance methods run single-threaded on the main
+ * thread, as today); only `matmul` is parallel, via this backend method
+ * delegating to `threadedMatmul` (the free function above, unchanged) — the
+ * bewusst offengelegte Inkonsistenz D2 documents (`backend.matmul(a, b)`,
+ * not `a.matmul(b)`).
+ *
+ * Lives in THIS module (not `backend-api.ts`) so its value export stays
+ * behind `threaded.ts`'s own dynamic-import boundary: `ndarray.ts` only
+ * ever `import type`s `ThreadedBackend`, and `NDArray.backend("threaded")`
+ * dynamically `import()`s this whole module — including this class's
+ * constructor code — strictly AFTER the D2 env check passes, so the
+ * browser-safe `NDArray` default and `backend("wasm")` never pull in this
+ * file's top-level `node:os`/`node:fs/promises`/`node:worker_threads`
+ * imports.
+ *
+ * Poisoned-pool behavior at this facade (Kern-06 semantics, unchanged —
+ * `ThreadedPool.assertNotPoisoned()`'s own doc comment): once a worker
+ * crashes or times out mid-call, the pool is permanently poisoned and
+ * `matmul` throws the poisoned-pool message on every subsequent call —
+ * `threadedMatmul` gates on `pool.assertNotPoisoned()` before dispatching.
+ * `fromArray`/`zeros`/`ones` are UNAFFECTED: they go straight through
+ * `pool.core` to the existing `WNDArray.*` statics, which never touch worker
+ * state, so non-matmul ops on this backend stay usable after a poison.
+ * `dispose()` still cleans up correctly either way — `ThreadedPool.dispose()`
+ * awaits the in-flight poison cleanup instead of repeating worker teardown.
+ */
+export class ThreadedBackend {
+  readonly pool: ThreadedPool;
+  private readonly defaultMinPoolWork: number | undefined;
+  private disposed = false;
+
+  constructor(pool: ThreadedPool, defaultMinPoolWork?: number) {
+    this.pool = pool;
+    this.defaultMinPoolWork = defaultMinPoolWork;
+  }
+
+  private assertLive(op: string): void {
+    if (this.disposed) {
+      throw new Error(`ThreadedBackend.${op}: backend has been disposed`);
+    }
+  }
+
+  fromArray<const S extends Shape>(shape: S, values: readonly number[] | Float64Array): WNDArray<Mutable<S>> {
+    this.assertLive("fromArray");
+    return WNDArray.fromArray(this.pool.core, shape, values);
+  }
+
+  zeros<const S extends Shape>(shape: S): WNDArray<Mutable<S>> {
+    this.assertLive("zeros");
+    return WNDArray.zeros(this.pool.core, shape);
+  }
+
+  ones<const S extends Shape>(shape: S): WNDArray<Mutable<S>> {
+    this.assertLive("ones");
+    return WNDArray.ones(this.pool.core, shape);
+  }
+
+  /** Parallel matmul (D2): delegates to `threadedMatmul(this.pool, a, b,
+   * opts)`, including its size-based auto-routing. `opts.minPoolWork`
+   * overrides this backend's own default (set at
+   * `NDArray.backend("threaded", { minPoolWork })` construction time,
+   * detail decision 2), which in turn overrides `threadedMatmul`'s own
+   * module-level `THREADED_MATMUL_MIN_POOL_WORK` default. */
+  matmul<S extends Shape, B extends Shape>(
+    a: WNDArray<S>,
+    b: Guard<MatMul<S, B>, WNDArray<B>>,
+    opts?: ThreadedMatmulOptions,
+  ): WNDArray<OkShape<MatMul<S, B>>> {
+    this.assertLive("matmul");
+    const minPoolWork = opts?.minPoolWork ?? this.defaultMinPoolWork;
+    return threadedMatmul(this.pool, a, b, minPoolWork !== undefined ? { minPoolWork } : undefined);
+  }
+
+  /** Releases the pool (D1: "backend.dispose() gibt den core/Pool frei") —
+   * delegates to `ThreadedPool.dispose()` (Kern-06 lifecycle contract
+   * unchanged: async, idempotent, awaits worker shutdown/poison cleanup).
+   * Does NOT dispose any `WNDArray` created through this backend — those
+   * keep their own explicit `dispose()` (D1: the facade never hides WASM
+   * memory management). */
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    await this.pool.dispose();
+  }
 }
