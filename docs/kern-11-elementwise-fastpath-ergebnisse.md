@@ -109,20 +109,45 @@ starke Zusatzevidenz, dass nirgends Logik wanderte, nicht eine Schwäche.
 Beide neuen Tests sind test-only (`#[cfg(test)]`), Artefakt-Hash danach unverändert
 `0b9df4f1…` (selbst per Rebuild geprüft) — kein Freeze-/check:diag-Einfluss.
 
-## check:diag-Anomalie (ehrlich)
-Das Hinzufügen der reinen Wert-Bench-Datei `spike/bench-core/elementwise.ts`
-(genuin streng typgeprüft — kein `@ts-nocheck`/`any`, importiert echtes
-Produktcode; ein injizierter Typfehler lässt `pnpm check` fallen) SENKT
-`check:diag` von 174,391 @ 127 auf **172,392 @ 128** — ein Rückgang trotz +1 Datei.
-Beide Verifier haben es in isolierten Worktrees reproduziert (Datei löschen stellt
-exakt 174,391 @ 127 wieder her; Dateiliste ist strikter Superset, keine versteckte
-Coverage-Erosion). Einordnung: das ist die bereits bei **Infra 01** dokumentierte
-TS7-Instantiation-Nicht-Linearität (dort sank der Pin beim ENTFERNEN von
-Stress-Fällen um MEHR als die Summe ihrer Einzelkosten — Cache-/Interaktionseffekte
-im nativen Go-Checker), hier in additiver Richtung. Real, deterministisch,
-budget-neutral (~3,4 %), coverage-neutral. Der EXAKTE Compiler-Mechanismus bleibt
-opak (closed-source, „version-fragile") — ehrlich als solcher benannt, nicht
-wegerklärt. Neuer Haupt-Pin: **172,392 @ 128**.
+## check:diag-Anomalie — Mechanismus GEPINNT (2026-07-12, Nachtrag)
+Das Hinzufügen der Bench-Datei `spike/bench-core/elementwise.ts` SENKT `check:diag`
+von 174,391 @ 127 auf **172,392 @ 128** — ein Rückgang trotz +1 Datei. Zunächst als
+„Mechanismus opak" dokumentiert; auf Owner-Wunsch nachträglich per kontrollierter
+Bisektion (Scratch-Kopie, eine Variable pro Schritt) **aufgeklärt**:
+
+**Der Zähler ist reihenfolge-abhängig, nicht inhalts- oder anzahl-abhängig.** Belege:
+- **Inhalts-unabhängig:** eine LEERE `export {}`-Datei an derselben Stelle erzeugt
+  den Sprung fast vollständig (−2,043); der echte Bench-Inhalt addiert nur +44.
+  Zerlegung der −1,999: **−2,043 Reihenfolge-Effekt + 44 echte Typ-Kosten.**
+- **Reihenfolge-abhängig (decisive):** dieselbe leere Datei, nur umbenannt, gibt
+  −2,034 (`aaaa…`, früh in der sortierten Datei-Liste) vs. −304 (`zzzz…`, spät). Der
+  EINZIGE Unterschied ist die Position → die Prüf-Reihenfolge.
+- **Nicht-monoton:** zwei leere Dateien (−357) < eine früh einsortierte (−2,034).
+- Corroboration: der `Types`-Zähler fiel bei der leeren Datei um −1,321 — auch die
+  Anzahl *distinkter* erzeugter Typen ist reihenfolge-abhängig.
+
+**Warum (TS-Interna):** Der Checker memoisiert Typ-Instanziierungen global pro
+Kompilation. Die teuren Typen hier sind rekursiv (Digit-Arithmetik in
+slice-literal.ts, `Broadcast`, `ReduceAxis`). Referenzieren mehrere Dateien
+denselben geteilten Typ, zählt die ZUERST geprüfte ihn frisch (samt aller
+Rekursions-Instanziierungen darunter); spätere treffen den Cache. Eine zusätzliche
+Datei verschiebt die Datei-Reihenfolge → die Frisch-vs-gecacht-Partition der
+geteilten Instanziierungen verschiebt sich → der Gesamtwert wandert, in beide
+Richtungen, mit Betrag abhängig davon, WO die neue Datei im Sortlauf landet. Das
+pinnt rückwirkend auch die Infra-01-Beobachtung (−69,730 beim Entfernen, super-
+additiv = dieselbe Reihenfolge-Sensitivität). Nicht per `--generateTrace` bis auf
+die konkreten Typen heruntergebrochen (Typ-IDs sind pro Lauf erzeugungsreihenfolge-
+vergeben → nur über Struktur matchbar, fiddelig, ändert die Schlussfolgerung nicht).
+
+**Konsequenz für die Pin-Disziplin:** Der Pin bleibt exakt/deterministisch für ein
+FESTES Datei-Set (voller Tripwire für Nicht-Datei-Änderungen). Aber jede Scheibe,
+die Dateien HINZUFÜGT/ENTFERNT, trägt einen Reihenfolge-Rauschterm bis ~±2,000, der
+NICHT den echten Typ-Kosten entspricht — kleine Deltas über solche Scheiben nicht
+als „Kosten X" lesen. Budget-Verfolgung (~3,4 % von 5M) unberührt; ein echter
+Regress wäre ≫2,000 und monoton. Saubere Pro-Scheiben-Attribution beim Hinzufügen
+einer Datei: erst LEER hinzufügen + messen (= Reihenfolge-Anteil), dann füllen +
+messen (= echte Inhalts-Kosten). Neuer Haupt-Pin: **172,392 @ 128** (real,
+deterministisch, coverage-neutral).
 
 ## Bench (`pnpm bench:elementwise`)
 n=1024, add/sub/mul/div, contiguous (Fast-Path) vs. non-contiguous (transponiert,
