@@ -95,3 +95,61 @@ export function genBroadcastShapes(rng: Rng, maxRank = 4): { aShape: number[]; b
   }
   return { aShape, bShape };
 }
+
+// ---------------------------------------------------------------------------
+// Kern 10 (docs/kern-10-special-values-spec.md): IEEE-754 special-value
+// injection. Appended strictly after all pre-existing content in this file —
+// `nextF64`/`genData`/`makeRng`/`genBroadcastShapes` above are byte-for-byte
+// unchanged, so no existing seeded differential case changes its values.
+// ---------------------------------------------------------------------------
+
+/**
+ * One representative of every IEEE-754 special-value CLASS the differential
+ * suite must cover: NaN, +/-Infinity, +0/-0 (`Object.is`-distinguished),
+ * two distinct subnormals (below `2.2250738585072014e-308` — there is no
+ * `Number.MIN_NORMAL` constant, so that literal boundary is the reference),
+ * and +/-`MAX_VALUE` (the closest a `+`/`*`-only chain can push a value
+ * while both operands stay finite, per D5's transcendental-free scope).
+ * `genData`/`nextF64` never produce any of these by construction (see
+ * `nextF64`'s own doc comment) — this is the deliberate injection D1 calls
+ * for.
+ */
+export const SPECIAL_VALUES: readonly number[] = [
+  Number.NaN,
+  Number.POSITIVE_INFINITY,
+  Number.NEGATIVE_INFINITY,
+  0,
+  -0,
+  Number.MIN_VALUE, // smallest positive subnormal (~4.9406564584124654e-324)
+  -Number.MIN_VALUE,
+  Number.MIN_VALUE * 4, // a second, distinct subnormal (still < 2.225...e-308)
+  Number.MAX_VALUE,
+  -Number.MAX_VALUE,
+];
+
+/**
+ * One f64 draw: with probability `specialProb`, a uniformly chosen member of
+ * `SPECIAL_VALUES`; otherwise an ordinary `rng.nextF64()` draw. Both the
+ * "is this draw special" coin flip and the "which special value" choice are
+ * `rng`-sourced draws (never `Math.random`), so a given seed's stream stays
+ * fully deterministic/reproducible, exactly like every other generator in
+ * this file.
+ */
+export function nextF64Special(rng: Rng, specialProb = 0.35): number {
+  const roll = rng.nextInt(0, 999);
+  if (roll < Math.round(specialProb * 1000)) {
+    const idx = rng.nextInt(0, SPECIAL_VALUES.length - 1);
+    return SPECIAL_VALUES[idx] ?? Number.NaN;
+  }
+  return rng.nextF64();
+}
+
+/** Like `genData`, but every element is drawn via `nextF64Special` instead
+ * of `nextF64` — a payload shot through with IEEE-754 special values at the
+ * given rate, for the differential suite's special-value coverage. */
+export function genDataSpecial(rng: Rng, shape: readonly number[], specialProb = 0.35): Float64Array {
+  const n = shape.reduce((acc, d) => acc * d, 1);
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) out[i] = nextF64Special(rng, specialProb);
+  return out;
+}

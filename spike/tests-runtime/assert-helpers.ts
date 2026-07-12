@@ -3,6 +3,16 @@
  * kernels use only `+`/`*` (IEEE-defined in WASM) — so a match must be
  * exact, not epsilon: shape equality (deep) plus per-element `Object.is`
  * (distinguishes -0/+0 and handles NaN correctly, unlike `===`).
+ *
+ * NaN-payload clarification (Kern 10, docs/kern-10-special-values-spec.md
+ * D3): `assertDataBitIdentical` stays `Object.is`-based, which treats every
+ * NaN as equal regardless of its payload bits — the WASM spec permits
+ * implementation-defined NaN payloads for arithmetic results, so the claim
+ * this comparator backs is: bit-identical for ALL non-NaN values (+/-0
+ * distinguished via `Object.is`), NaN equal only as a value CLASS. Callers
+ * that need the strictly stronger byte-exact payload claim (e.g. proving a
+ * pure data-movement op like transpose never canonicalizes a NaN's bits) use
+ * `bitsOf` directly instead of this function.
  */
 import assert from "node:assert";
 
@@ -10,7 +20,7 @@ export function assertShapeEqual(expected: readonly number[], actual: readonly n
   assert.deepStrictEqual([...actual], [...expected], `${context}: shape mismatch, expected [${expected.join(",")}] got [${actual.join(",")}]`);
 }
 
-function bitsOf(x: number): bigint {
+export function bitsOf(x: number): bigint {
   return new BigUint64Array(new Float64Array([x]).buffer)[0] ?? 0n;
 }
 
