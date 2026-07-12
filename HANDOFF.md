@@ -15,8 +15,9 @@ NumType (Forschungsprojekt: typsichere n-dim Arrays — TS-Typ-Ebene + from-scra
 Nichts halbfertig. Alle Slices sind abgeschlossen. Offene Punkte leben bewusst deferred in FOLLOWUPS.md.
 
 ## Nächste Schritte (priorisiert)
-1. **Owner-Entscheidung: Phase C vs. Phase D** (roadmap.md). Phase C = Plattform-Entscheidungen (Browser-Port des Threads-Pfads / no_std-stable, dann Backend-Wahl-API); Phase D = Paketierung/Release. Richtungsentscheidung, kein Automatismus.
-2. **Größter offener Perf-Hebel: `unravel_into`-Generalisierung** (FOLLOWUPS) — der breitere Verwandte von Kern 11: `unravel` (shape.rs:105, allozierend) durch das nicht-allozierende Muster über ALLE strided Kernel ersetzen. Eigene Scheibe MIT eigener Messung VOR der Freeze-Zeremonie (general-Case-Payoff ist hergeleitet, nicht gemessen). Freeze-Warnung: die `#[cfg(atomics)]`-gegateten `_into`-Twins NICHT entgatern (Präsenz verschiebt Bytes).
+**Richtung entschieden (Owner, 2026-07-12): Phase C.**
+1. **Phase C starten — erst Scoping, kein Bau** (roadmap.md, Items 8–10). Items 8 & 9 abwägen: Browser-Port des Threads-Pfads (COOP/COEP, `crossOriginIsolated`, async Dispatch statt blockierendem `Atomics.wait`) + no_std/stable-Pfad JETZT umsetzen ODER Threads für v0 bewusst als Node-only-/experimentelles Opt-in zurückstellen (beide Fallbacks stehen in roadmap.md; das Standard-Artefakt baut heute schon auf stable, der Threads-Build hängt an pinned nightly-2026-07-09 + `-Z build-std`). Constraints recherchieren, dann Empfehlung an den Owner VOR der Umsetzung — Item 10 (Backend-Wahl-API, ein NDArray-Surface mit Backend-Wahl bei der Erzeugung) hängt am Ausgang von 8/9.
+2. **Größter offener Perf-Hebel (parallel/später): `unravel_into`-Generalisierung** (FOLLOWUPS) — der breitere Verwandte von Kern 11: `unravel` (shape.rs:105, allozierend) durch das nicht-allozierende Muster über ALLE strided Kernel ersetzen. Eigene Scheibe MIT eigener Messung VOR der Freeze-Zeremonie (general-Case-Payoff ist hergeleitet, nicht gemessen). Freeze-Warnung: die `#[cfg(atomics)]`-gegateten `_into`-Twins NICHT entgatern (Präsenz verschiebt Bytes).
 3. Kür/klein aus FOLLOWUPS: NaN-Payload-Erhalt für reshape/slice/fromArray regressionstesten (Kern-10-Befund); `keepDimsShape` defensiver Achsen-Assert; die vorbestehende Union-Guard-Latenz (drei Facetten, eigene Scheibe).
 
 ## Bekannte Probleme / Stolperfallen
