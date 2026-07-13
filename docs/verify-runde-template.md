@@ -96,8 +96,11 @@ ist das Brechen):
 
 ## Baustein C — covenant-verify (Vertrags-Dimension; gilt, solange COVENANT.md existiert)
 
-Läuft PARALLEL zu A und B als DRITTER frischer Kontext mit disjunkter Frage: „hält
-der Diff den STEHENDEN Vertrag?" — nicht die Scheiben-Spec (das ist A), nicht die
+Pflicht nur auf Stufe 3 der Covenant-Eskalationsleiter (substanzielle Scheibe mit
+bindender Spec — Leiter in CLAUDE.md, „Qualitätssicherung"); auf Stufe 2 (Anker
+berührt, keine Scheibe) nur bei inhaltlicher Tangierung, sonst Ein-Satz-Begründung im
+Commit. Läuft PARALLEL zu A und B als DRITTER frischer Kontext mit disjunkter Frage:
+„hält der Diff den STEHENDEN Vertrag?" — nicht die Scheiben-Spec (das ist A), nicht die
 Korrektheit (das ist B). Dispatch über den `covenant:covenant-verify`-Agenten mit
 GENAU diesem Input: (a) COVENANT.md wörtlich, (b) `git diff` der Scheibe, (c) die als
 berührt identifizierten Invarianten-IDs, (d) `graph-a-lama query lint`-Output + knappe

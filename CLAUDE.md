@@ -106,3 +106,13 @@ Substanz hielt, aber globale standing orders und Prozess-Feinheiten verlor
   die berührten Invarianten-IDs; Baustein 0 gleicht jede neue Spec gegen den
   Vertrag ab. Spec-Änderungen NUR mit Owner-Bestätigung + Version-Bump +
   Changelog — nie still, auch wenn die Spec „offensichtlich veraltet" wirkt.
+  **Eskalationsleiter (Owner-bestätigt 2026-07-13) — nie vorsichtshalber den
+  vollen Katalog fahren:** Stufe 0 trivial (Typo/Kommentar/Doku-only, kein
+  Anker berührt) → nichts. Stufe 1 klein & anker-frei → nur das mechanische
+  Lint (läuft ohnehin im Gate-Block mit). Stufe 2 Anker berührt, aber keine
+  Scheibe (FOLLOWUPS-Minis) → Lint immer; covenant-verify nur, wenn die
+  Invariante INHALTLICH tangiert sein könnte, sonst Ein-Satz-Begründung im
+  Commit (dokumentiertes Ermessen). Stufe 3 substanzielle Scheibe (bindende
+  Spec) → voller Katalog A+B+C parallel + Lint im Gate-Block. Dieselbe Leiter
+  galt für A/B schon immer (Zwei-Verifier-Regel nur für substanzielle
+  Scheiben, Baustein 0 nur für bindende Specs).
