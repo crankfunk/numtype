@@ -1,4 +1,4 @@
-import { type IsShapeError } from "../src/dim.ts";
+import { type Dim, type IsShapeError } from "../src/dim.ts";
 import type { ReduceAxis, ReduceAxisKeepDims, Transpose } from "../src/reduce.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
@@ -59,3 +59,36 @@ type UC2 = Expect<Equal<Transpose<[2, 3] | [2, 3, 4]>, readonly number[]>>;
 // (Policy table row 2 — "natürliche Distribution bleibt"). Transpose of a
 // uniform-rank union is genuinely, distributively correct.
 type UC3 = Expect<Equal<Transpose<[2, 3] | [4, 5]>, [3, 2] | [5, 4]>>;
+
+// =============================================================================
+// Union-Axis-Mini-Scheibe (docs/union-axis-mini-spec.md): a union in the
+// AXIS parameter itself (as opposed to Facette (c) above, a union in the
+// receiver SHAPE) degrades to `readonly Dim[]` — no-claim, gradual,
+// runtime-backstopped — regardless of what the individual members are.
+// =============================================================================
+
+// Facette (1) fix, direct type-level pin: literal-member axis union — the
+// pre-fix bug (naked `Axis extends number` distributes before any filter can
+// see the union as a whole, so this confidently resolved to `[3]`, silently
+// discarding the axis-2 out-of-range member's ShapeError).
+type UA1 = Expect<Equal<ReduceAxis<[2, 3], 0 | 2>, readonly number[]>>;
+
+// Facette (2), type-level form: `0 | undefined` IS caught by the filter at
+// the ReduceAxis level itself (Baustein-0-proven) — the gap is strictly in
+// how TS infers the type ARGUMENT from an optional `axis?` parameter at a
+// real call site (see ndarray.test-d.ts's documenting gap-pin), never here.
+type UA2 = Expect<Equal<ReduceAxis<[2, 3], 0 | undefined>, readonly number[]>>;
+
+// Negative union member.
+type UA3 = Expect<Equal<ReduceAxis<[2, 3], -1 | 0>, readonly number[]>>;
+
+// ALL-invalid union (every member out of range for rank 2) — NOT statically
+// rejected, same documented incompleteness as an all-bad union DIM in
+// `CompatDim`/`DimEq`: no-claim, not an error.
+type UA4 = Expect<Equal<ReduceAxis<[2, 3], 2 | 5>, readonly number[]>>;
+
+// Union axis crossed with KeepDims (literal true / literal false / dynamic
+// boolean) — the KeepDims value never un-degrades a union AXIS.
+type UA5 = Expect<Equal<ReduceAxis<[2, 3], 0 | 2, true>, readonly Dim[]>>;
+type UA6 = Expect<Equal<ReduceAxis<[2, 3], 0 | 2, false>, readonly Dim[]>>;
+type UA7 = Expect<Equal<ReduceAxis<[2, 3], 0 | 2, boolean>, readonly Dim[]>>;

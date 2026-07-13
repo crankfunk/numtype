@@ -577,6 +577,44 @@ function buildW6(): WorkloadSpec {
   };
 }
 
+function buildW7(): WorkloadSpec {
+  // Union-Axis-Mini-Scheibe (docs/union-axis-mini-spec.md): the degraded
+  // no-claim hover for a UNION-typed axis. W1-W6 only ever hover single
+  // literal axes (adversarial verify finding, Baustein B) - this is the one
+  // call-site whose hover exercises the IsUnion<Axis> filter branch, gating
+  // that the degradation renders as the short, honest NDArray<readonly
+  // number[]> instead of a distributed union monster.
+  const b = makeBuilder();
+  b.push(
+    GENERATED_HEADER(
+      "W7 union-axis sum() degraded hover",
+      "One real .sum(0 as 0 | 2) call site: the IsUnion<Axis> filter (reduce.ts)\ndegrades the result to no-claim; the hover must render the short degraded\nform, never a distributed per-member union.",
+    ),
+  );
+  b.push(`import { NDArray } from "../../src/ndarray.ts";`);
+  b.push(``);
+  b.push(`// --- union-axis degraded hover ---`);
+  b.push(`const w7_base = NDArray.zeros([2, 3]);`);
+  const degradedName = "w7_degraded";
+  b.push(`const ${degradedName} = w7_base.sum(0 as 0 | 2);`);
+  const degradedLine = b.lastIdx();
+  b.push(``);
+
+  const text = b.lines.join("\n") + "\n";
+  const lines = text.split("\n");
+  const hovers: HoverSpec[] = [
+    {
+      label: "W7 union-axis sum() degraded",
+      line: degradedLine,
+      character: charIn(lines[degradedLine]!, degradedName),
+      expected: "NDArray<readonly number[]>",
+    },
+  ];
+  const completion: CompletionSpec = { label: "W7 member access", line: degradedLine, character: charAfterDot(lines[degradedLine]!, "sum") };
+
+  return { id: "w7", fileName: "w7-union-axis.ts", text, hovers, completion };
+}
+
 // ---------------------------------------------------------------------------
 // Main: build all workloads, write .ts files + tsconfigs + manifest.json.
 // ---------------------------------------------------------------------------
@@ -585,7 +623,7 @@ function main(): void {
   rmSync(workloadsDir, { recursive: true, force: true });
   mkdirSync(workloadsDir, { recursive: true });
 
-  const workloads = [buildW1(), buildW2(), buildW3(), buildW4(), buildW5(), buildW6()];
+  const workloads = [buildW1(), buildW2(), buildW3(), buildW4(), buildW5(), buildW6(), buildW7()];
 
   // Self-contained (no "extends") so the language server's auto-discovered
   // project for any workload file is EXACTLY this directory's .ts files plus

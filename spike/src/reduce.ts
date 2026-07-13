@@ -15,7 +15,7 @@
  * trivial `Decrement<N> = N-1` is needed, which is safe and simple.
  */
 
-import { type Dim, type RankUnknowable, type Reverse, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
+import { type Dim, type IsUnion, type RankUnknowable, type Reverse, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
 
 // ---- rank-scale tuple counting helpers (never applied to dim values) ----
 
@@ -83,17 +83,50 @@ export type ReduceAxis<S extends Shape, Axis extends number | undefined = undefi
   ? KeepDims extends true
     ? AllOnes<S> // note: statically correct even for dynamic rank (`number[]` -> `1[]`)
     : [] // full reduction is `[]` for EVERY rank, known or not
-  : Axis extends number
-    ? RankUnknowable<S> extends true
-      ? readonly Dim[] // dynamic rank OR mixed-rank union (D-V1.3): axis validity/position unknowable -> gradual, runtime-checked
-      : number extends Axis
-        ? readonly Dim[] // dynamic AXIS on a known shape: which dim goes is unknowable -> gradual (without this guard, `0 extends number` silently removes axis 0)
-        : ResolveAndApply<S, Axis, KeepDims> extends infer R
-          ? R extends ShapeError<string>
-            ? ShapeError<`reduce: axis ${Axis} is out of range for shape ${ShowShape<S>} (rank ${S["length"]})`>
-            : R
-          : never
-    : never;
+  : IsUnion<Axis> extends true
+    ? // Union-Axis-Mini-Scheibe (docs/union-axis-mini-spec.md, D-A.2): this
+      // filter MUST sit here — directly after the `[Axis] extends
+      // [undefined]` tuple-wrapped check and BEFORE the naked `Axis extends
+      // number` branch below. Position is load-bearing: `Axis extends
+      // number` is a NAKED check, so the moment execution reaches it a union
+      // Axis has already been distributed member-by-member — any filter
+      // placed AFTER that point would see only single members, never the
+      // union as a whole (mechanically demonstrated, Baustein 0 addendum:
+      // moving this filter after the naked check is a no-op). Two
+      // sub-facets, both covered by one degrade-to-gradual branch: (1)
+      // `sum(0 as 0|2)` on `NDArray<[2,3]>` — naked distribution lets the
+      // valid axis-0 member's result survive while the invalid axis-2
+      // member's `ShapeError` gets silently discarded by the downstream
+      // `Guard`/`OkShape` pipeline, producing a CONFIDENTLY WRONG
+      // `NDArray<[3]>` even though the runtime axis `2` throws (the bug this
+      // slice fixes). (2) `Axis = 0 | undefined` is real but structurally
+      // UNREACHABLE through the optional `axis?` parameter — TS strips
+      // `undefined` from the inferred type argument when the parameter
+      // itself is optional (Baustein-0-verified, 2×2 cross-probe) — kept as
+      // a disclosed, deliberately OUT-OF-SCOPE gap (FOLLOWUPS: the
+      // "Literal|undefined via optional parameters" family, same root cause
+      // hits `keepdims?`; workaround: an explicit type argument,
+      // `a.sum<0|undefined>(u)`, degrades correctly post-fix). Policy: a
+      // union AXIS — literal members, negative members, `undefined`, even
+      // ALL-invalid members — degrades exactly like the dynamic `number`
+      // axis: no-claim, gradual, runtime-backstopped. This is a deliberate
+      // divergence from the shape-UNION policy in dim.ts's `CompatDim`/
+      // `DimEq` (which reject a uniformly-bad union via `Guard`): the axis
+      // filter runs BEFORE any `ShapeError` is even produced, so there is no
+      // uniform-vs-mixed distinction to make here — it mirrors the
+      // union-DIM precedent instead (also no-claim on all-invalid).
+      readonly Dim[]
+    : Axis extends number
+      ? RankUnknowable<S> extends true
+        ? readonly Dim[] // dynamic rank OR mixed-rank union (D-V1.3): axis validity/position unknowable -> gradual, runtime-checked
+        : number extends Axis
+          ? readonly Dim[] // dynamic AXIS on a known shape: which dim goes is unknowable -> gradual (without this guard, `0 extends number` silently removes axis 0)
+          : ResolveAndApply<S, Axis, KeepDims> extends infer R
+            ? R extends ShapeError<string>
+              ? ShapeError<`reduce: axis ${Axis} is out of range for shape ${ShowShape<S>} (rank ${S["length"]})`>
+              : R
+            : never
+      : never;
 
 /** Convenience alias for the keepdims variant (see ReduceAxis). */
 export type ReduceAxisKeepDims<S extends Shape, Axis extends number | undefined = undefined> = ReduceAxis<S, Axis, true>;

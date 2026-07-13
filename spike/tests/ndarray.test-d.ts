@@ -362,3 +362,101 @@ declare const wMixedRankRecv: WNDArray<[2, 3] | [2, 3, 4]>;
 const wMixedRankSummed = wMixedRankRecv.sum(2);
 type UW3 = Expect<Equal<(typeof wMixedRankSummed)["shape"], readonly number[]>>;
 void wMixedRankSummed;
+
+// =============================================================================
+// Union-Axis-Mini-Scheibe (docs/union-axis-mini-spec.md): Facette (1) call-site
+// pins — a union AXIS argument (as opposed to Facette (c)'s union RECEIVER
+// shape above) degrades to `readonly number[]`, both on the JS `NDArray` and
+// the WASM-resident `WNDArray` twin (proves the same imported ReduceAxis
+// machinery covers both surfaces, zero resident.ts edits — D-A.3).
+// =============================================================================
+
+// PRE-FIX: this was the confidently-wrong `NDArray<[3]>` (only the axis-0
+// union member's result survived; the axis-2 out-of-range member's
+// ShapeError was silently discarded by Guard/OkShape) even though the
+// runtime value `2` makes `sumRuntime` throw. POST-FIX: degrades correctly.
+declare const uAxisRecv: NDArray<[2, 3]>;
+const uAxisSummed = uAxisRecv.sum(0 as 0 | 2);
+type UA_CALL1 = Expect<Equal<(typeof uAxisSummed)["shape"], readonly number[]>>;
+void uAxisSummed;
+
+// WNDArray twin of the same call-site fix.
+declare const wUAxisRecv: WNDArray<[2, 3]>;
+const wUAxisSummed = wUAxisRecv.sum(0 as 0 | 2);
+type UA_CALL2 = Expect<Equal<(typeof wUAxisSummed)["shape"], readonly number[]>>;
+void wUAxisSummed;
+
+// Workaround pin (Facette (2), release-relevant FOLLOWUPS item): an EXPLICIT
+// type argument bypasses the optional-parameter inference stripping and
+// reaches the same union-axis filter — degrades correctly post-fix, proving
+// the workaround the FOLLOWUPS item recommends actually works today.
+declare const uWorkaroundAxis: 0 | undefined;
+const uWorkaroundSummed = uAxisRecv.sum<0 | undefined>(uWorkaroundAxis);
+type UA_WORKAROUND = Expect<Equal<(typeof uWorkaroundSummed)["shape"], readonly number[]>>;
+void uWorkaroundSummed;
+
+// Documenting GAP pin (Facette (2), deliberately OUT OF SCOPE, Baustein-0
+// finding): the realistic call form `a.sum(u)` with `u: 0 | undefined` and
+// NO explicit type argument still resolves CONFIDENTLY to `NDArray<[3]>`
+// today — TS strips `undefined` from the inferred type argument because the
+// `axis?` parameter itself is already optional (2x2 cross-probe,
+// Baustein-0-verified), so `Axis` is inferred as the bare literal `0`,
+// never reaching the union-axis filter this slice adds. This pin makes the
+// gap OBSERVABLE, not fixed: if a future TS version (or a signature change,
+// see the Item-11 overload-split candidate) changes this inference
+// behavior, this pin will go red and flag it. FOLLOWUPS: "Literal|undefined
+// via optionale Parameter" (same root cause also hits `keepdims?`).
+declare const uGapAxis: 0 | undefined;
+const uGapSummed = uAxisRecv.sum(uGapAxis);
+type UA_GAP = Expect<Equal<(typeof uGapSummed)["shape"], readonly [3]>>;
+void uGapSummed;
+
+// Negative union member.
+const uNegSummed = uAxisRecv.sum(-1 as -1 | 0);
+type UA_NEG = Expect<Equal<(typeof uNegSummed)["shape"], readonly number[]>>;
+void uNegSummed;
+
+// ALL-invalid union (every member out of range for rank 2) — accepted, not
+// statically rejected (documented incompleteness, mirrors union-DIM policy).
+const uAllInvalidSummed = uAxisRecv.sum(2 as 2 | 5);
+type UA_ALL_INVALID = Expect<Equal<(typeof uAllInvalidSummed)["shape"], readonly number[]>>;
+void uAllInvalidSummed;
+
+// Union axis x keepdims (true / false / dynamic boolean) — KeepDims never
+// un-degrades a union AXIS.
+const uKeepTrue = uAxisRecv.sum(0 as 0 | 2, true);
+type UA_KEEP_TRUE = Expect<Equal<(typeof uKeepTrue)["shape"], readonly number[]>>;
+void uKeepTrue;
+
+const uKeepFalse = uAxisRecv.sum(0 as 0 | 2, false);
+type UA_KEEP_FALSE = Expect<Equal<(typeof uKeepFalse)["shape"], readonly number[]>>;
+void uKeepFalse;
+
+declare const uDynKeep: boolean;
+const uKeepDyn = uAxisRecv.sum(0 as 0 | 2, uDynKeep);
+type UA_KEEP_DYN = Expect<Equal<(typeof uKeepDyn)["shape"], readonly number[]>>;
+void uKeepDyn;
+
+// already-safe control pin (Policy: KeepDims-`boolean` at a LITERAL axis is
+// NOT touched by this slice — natural distribution already produces the
+// correct per-member result union, no filter needed or added).
+declare const uSafeKeepDims: boolean;
+const uSafeKeepSummed = uAxisRecv.sum(1, uSafeKeepDims);
+type UA_SAFE_KEEPDIMS = Expect<Equal<(typeof uSafeKeepSummed)["shape"], readonly [2] | readonly [2, 1]>>;
+void uSafeKeepSummed;
+
+// --- Kontroll-Pins (must NOT change, M3): literal single axis stays precise,
+// dynamic axis stays unchanged, out-of-range single axis keeps its verbatim
+// message at the offending argument. -----------------------------------------
+
+const uControlLiteral = uAxisRecv.sum(0);
+type UA_CONTROL_LITERAL = Expect<Equal<(typeof uControlLiteral)["shape"], readonly [3]>>;
+void uControlLiteral;
+
+declare const uControlDynamicAxis: number;
+const uControlDynamic = uAxisRecv.sum(uControlDynamicAxis);
+type UA_CONTROL_DYNAMIC = Expect<Equal<(typeof uControlDynamic)["shape"], readonly number[]>>;
+void uControlDynamic;
+
+// @ts-expect-error - axis 2 is out of range for rank-2 shape [2,3]: error stays at the argument, message unchanged from pre-fix
+uAxisRecv.sum(2);

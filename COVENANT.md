@@ -1,5 +1,5 @@
 # Covenant — NumType
-<!-- covenant:version 1 -->
+<!-- covenant:version 2 -->
 
 ## Invarianten
 
@@ -16,6 +16,12 @@
   Runtime-Throws; wide/Union/dynamischer Rang degradieren zu no-claim — nie ein
   konfident-falscher Claim.
   Anker: `spike/src/dim.ts`, `spike/src/slice-literal.ts`, `sym:Guard`, `sym:OkShape`
+  · Bekannter offener Verstoß (Owner-entschieden 2026-07-13, Frist Item 11):
+  `Literal|undefined` durch OPTIONALE Parameter (`sum`s `axis?`/`keepdims?`) — TS streift
+  `undefined` bei der Inferenz, der Filter ist strukturell unerreichbar; als
+  `UA_GAP`-Sentinel-Pin beobachtbar gemacht (spike/tests/ndarray.test-d.ts), FOLLOWUPS
+  „Literal|undefined durch optionale Parameter"; Fix-Kandidat Overload-Split beim
+  Item-11-API-Schnitt.
 - **M3** · Shape-Fehler erscheinen AM fehlerhaften Argument, Message-Stamm wortgleich zum
   Runtime-Throw; Klassen-Hover bleiben saubere Tupel (`NDArray<[2, 3]>`).
   Anker: `sym:Guard`, `sym:ShowShape`
@@ -43,4 +49,8 @@
 - Keine transzendenten Ops ohne eigene Determinismus-Entscheidung (brechen Bit-Parität).
 
 ## Änderungslog
+- v2 (2026-07-13) · M2: bekannter offener Verstoß dokumentiert (Literal|undefined via
+  optionale Parameter, UA_GAP-Sentinel, Item-11-Frist) — Norm unverändert; Anlass:
+  covenant-verify-Befund der Union-Axis-Mini-Scheibe, Owner-Entscheidung „dokumentieren
+  statt Norm konditionieren".
 - v1 (2026-07-13) · Erstfassung (Phase-D-Vorarbeiten, vor V2/Item 11).
