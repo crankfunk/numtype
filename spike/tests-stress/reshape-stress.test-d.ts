@@ -24,13 +24,15 @@ type RG17 = Expect<Equal<Guard<ReshapeCheck<readonly [2, 4503599627370496], [3, 
 // — `declare const` avoids ever constructing an unrepresentable array while
 // still exercising the real method's return-type wiring end to end. --------
 
+// D-V2.3 (docs/phase-d-vorarbeiten-spec.md): `.shape` is now `Readonly<S>` —
+// pins re-expressed intent-preservingly as `readonly [...]`.
 declare const atCapArr: NDArray<readonly [6361, 69431, 20394401]>;
 const atCapFlat = atCapArr.flatten();
-type T7 = Expect<Equal<(typeof atCapFlat)["shape"], [9007199254740991]>>; // exactly AT the cap: still exact
+type T7 = Expect<Equal<(typeof atCapFlat)["shape"], readonly [9007199254740991]>>; // exactly AT the cap: still exact
 
 declare const overCapArr: NDArray<readonly [2, 4503599627370496]>;
 const overCapFlat = overCapArr.flatten();
-type T8 = Expect<Equal<(typeof overCapFlat)["shape"], [number]>>; // one past the cap: honest `number` degrade
+type T8 = Expect<Equal<(typeof overCapFlat)["shape"], readonly [number]>>; // one past the cap: honest `number` degrade
 
 void atCapFlat;
 void overCapFlat;

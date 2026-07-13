@@ -127,35 +127,39 @@ type T19 = Expect<Equal<SliceSpecsGuard<number[], [1, null, 2, 3, 4]>, [1, null,
 
 const arr = NDArray.zeros([2, 3, 4]);
 
+// D-V2.3 (docs/phase-d-vorarbeiten-spec.md): `.shape` is now `Readonly<S>` —
+// every literal-tuple `Equal<>` pin below is re-expressed intent-preservingly
+// as `readonly [...]`. The CLASS hover (`NDArray<[3, 4]>` etc.) is unaffected.
+
 const s1 = arr.slice(1);
-type T20 = Expect<Equal<(typeof s1)["shape"], [3, 4]>>;
+type T20 = Expect<Equal<(typeof s1)["shape"], readonly [3, 4]>>;
 
 const s2 = arr.slice(null, 1);
-type T21 = Expect<Equal<(typeof s2)["shape"], [2, 4]>>;
+type T21 = Expect<Equal<(typeof s2)["shape"], readonly [2, 4]>>;
 
 // Supported range spec -> the hover shows a clean, fully resolved literal
 // tuple `NDArray<[1, 3, 4]>`, not `NDArray<[number, 3, 4]>`.
 const s3 = arr.slice({ start: 1, stop: 3 });
-type T22 = Expect<Equal<(typeof s3)["shape"], [1, 3, 4]>>;
+type T22 = Expect<Equal<(typeof s3)["shape"], readonly [1, 3, 4]>>;
 
 const s4 = arr.slice();
-type T23 = Expect<Equal<(typeof s4)["shape"], [2, 3, 4]>>;
+type T23 = Expect<Equal<(typeof s4)["shape"], readonly [2, 3, 4]>>;
 
 // Wide (non-literal) step: outside the computable subset -> degrades to
 // `number` (unaffected by Spike 06 — only LITERAL steps compute; a literal
 // `2` here would now compute `[3, 2]` instead, see the Spike-06 section).
 declare const wideStep: number;
 const s5 = arr.slice(1, null, { step: wideStep });
-type T24 = Expect<Equal<(typeof s5)["shape"], [3, number]>>;
+type T24 = Expect<Equal<(typeof s5)["shape"], readonly [3, number]>>;
 
 // Composition: slice then transpose, and transpose then slice, both thread
 // through cleanly (the runtime differential suite exercises the DATA side
 // of this; here we only pin that the TYPES compose).
 const s6 = arr.slice(1).transpose();
-type T25 = Expect<Equal<(typeof s6)["shape"], [4, 3]>>;
+type T25 = Expect<Equal<(typeof s6)["shape"], readonly [4, 3]>>;
 
 const s7 = arr.transpose().slice(1);
-type T26 = Expect<Equal<(typeof s7)["shape"], [3, 2]>>;
+type T26 = Expect<Equal<(typeof s7)["shape"], readonly [3, 2]>>;
 
 // --- error-at-argument: too many specs ------------------------------------
 
@@ -174,7 +178,7 @@ type T27 = Expect<Equal<(typeof dynSliced)["shape"], readonly number[]>>;
 declare const dynamicShape: readonly [2, number];
 const dyn = NDArray.zeros(dynamicShape);
 const dynDropped = dyn.slice(1); // integer spec: drops axis 0, keeps the still-dynamic axis 1
-type T28 = Expect<Equal<(typeof dynDropped)["shape"], [number]>>;
+type T28 = Expect<Equal<(typeof dynDropped)["shape"], readonly [number]>>;
 
 // --- erased top type stays usable as a slice() receiver -------------------
 
@@ -263,7 +267,7 @@ arr.slice(2);
 arr.slice(-3);
 // Boundary-valid negative index compiles and threads the shape.
 const okBoundary = arr.slice(-2);
-type T29 = Expect<Equal<(typeof okBoundary)["shape"], [3, 4]>>;
+type T29 = Expect<Equal<(typeof okBoundary)["shape"], readonly [3, 4]>>;
 // The error lands at the SECOND argument; the first (valid) is untouched.
 // @ts-expect-error - index 3 is out of bounds for axis 1 with dim 3
 arr.slice(1, 3);
@@ -271,11 +275,11 @@ arr.slice(1, 3);
 // the axis still drops statically.
 declare const wideIdx: number;
 const wideCall = arr.slice(wideIdx);
-type T30 = Expect<Equal<(typeof wideCall)["shape"], [3, 4]>>;
+type T30 = Expect<Equal<(typeof wideCall)["shape"], readonly [3, 4]>>;
 // Non-integer literal: no static claim -> compiles; the runtime's own
 // "not an integer" error stays authoritative (pinned in tests-runtime).
 const nonInt = arr.slice(1.5);
-type T31 = Expect<Equal<(typeof nonInt)["shape"], [3, 4]>>;
+type T31 = Expect<Equal<(typeof nonInt)["shape"], readonly [3, 4]>>;
 
 void okBoundary;
 void wideCall;
@@ -363,7 +367,7 @@ type SD2 = Expect<Equal<SliceShape<[5], [{ start: 1 | 2 }]>, [number]>>;
 // the guard section below: this compiles with zero errors).
 type SD3 = Expect<Equal<SliceShape<[5], [{ step: 1e21 }]>, [number]>>;
 const sExp = arr.slice({ step: 1e21 }); // must NOT be a compile error
-type SD3Method = Expect<Equal<(typeof sExp)["shape"], [number, 3, 4]>>;
+type SD3Method = Expect<Equal<(typeof sExp)["shape"], readonly [number, 3, 4]>>;
 void sExp;
 
 // --- LiteralStepInvalid: the guard's own classifier (pure type function) ---
@@ -434,7 +438,7 @@ arr.slice(null, { step: 0 });
 // the hover shows a clean `NDArray<[2, 1, 4]>`, not `NDArray<[2, number, 4]>`
 // (axis1: d=3, start=1, step=2 -> diff=2, ceil(2/2)=1).
 const s8 = arr.slice(null, { start: 1, step: 2 });
-type T32 = Expect<Equal<(typeof s8)["shape"], [2, 1, 4]>>;
+type T32 = Expect<Equal<(typeof s8)["shape"], readonly [2, 1, 4]>>;
 void s8;
 
 // =============================================================================

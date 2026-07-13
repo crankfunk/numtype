@@ -122,5 +122,7 @@ const chained100 = NDArray.zeros([4, 4])
 
 // After 100 alternating ops on square [4,4] matrices, the shape must still
 // resolve cleanly to [4, 4] — not "conditional-type soup".
+// D-V2.3 (docs/phase-d-vorarbeiten-spec.md): `.shape` is now `Readonly<S>` —
+// pin re-expressed intent-preservingly as `readonly [...]`.
 type Chained100Shape = (typeof chained100)["shape"];
-type ChainCheck = Expect<Equal<Chained100Shape, [4, 4]>>;
+type ChainCheck = Expect<Equal<Chained100Shape, readonly [4, 4]>>;

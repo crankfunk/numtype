@@ -179,7 +179,12 @@ for (const op of ELEMENTWISE_OPS) {
         const got = callResidentElementwise(op, a, b);
         try {
           const ctx = `${op} special case ${c} a=[${aShape.join(",")}] b=[${bShape.join(",")}]`;
-          assertShapeEqual(ref.shape, got.shape, ctx);
+          // D-V2.3 fallout: `got: AnyWNDArray = WNDArray<any>`, so `.shape` is
+          // `Readonly<any>` — doesn't structurally collapse to `any` (TS
+          // quirk), so no longer matches `readonly number[]` (TS2740). Cast
+          // only; runtime value unaffected (see demo.ts's `assertResidentAgrees`
+          // for the full explanation).
+          assertShapeEqual(ref.shape, got.shape as readonly number[], ctx);
           assertDataBitIdentical(ref.data, got.toArray(), ctx);
         } finally {
           got.dispose();

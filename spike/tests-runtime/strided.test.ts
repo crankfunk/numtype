@@ -20,6 +20,7 @@
  */
 import assert from "node:assert";
 import { test } from "node:test";
+import { NDArray } from "../src/ndarray.ts";
 import { computeStrides, elementwiseBinary, matmulRuntime, sumRuntime, transposeRuntime } from "../src/runtime.ts";
 import { initCore } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
@@ -102,7 +103,12 @@ function disposeAll(...operands: Operand[]): void {
       const v = makeView(shape, data);
       try {
         const ctx = `strided toArray case ${c} shape=[${shape.join(",")}]`;
-        assertShapeEqual(shape, v.arr.shape, ctx);
+        // D-V2.3 fallout: `v.arr: AnyWNDArray = WNDArray<any>`, so `.shape` is
+        // `Readonly<any>` — doesn't structurally collapse to `any` (TS quirk),
+        // so no longer matches `readonly number[]` (TS2740). Cast only;
+        // runtime value unaffected (see demo.ts's `assertResidentAgrees` for
+        // the full explanation).
+        assertShapeEqual(shape, v.arr.shape as readonly number[], ctx);
         assertDataBitIdentical(data, v.arr.toArray(), ctx);
         // strides metadata: reversed natural strides of the reversed shape
         const baseShape = [...shape].reverse();
@@ -130,6 +136,35 @@ test("strides observability: fresh arrays are natural row-major, views are permu
     t.dispose();
     a.dispose();
   }
+});
+
+// B3 (verify-round closure, docs/phase-d-vorarbeiten-v2-ergebnisse.md,
+// 2026-07-13): the sibling naive-backend group. D-V2.1 harmonized
+// `NDArray.strides()` (a method) into a `get strides()` GETTER — the WNDArray
+// group above pins the resident FIELD's values, but nothing in the existing
+// corpus pinned the actual VALUES the new `NDArray` getter returns (the
+// spec's own fallout section only checked "0 call sites break", never the
+// getter's output). Expected values below are HARD LITERALS, independently
+// hand-computed from the row-major stride formula (each axis's stride is the
+// product of every dim strictly to its right; a rank-1 shape's sole axis has
+// nothing to its right, so its stride is always 1) — NOT derived by calling
+// `computeStrides` (which would make this circular against the very function
+// the getter delegates to, `ndarray.ts`'s `computeStrides(this.shape)`).
+test("NDArray.strides getter: values match hand-computed row-major strides (rank 1/2/3)", () => {
+  const rank1 = NDArray.zeros([5]);
+  assert.deepStrictEqual([...rank1.strides], [1]); // sole axis: always stride 1
+
+  const rank2 = NDArray.zeros([3, 4]);
+  assert.deepStrictEqual([...rank2.strides], [4, 1]); // axis 0: 4 (= dim 1's size); axis 1: 1
+
+  const rank3 = NDArray.zeros([2, 3, 4]);
+  assert.deepStrictEqual([...rank3.strides], [12, 4, 1]); // axis 0: 3*4; axis 1: 4; axis 2: 1
+
+  // getter freshness (documented in the NDArrayView doc comment, ndarray.ts):
+  // recomputed on every access, not cached — a fresh array each read but the
+  // same VALUES every time for an unchanged shape.
+  assert.notStrictEqual(rank3.strides, rank3.strides); // fresh array identity each access
+  assert.deepStrictEqual([...rank3.strides], [...rank3.strides]); // same values every access
 });
 
 test("view-of-view: double transpose is bit-identical to the base", () => {
@@ -323,7 +358,8 @@ test("view-of-view: double transpose is bit-identical to the base", () => {
       disposeAll(v);
       try {
         const ctx = `strided contiguous case ${c} shape=[${shape.join(",")}]`;
-        assertShapeEqual(shape, cCopy.shape, ctx);
+        // D-V2.3 fallout (same as above): cCopy: AnyWNDArray -> Readonly<any>.
+        assertShapeEqual(shape, cCopy.shape as readonly number[], ctx);
         assert.deepStrictEqual([...cCopy.strides], computeStrides(shape), `${ctx}: natural strides`);
         assertDataBitIdentical(data, cCopy.toArray(), ctx);
       } finally {
@@ -349,7 +385,8 @@ test("size-0 view: ops and reads behave like the reference", () => {
   const shape: number[] = [0, 3];
   const v = makeView(shape, new Float64Array(0));
   try {
-    assertShapeEqual([0, 3], v.arr.shape, "size-0 view shape");
+    // D-V2.3 fallout (same as above): v.arr: AnyWNDArray -> Readonly<any>.
+    assertShapeEqual([0, 3], v.arr.shape as readonly number[], "size-0 view shape");
     assert.deepStrictEqual(Array.from(v.arr.toArray()), []);
     const s = v.arr.sum();
     try {

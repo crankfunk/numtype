@@ -108,32 +108,36 @@ type RG18 = Expect<Equal<Guard<ReshapeCheck<[6], [1e21, 2]>, [1e21, 2]>, [1e21, 
 
 const arr23 = NDArray.zeros([2, 3]);
 
+// D-V2.3 (docs/phase-d-vorarbeiten-spec.md): `.shape` is now `Readonly<S>` —
+// every literal-tuple `Equal<>` pin below is re-expressed intent-preservingly
+// as `readonly [...]`. The CLASS hover (`NDArray<[3, 2]>` etc.) is unaffected.
+
 // --- ok: reshape hover ------------------------------------------------------
 
 const reshaped = arr23.reshape([3, 2]);
-type T1 = Expect<Equal<(typeof reshaped)["shape"], [3, 2]>>;
+type T1 = Expect<Equal<(typeof reshaped)["shape"], readonly [3, 2]>>;
 
 // identity reshape.
 const identity = arr23.reshape([2, 3]);
-type T2 = Expect<Equal<(typeof identity)["shape"], [2, 3]>>;
+type T2 = Expect<Equal<(typeof identity)["shape"], readonly [2, 3]>>;
 
 // rank change: [2,3] (size 6) -> [6] -> [1,6,1].
 const to1d = arr23.reshape([6]);
-type T3 = Expect<Equal<(typeof to1d)["shape"], [6]>>;
+type T3 = Expect<Equal<(typeof to1d)["shape"], readonly [6]>>;
 const toPadded = arr23.reshape([1, 6, 1]);
-type T4 = Expect<Equal<(typeof toPadded)["shape"], [1, 6, 1]>>;
+type T4 = Expect<Equal<(typeof toPadded)["shape"], readonly [1, 6, 1]>>;
 
 // --- ok: flatten hover, small computed literal -----------------------------
 
 const flattened = arr23.flatten();
-type T5 = Expect<Equal<(typeof flattened)["shape"], [6]>>;
+type T5 = Expect<Equal<(typeof flattened)["shape"], readonly [6]>>;
 
 // --- ok: flatten hover, big-dim digit-multiplication case (Spike-04 payoff,
 // the phase's own headline example: [1024,1024] -> [1048576]). -------------
 
 const bigArr = NDArray.zeros([1024, 1024]);
 const bigFlattened = bigArr.flatten();
-type T6 = Expect<Equal<(typeof bigFlattened)["shape"], [1048576]>>;
+type T6 = Expect<Equal<(typeof bigFlattened)["shape"], readonly [1048576]>>;
 
 // T7/T8 (flatten at the MAX_SAFE_INTEGER cap boundary, method-level reuse of
 // product.test-d.ts's P10/P11) moved to
@@ -144,11 +148,11 @@ type T6 = Expect<Equal<(typeof bigFlattened)["shape"], [1048576]>>;
 
 declare const rank0Arr: NDArray<[]>;
 const rank0Flat = rank0Arr.flatten();
-type T9 = Expect<Equal<(typeof rank0Flat)["shape"], [1]>>;
+type T9 = Expect<Equal<(typeof rank0Flat)["shape"], readonly [1]>>;
 
 declare const size0Arr: NDArray<[0, 4]>;
 const size0Flat = size0Arr.flatten();
-type T10 = Expect<Equal<(typeof size0Flat)["shape"], [0]>>;
+type T10 = Expect<Equal<(typeof size0Flat)["shape"], readonly [0]>>;
 
 // --- error-at-argument: product mismatch ------------------------------------
 
@@ -175,7 +179,7 @@ declare const dynRankShape: number[];
 const dynRankArr = NDArray.zeros(dynRankShape);
 dynRankArr.reshape([2, 3]); // must NOT error (dynamic rank on the receiver)
 const dynResult = arr23.reshape(dynRankShape); // must NOT error (dynamic rank/length on the argument)
-type T11 = Expect<Equal<(typeof dynResult)["shape"], number[]>>;
+type T11 = Expect<Equal<(typeof dynResult)["shape"], readonly number[]>>;
 
 declare const dynDimShape: readonly [number, 3];
 const dynDimArr = NDArray.zeros(dynDimShape);
@@ -190,7 +194,7 @@ arr12.reshape([wideNegDim, 4]); // must NOT error (no static claim on a wide dim
 // --- flatten(): niladic, no guard, callable on any rank/dynamic shape ------
 
 const flatDyn = dynRankArr.flatten();
-type T12 = Expect<Equal<(typeof flatDyn)["shape"], [number]>>;
+type T12 = Expect<Equal<(typeof flatDyn)["shape"], readonly [number]>>;
 
 // =============================================================================
 // Phase-D V1 (docs/phase-d-vorarbeiten-spec.md, Union-Guard-Fix): Facette (c)
@@ -213,7 +217,7 @@ declare const mixedRankRecv: NDArray<[2, 3] | [2, 3, 4]>;
 // `reshape()`'s return type is always the user-supplied NS verbatim, so the
 // hover stays clean and confident regardless of the guard's verdict.
 const reshapedMixed = mixedRankRecv.reshape([6]);
-type UC1 = Expect<Equal<(typeof reshapedMixed)["shape"], [6]>>;
+type UC1 = Expect<Equal<(typeof reshapedMixed)["shape"], readonly [6]>>;
 void reshapedMixed;
 
 // `.flatten()`: the Spike-04 product machinery distributes NATURALLY and
@@ -221,7 +225,7 @@ void reshapedMixed;
 // per-member-correct result (product of [2,3] is 6, of [2,3,4] is 24), an
 // "already-safe" case with nothing to degrade.
 const flattenedMixed = mixedRankRecv.flatten();
-type UC2 = Expect<Equal<(typeof flattenedMixed)["shape"], [6 | 24]>>;
+type UC2 = Expect<Equal<(typeof flattenedMixed)["shape"], readonly [6 | 24]>>;
 void flattenedMixed;
 
 void reshaped;

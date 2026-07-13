@@ -130,23 +130,62 @@ export type Guard<Result, Actual> = [Result] extends [ShapeError<infer Message>]
  *    resident/strided backends (`WNDArray`-style) too, for a later phase
  *    (FOLLOWUPS.md) — out of scope here.
  *
- * Two honest caveats on "read view":
- *  - `readonly shape: S` blocks reassigning the PROPERTY, not mutating the
- *    tuple's elements — `view.shape[0] = 99` type-checks. This is a
- *    PRE-EXISTING latent hole on `NDArray` itself (same member type), not
- *    introduced or widened by this view; a deep-readonly shape is a
- *    deliberate open decision (FOLLOWUPS.md — it interacts with the
- *    clean-hover house rule).
+ * One honest caveat on "read view" remains (a second, about `shape` element
+ * mutability, was CLOSED by D-V2.3 below — `readonly shape: Readonly<S>` now
+ * blocks `view.shape[0] = 99` too, not just property reassignment):
  *  - This is ordinary STRUCTURAL typing: any object with these three
  *    members satisfies the view, real `NDArray` or not — unlike
  *    `AnyNDArray` below, which stays de-facto nominal because `NDArray`'s
  *    private constructor blocks structural impostors. For a read-only
  *    surface that looseness is by design, but the capability difference
  *    between the two top types is real and worth knowing.
+ *
+ * Residency caveat (D-V2.2, docs/phase-d-vorarbeiten-spec.md): `WNDArray`
+ * (`spike/src/wasm/resident.ts`) also `implements NDArrayView<S>`. Unlike
+ * `NDArray`, a `WNDArray` handle has a disposal lifecycle — the interface
+ * itself promises no LIVENESS: any member call on a disposed handle may
+ * throw (`WNDArray.strides`/`shape` remain readable post-dispose since
+ * they're plain fields, but `toNestedArray()` throws immediately, naming the
+ * operation, before touching WASM memory). A caller holding only the
+ * `NDArrayView<S>` supertype cannot tell whether the concrete handle behind
+ * it is a live `NDArray` (never throws) or a disposed `WNDArray` (throws on
+ * `toNestedArray()`) — know your concrete backend if liveness matters.
+ *
+ * `strides` (D-V2.1): a `readonly` PROPERTY, not a method — this harmonizes
+ * `NDArray.strides()` (previously a method) with `WNDArray.strides` (always
+ * a field, semantically load-bearing for views) onto one shape. The two
+ * concrete backends differ in one honest way the interface does NOT paper
+ * over: `NDArray`'s `strides` is a GETTER that computes a fresh array from
+ * `shape` on every access (`a.strides !== a.strides` — row-major is always
+ * derivable, so nothing is cached); `WNDArray`'s `strides` is an identity-
+ * stable field set once at construction (it can be genuinely non-row-major
+ * for a transpose/slice view, so it cannot be recomputed from `shape`
+ * alone). The view CONTRACT promises neither identity stability nor
+ * freshness — only the current values — so both implementations are
+ * conforming; do not rely on identity across repeated `.strides` reads
+ * through the `NDArrayView` interface.
+ *
+ * `shape: Readonly<S>` (D-V2.3, gated on the pre-flight probe in
+ * docs/phase-d-vorarbeiten-spec.md — `Readonly<S>` under `out S` does NOT
+ * throw TS2636 on TS 7.0.2, verified against a known-bad control): closes
+ * the previously-documented latent hole above — `view.shape[0] = 99` is now
+ * a compile error, not a silent no-op. `Readonly<S>` is homomorphic over the
+ * tuple/array `S` (adds the `readonly` tuple-element modifier, doesn't
+ * change element TYPES), so this is a pure precision gain, not a behavior
+ * change: every previously-valid read still type-checks identically, only
+ * element-write attempts newly error. Deep-readonly is all-or-nothing across
+ * `NDArrayView`/`NDArray`/`WNDArray` (a partial rollout would collide with
+ * `implements`: `Readonly<S>` is not assignable to a plain `shape: S`
+ * interface member) — see `NDArray`/`WNDArray` for the mirrored change.
+ * Member-level hovers now read `readonly [2, 3]` instead of `[2, 3]`; the
+ * CLASS-level hover (`NDArray<[2, 3]>`) is unaffected — `S` itself is still
+ * the clean tuple, only the wrapping `Readonly<...>` at the `.shape` member
+ * changes (the clean-hover house rule binds the class hover, not every
+ * member hover).
  */
 export interface NDArrayView<out S extends Shape> {
-  readonly shape: S;
-  strides(): number[];
+  readonly shape: Readonly<S>;
+  readonly strides: readonly number[];
   toNestedArray(): unknown;
 }
 
@@ -159,27 +198,80 @@ export interface NDArrayView<out S extends Shape> {
  * an `AnyNDArray` from flowing back into a precisely-shaped
  * `NDArray<[2, 3]>` binding either.
  *
- * `NDArray<Shape>` does NOT work as an implicit supertype: sound
- * dynamic-rank degradation puts `S` in method-parameter positions (the
- * argument-side error guards), which makes the class's measured variance
- * invariant — `NDArray<[2, 3]>` is then not assignable to
- * `NDArray<readonly number[]>`. (Pre-fix this assignment only type-checked
- * because the unsound degradations happened to satisfy the variance probe;
- * verified empirically against Guard-, intersection- and single-root
- * formulations — see docs/spike-01-ergebnisse.md, post-verification
- * addendum.)
+ * HISTORY — D-V2.3 accidentally OPENED this class's variance, the owner
+ * CLOSED it again on purpose (docs/phase-d-vorarbeiten-spec.md /
+ * -v2-ergebnisse.md "Fund 2" + closure round, 2026-07-13): pre-D-V2.3, this
+ * class read as fully invariant, but BY ACCIDENT — it carries no `in`/`out`
+ * annotation, and invariance was an emergent side effect of
+ * `sum(...).sum(...)`'s keepdims return-type machinery (`AllOnes<S>`
+ * produces a genuinely MUTABLE tuple like `[1, 1]`, which blocked exactly
+ * the comparison a wide `S`'s `readonly` result needed to satisfy for
+ * widening to succeed). D-V2.3 wrapped `shape` in `Readonly<S>` for an
+ * unrelated reason (closing the `nd.shape[0] = 99` mutation hole) and, as a
+ * pure side effect, changed how that SAME comparison resolves: the widening
+ * direction (`NDArray<[2, 3]>` assignable to `NDArray<readonly number[]>`)
+ * silently opened up (isolated via an A/B probe on the real class — field
+ * type `S` vs `Readonly<S>`, all else held constant; verified safe on its
+ * own terms too — a wider static claim is only a LESS precise claim, never a
+ * wrong one, the same shape as COVENANT.md's M2 principle, though M2 itself
+ * is written about `Guard`/`OkShape`'s compile-time rejection semantics, not
+ * about class assignability — this is an analogy worth drawing, not a
+ * certificate M2 itself issues — see docs/phase-d-vorarbeiten-v2-ergebnisse.md
+ * for the full investigation). But ACCIDENTAL, unowned invariance/variance is
+ * exactly the failure mode this codebase otherwise refuses to ship (compare
+ * `NDArrayView`'s checker-ENFORCED `out S` above, which is a PROVEN
+ * annotation, not a measured accident) — so the owner decided (2026-07-13,
+ * verify-round closure) to re-invariantize `NDArray` DELIBERATELY instead of
+ * leaving its variance as a by-product of unrelated type machinery that
+ * could just as easily drift open (or shut) again the next time some
+ * unrelated member's type changes. The mechanism is the `__variance` member
+ * on the class itself (see its own doc comment) — `NDArrayView<out S>`
+ * remains the ONE checker-enforced covariant surface in this codebase;
+ * `NDArray`/`WNDArray` are both deliberately invariant again. `AnyNDArray`
+ * below is unaffected by any of this either way — `any` bypasses the
+ * variance comparison regardless of what the class's own variance measures
+ * or enforces, which is exactly why it stays the escape hatch for the
+ * genuinely both-ways-unsafe use case.
  *
  * Reach for `AnyNDArray` ONLY when you need to CALL ops on a
- * heterogeneously-shaped array. For read-only access (shape/strides/
- * toNestedArray) prefer `NDArrayView<Shape>` (above) instead — it is the
- * safe, checker-enforced top type: covariant by a proven annotation, not by
- * erasure, so it cannot silently unerase in the write direction the way
- * `any` can.
+ * heterogeneously-shaped array (`NDArray<Shape>`'s ops still work — dynamic
+ * rank always degraded gracefully — but a `Guard`-typed argument position
+ * consuming `S` is exactly what invariance, measured or enforced, cannot
+ * make sound in the OTHER direction; `AnyNDArray`'s `any` stays the
+ * deliberate, documented both-ways-unsafe tool for that). For read-only
+ * access (shape/strides/toNestedArray) prefer `NDArrayView<Shape>` (above)
+ * instead — it is the safe, checker-enforced top type: covariant by a proven
+ * annotation, not by erasure, so it cannot silently unerase in the write
+ * direction the way `any` can.
  */
 export type AnyNDArray = NDArray<any>;
 
 export class NDArray<S extends Shape> implements NDArrayView<S> {
-  readonly shape: S;
+  /** Deliberate invariance marker (re-invariantization owner-decision,
+   * 2026-07-13 — full history in the `AnyNDArray` doc comment above). `S`
+   * occurs in both a contravariant (parameter) and a covariant (return)
+   * position of ONE property-typed function, which forces TS's structural
+   * comparison between two instantiations of this class to require BOTH
+   * directions to hold — i.e. invariance. Property-style is load-bearing,
+   * not stylistic: TypeScript checks METHOD-SHORTHAND parameters
+   * bivariantly (the same long-standing exemption documented on
+   * `NDArrayView` above), so a marker written as a method
+   * (`__variance(s: S): S`) would compile but do NOTHING — proven
+   * empirically (verify-round Baustein B's Probe 3: the property-style form
+   * closed the widening, the method-shorthand form did not). `declare`
+   * means the member has no runtime representation (nothing initializes or
+   * assigns it — a pure compile-time device, never a real field);
+   * `private` means it never appears in the public surface or in a hover.
+   * Neither affects `implements NDArrayView<S>` (an interface only requires
+   * ITS OWN declared members; a class may carry extra private ones) nor the
+   * class-level hover (`NDArray<[2, 3]>` — this member has no shape of its
+   * own to display). */
+  private declare readonly __variance: (s: S) => S;
+
+  /** D-V2.3: deep-readonly (see `NDArrayView` doc comment above) — element
+   * writes like `nd.shape[0] = 99` are now a compile error, not a silent
+   * no-op. The stored value is unchanged; only the static type tightened. */
+  readonly shape: Readonly<S>;
   readonly data: Float64Array;
 
   private constructor(shape: S, data: Float64Array) {
@@ -416,8 +508,13 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
     return new NDArray<[LiteralShapeProduct<S>]>([size] as unknown as [LiteralShapeProduct<S>], new Float64Array(this.data));
   }
 
-  /** Row-major strides for the current shape (introspection helper). */
-  strides(): number[] {
+  /** Row-major strides for the current shape (introspection helper,
+   * D-V2.1: readonly property, not a method — harmonizes with `WNDArray`'s
+   * field and the `NDArrayView` interface). A GETTER, not a cached value:
+   * recomputed fresh from `shape` on every access (`a.strides !== a.strides`
+   * — see the `NDArrayView` doc comment above for why that's fine under the
+   * view contract and why `WNDArray`'s field differs). */
+  get strides(): readonly number[] {
     return computeStrides(this.shape);
   }
 

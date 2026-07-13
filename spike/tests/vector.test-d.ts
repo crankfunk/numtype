@@ -136,18 +136,20 @@ const s1 = NDArray.zeros([2, 3]);
 const s2 = NDArray.zeros([3]);
 const badBroadcast = NDArray.zeros([4]);
 
+// D-V2.3 (docs/phase-d-vorarbeiten-spec.md): `.shape` is now `Readonly<S>` —
+// pins re-expressed intent-preservingly as `readonly [...]`.
 const subResult = s1.sub(s2);
-type T7 = Expect<Equal<(typeof subResult)["shape"], [2, 3]>>;
+type T7 = Expect<Equal<(typeof subResult)["shape"], readonly [2, 3]>>;
 // @ts-expect-error - [2,3] and [4] don't broadcast: error must land on `badBroadcast`
 s1.sub(badBroadcast);
 
 const mulResult = s1.mul(s2);
-type T8 = Expect<Equal<(typeof mulResult)["shape"], [2, 3]>>;
+type T8 = Expect<Equal<(typeof mulResult)["shape"], readonly [2, 3]>>;
 // @ts-expect-error - [2,3] and [4] don't broadcast
 s1.mul(badBroadcast);
 
 const divResult = s1.div(s2);
-type T9 = Expect<Equal<(typeof divResult)["shape"], [2, 3]>>;
+type T9 = Expect<Equal<(typeof divResult)["shape"], readonly [2, 3]>>;
 // @ts-expect-error - [2,3] and [4] don't broadcast
 s1.div(badBroadcast);
 

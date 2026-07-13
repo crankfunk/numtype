@@ -117,7 +117,13 @@ function assertResidentAgrees(
   got: AnyWNDArray,
 ): void {
   const refShape: readonly number[] = ref.shape;
-  const gotShape: readonly number[] = got.shape;
+  // D-V2.3 fallout: `got: AnyWNDArray = WNDArray<any>`, so `got.shape` is
+  // `Readonly<any>` — a TS quirk where a homomorphic mapped type applied to
+  // `any` does NOT collapse back to `any` and so no longer structurally
+  // matches `readonly number[]` (TS2740). The runtime value is unaffected
+  // (still a plain array); this is a pure compile-time cast at an erased
+  // (`AnyWNDArray`) read site, not a semantic change.
+  const gotShape: readonly number[] = got.shape as readonly number[];
   const shapesEqual = refShape.length === gotShape.length && refShape.every((d, i) => d === gotShape[i]);
   if (!shapesEqual) {
     throw new Error(`${label}: TS/resident shape divergence: [${refShape.join(",")}] vs [${gotShape.join(",")}]`);
@@ -139,6 +145,10 @@ function assertResidentAgrees(
 // Resident twins of A, B, M1, M2, cube — built once via the explicit
 // copy-IN boundary (`fromArray`), then chained resident, pointer-to-pointer.
 const rA = WNDArray.fromArray(core, a.shape, a.data);
+// D-V2.2 (docs/phase-d-vorarbeiten-spec.md): `WNDArray` now `implements
+// NDArrayView<S>` too, so the same `printArray` helper used for `NDArray`
+// above works on a resident handle directly — no adapter needed.
+printArray("rA (resident, via NDArrayView)", rA);
 const rB = WNDArray.fromArray(core, b.shape, b.data);
 const rSum = rA.add(rB);
 assertResidentAgrees("A + B (bcast)", sum, rSum);

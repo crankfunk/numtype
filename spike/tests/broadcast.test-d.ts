@@ -68,7 +68,9 @@ type UA5 = Expect<Equal<Broadcast<readonly [2 | 7, 3], [2, 3]>, [number, 3]>>;
 const uaBase = NDArray.zeros([2, 3]);
 declare const uaUnionDimArg: NDArray<readonly [2 | 7, 3]>;
 const uaAdded = uaBase.add(uaUnionDimArg); // must NOT error (no-claim, gradual)
-type UA6 = Expect<Equal<(typeof uaAdded)["shape"], [number, 3]>>;
+// D-V2.3 (docs/phase-d-vorarbeiten-spec.md): `.shape` is now `Readonly<S>` —
+// pin re-expressed intent-preservingly as `readonly [...]`.
+type UA6 = Expect<Equal<(typeof uaAdded)["shape"], readonly [number, 3]>>;
 void uaAdded;
 
 // --- Facette (b), corrected form: shape-union IN ONE TYPE PARAMETER --------
@@ -84,7 +86,7 @@ declare const allBadArg: NDArray<[9, 3] | [7, 3]>;
 // gemischt: accepted, result is the union of valid members only (here: a
 // single valid member, so it collapses to one confident shape).
 const mixedAdded = baseAB.add(mixedArg);
-type UB1 = Expect<Equal<(typeof mixedAdded)["shape"], [2, 3]>>;
+type UB1 = Expect<Equal<(typeof mixedAdded)["shape"], readonly [2, 3]>>;
 void mixedAdded;
 
 // uniform error union: ALL members incompatible -> rejected at the argument.

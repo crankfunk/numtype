@@ -67,7 +67,7 @@
 
 import type { Broadcast } from "../broadcast.ts";
 import { type Dim, type Mutable, type Shape } from "../dim.ts";
-import type { Guard, OkShape } from "../ndarray.ts";
+import type { Guard, NDArrayView, OkShape } from "../ndarray.ts";
 import type { MatMul } from "../matmul.ts";
 import type { ReduceAxis, Transpose } from "../reduce.ts";
 import type { ReshapeCheck } from "../reshape.ts";
@@ -154,12 +154,25 @@ const registry = new FinalizationRegistry<ResidentBuffer>((buf) => {
 /**
  * Erased top type for heterogeneous containers, non-generic helpers, and
  * loop variables reassigned across ops with different (dynamic-rank)
- * shapes — same rationale and same fix as `ndarray.ts`'s `AnyNDArray`: the
- * argument-side error guards make this class's measured variance
- * invariant, so e.g. a `let cur: WNDArray<number[]>` cannot be reassigned
- * the `WNDArray<readonly number[]>` a chained `.add()`/`.matmul()` call
- * returns under dynamic-rank shapes. `any` as the type argument bypasses
- * the variance comparison entirely, same idiom as `NDArray<any>`.
+ * shapes — same rationale and same fix as `ndarray.ts`'s `AnyNDArray`.
+ *
+ * UPDATED (re-invariantization closure, 2026-07-13 — full history in
+ * `../ndarray.ts`'s `AnyNDArray` doc comment): this comment's original
+ * claim, "the argument-side error guards make this class's measured
+ * variance invariant", turned out to be an INCOMPLETE account. Verified
+ * empirically in a scratch probe during the closure round: `WNDArray` had
+ * the exact same accidental widening `NDArray` did after D-V2.3's
+ * `Readonly<S>` wrap on `shape` — `WNDArray<[2, 3]>` was silently
+ * assignable to `WNDArray<readonly number[]>` (no existing pin depended on
+ * that gap, so it never surfaced as a broken test). `WNDArray`'s
+ * invariance is, since the closure round, DELIBERATE and marker-enforced
+ * (see the `__variance` member on the class below), not a side effect of
+ * argument-side guards alone. A `let cur: WNDArray<number[]>` still cannot
+ * be reassigned the `WNDArray<readonly number[]>` a chained
+ * `.add()`/`.matmul()` call returns under dynamic-rank shapes — now because
+ * the marker rejects it on purpose, not by accident. `any` as the type
+ * argument bypasses the variance comparison entirely, same idiom as
+ * `NDArray<any>`.
  */
 export type AnyWNDArray = WNDArray<any>;
 
@@ -263,9 +276,32 @@ export function squeezeMatmulShape(plan: MatmulPlan): number[] {
  * lifecycle contract. Surface mirrors `NDArray`: `zeros`/`ones`/`fromArray`,
  * `add`/`matmul`/`sum`/`transpose`, `toArray`/`toNestedArray`, plus the
  * residency-specific `dispose()`/`disposed` and the Kern-03 `contiguous()`.
+ *
+ * `implements NDArrayView<S>` (D-V2.2, docs/phase-d-vorarbeiten-spec.md):
+ * DISCLOSED, spec-confirmed deviation from the insertion-only discipline —
+ * a class header is not an append-only edit. `shape`/`strides` were already
+ * conforming fields (readonly, correct types); `toNestedArray()` was already
+ * conforming. `shape`'s type tightens to `Readonly<S>` alongside `NDArray`'s
+ * (D-V2.3, same interface, same all-or-nothing decision — see the field's own
+ * doc comment below). Nothing else about this class changes. See the
+ * `NDArrayView` doc comment (`../ndarray.ts`) for the residency/liveness
+ * caveat this conformance carries (member calls may throw post-`dispose()` —
+ * the interface promises no liveness).
  */
-export class WNDArray<S extends Shape> {
-  readonly shape: S;
+export class WNDArray<S extends Shape> implements NDArrayView<S> {
+  /** Deliberate invariance marker — mirrors `NDArray`'s (re-invariantization
+   * owner-decision, 2026-07-13; full rationale in `../ndarray.ts`'s
+   * `NDArray.__variance` doc comment and its `AnyNDArray` doc comment: `S`
+   * in both parameter and return position of one property-typed function
+   * forces invariance; property-style is load-bearing (method-shorthand is
+   * checked bivariantly and would be a no-op); `declare` = no runtime
+   * field; `private` = never in the public surface or a hover; neither
+   * affects `implements NDArrayView<S>` nor the class-level hover). */
+  private declare readonly __variance: (s: S) => S;
+
+  /** D-V2.3: deep-readonly (see `NDArrayView` doc comment in `../ndarray.ts`)
+   * — element writes like `w.shape[0] = 99` are now a compile error. */
+  readonly shape: Readonly<S>;
   /** Element strides of this handle's view onto its buffer — row-major
    * (`computeStrides(shape)`) for freshly created arrays, permuted for
    * transpose views. Runtime observability only; strides have no type-level
