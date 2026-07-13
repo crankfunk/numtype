@@ -159,6 +159,25 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
 
 ### Phase D — Paketierung & Release
 
+> **Status 2026-07-13: Vorarbeiten KOMPLETT, Item 11 ist der nächste Schritt.** Vor Item 11
+> wurden per Owner-Entscheid drei Vorab-Scheiben + eine Mini-Scheibe gezogen (bindende Spec
+> docs/phase-d-vorarbeiten-spec.md, Baustein-0-verifiziert; alle Scheiben dreifach verifiziert,
+> ab V2 unter dem vollen Covenant-Regime): **V3** Browser-Smoke-Test (Playwright/Chromium als
+> devDep, erster Real-Browser-Beweis des Standard-Surface, `pnpm test:browser`,
+> docs/phase-d-vorarbeiten-v3-*); **V1** Union-Guard-Fix (never-wrong hält wieder für
+> Union-Dims und Mixed-Rank-Shape-Unions; tuple-wrapped `Guard`, `RankUnknowable` an sieben
+> Gates, docs/phase-d-vorarbeiten-v1-*); **V2** strides→readonly-Property, `WNDArray
+> implements NDArrayView`, deep-readonly `shape` via `Readonly<S>`, plus Owner-entschiedene
+> RE-Invariantierung per explizitem `__variance`-Marker nach ungeplantem Varianz-Befund
+> (docs/phase-d-vorarbeiten-v2-*); **Union-Axis-Mini** (`IsUnion<Axis>`-Filter in ReduceAxis;
+> Restlücke `Literal|undefined` via optionale Parameter als bekannter M2-Verstoß in
+> COVENANT.md v2 dokumentiert, UA_GAP-Sentinel, docs/union-axis-mini-*). Außerdem seit dieser
+> Runde: **COVENANT.md** (v1→v2) als stehender Produkt-Vertrag mit mechanischem S1-Lint,
+> covenant-verify als Baustein C und Eskalationsleiter (CLAUDE.md „Qualitätssicherung").
+> **Item 11 übernimmt zusätzlich:** Overload-Split-Entscheidung für die
+> Optional-Parameter-Familie, `slice-literal.ts`-Umbenennung, npm-Namen sichern,
+> Zero-dep-Guard-Test (alle in FOLLOWUPS).
+
 11. **API-Konsolidierung + Paketschnitt:** aus `spike/` ein Paket mit einem öffentlichen
     Surface; `.wasm`-Bundling, `exports`-Map, Hover-Qualität der `d.ts` prüfen (die Hovers
     sind Teil des Produkts).

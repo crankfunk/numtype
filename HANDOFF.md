@@ -1,83 +1,87 @@
-# Handoff — 2026-07-12, Session-Ende (Phase C komplett: Scoping + Item 10)
+# Handoff — 2026-07-13, Session-Ende (Phase-D-Vorarbeiten + Union-Axis + Covenant)
 
 ## Aktueller Stand
 NumType (Forschungsprojekt: typsichere n-dim Arrays — TS-Typ-Ebene + from-scratch
-Rust/WASM-Kerne). Remote `github.com/crankfunk/numtype`, privat. **Phasen A, B und C sind
-komplett.** Item 10 (Backend-Wahl-API) gerade abgeschlossen, zweifach post-verifiziert,
-committet & gepusht (5b0f951). `main` in Sync mit origin; Tree sauber (bis auf diesen
-Handoff-Doku-Commit). Alle Gates grün: `pnpm check` (Verbund) exit 0 · `test:core` 817 ·
-`test:resident` 4279 (fail 0) · `test:threaded` 69 · `cargo` 161 · `demo` all-agree ·
-Artefakt-Hash `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d`
-byte-identisch · `check:diag` 175.634 @ 132 / stress 103.882 @ 82. **Nächstes: Phase D
-(Paketierung/Release).**
+Rust/WASM-Kerne). Remote `github.com/crankfunk/numtype`, privat. **Phasen A–C komplett;
+die Phase-D-VORARBEITEN (V1–V3) und die Union-Axis-Mini-Scheibe sind erledigt, dreifach
+verifiziert, committet & gepusht** (HEAD = origin/main = 22aaabd, Tree sauber). Seit dieser
+Session gilt das **Covenant-Regime**: COVENANT.md (v2) ist der stehende Produkt-Vertrag
+(S1 mechanisch via `graph-a-lama query lint`, M1–M5/Z1–Z2 per covenant-verify-Agent =
+Baustein C, Eskalationsleiter in CLAUDE.md „Qualitätssicherung"). Alle Gates grün:
+`pnpm check` (DREIER-Verbund) · test:core 818 · test:resident 4280 · test:browser 4/4 ·
+test:threaded 69 · cargo 161 · demo · covenant-lint 0/0 · bench:editor PASS (7 Workloads) ·
+Artefakt-Hash `0b9df4f1…519c7d` byte-identisch. Pins: check:diag **178'865 @ 132** /
+stress **102'182 @ 82** / browser **2'142 @ 75**. **Nächstes: Item 11 (API-Schnitt/
+Paketierung) — die größte Phase-D-Scheibe.**
 
 ## In dieser Session erledigt
-- **Phase-C-Scoping** (Commit 40c2bfd): Items 8/9 (Browser-Threads-Port / stable-no_std)
-  nach belegter Constraint-Recherche als **Node-only/experimentelles Opt-in zurückgestellt**
-  — es gibt HEUTE keinen Weg vom pinned nightly weg (build-std nightly-only, RFCs 3874/3875
-  decken atomics-Rebuilds nicht ab, wasm32-wasip1-threads Sackgasse, no_std vermutlich nicht),
-  und der Browser-Port ist durch COOP/COEP-Deployment-Friction wertbegrenzt. Erfüllt das
-  Release-Gate. docs/phase-c-threads-scoping.md.
-- **Neue verbindliche Work-Ethic** (Commit 3bce153): „Spec-Verifikation VOR der
-  Implementierung" — ein adversarialer `brainroute:deep`-Verifier gegen jede bindende Spec
-  BEVOR Code entsteht (CLAUDE.md QA-Sektion + verify-runde-template.md **Baustein 0**).
-- **Item 10 — Backend-Wahl-API** (Commit 5b0f951): `NDArray.backend("wasm"|"threaded")` →
-  `WasmBackend`/`ThreadedBackend` als explizites, **browser-sicheres** Opt-in-Backend
-  (empirisch bewiesen via `process.moduleLoadList`-Trace: der JS-`NDArray`-Default zieht
-  `threaded.ts`s statische node-Imports nie eager); JS-`NDArray` bleibt Default; **null Rust,
-  Hash byte-identisch**. Zweifach post-verifiziert (Baustein A + B). docs/item-10-backend-api-*.
-- **Handoff-Doku** (dieser Commit): README/roadmap/CLAUDE.md auf „Phase C komplett, Item 10
-  done"; Pins nachgezogen.
+- **Phase-D-Vorarbeiten-Spec** (8b39c15, docs/phase-d-vorarbeiten-spec.md): drei Scheiben
+  gebunden, Baustein-0-verifiziert (fing den Facette-(b)-Blocker VOR dem Bau: die
+  `NDArray<A>|NDArray<B>`-Form wird von TS-Inferenz selbst abgelehnt).
+- **V3 Browser-Smoke** (e0feee9): erster Real-Browser-Beweis des Standard-Surface
+  (Playwright/Chromium devDep, tsc-Emission, node:http+wasm-MIME, byte-exakte
+  Differential-Matrix, COOP-frei). Verify-Schließungen: mtime-Freshness-Guard (nie
+  `playwright test` direkt!), Streaming-Pfad-Spy, playwright.config typgeprüft.
+- **V1 Union-Guard-Fix** (d0cfa78): never-wrong hält für Union-Dims (inkl. matmuls
+  konfident-falscher ABLEHNUNG), Mixed-Rank-Shape-Unions (`RankUnknowable` an 7 Gates,
+  uniforme Degradation per Owner-Entscheid), tuple-wrapped `Guard` (uniforme Fehler-Union
+  → EINE kombinierte Message). Kern-07-Diskrepanz ehrlich aufgeklärt (a914654:
+  Compiler nachweislich identisch → Addendum-Prosa beschrieb die Probe falsch).
+- **Covenant v1→v2** (4db74e0, 1e8261a, 4f4414e, 22aaabd): Produkt-Vertrag + Baustein C im
+  Verify-Template + Eskalationsleiter (nie vorsichtshalber den vollen Katalog) + M2-Notiz
+  „bekannter Verstoß" (s. u.).
+- **V2 Harmonisierung** (cf414d6): strides = readonly-Property überall (Methode hatte 0
+  Aufrufer), `WNDArray implements NDArrayView<S>` (Threaded gratis), deep-readonly `shape`
+  via `Readonly<S>` (TS2636-Probe: homomorphe Mapped Types passieren den out-Check).
+  UNGEPLANTER Befund: die gemessene NDArray-Invarianz war ein AllOnes-Zufall und fiel durch
+  Readonly<S> → Owner-Entscheid RE-Invariantierung per explizitem property-style
+  `__variance`-Marker (Method-Shorthand wäre bivariant!); Marker senkte den Pin um −10'308.
+- **Union-Axis-Mini** (22aaabd): `IsUnion<Axis>`-Filter in ReduceAxis VOR dem naked Check
+  (Position load-bearing, Mutant-bewiesen); jede Achsen-Union degradiert wie die dynamische
+  Achse. Baustein 0 fing den Blocker: `Literal|undefined` ist über OPTIONALE Parameter
+  strukturell unerreichbar (TS streift undefined bei der Inferenz) → Owner-Scope-Reduktion,
+  Familie als bekannter M2-Verstoß in COVENANT.md v2 mit UA_GAP-Sentinel dokumentiert.
+  Neuer bench:editor-Workload W7 (Union-Achsen-Hover).
 
 ## Offen / in Arbeit
-Nichts halbfertig — Item 10 ist vollständig (DoD durch inkl. KB-Capture). Bewusst deferred in
-`FOLLOWUPS.md`: no_std-30-Min-Experiment, Browser-Threads-Port (nur bei realer Nachfrage),
-Browser-Smoke-Test des Standard-Surface (Phase D), `NDArrayView`-Konformität auf WNDArray
-(Spike-05-Followup, mit dem konkreten `strides`-Feld-vs-Methode-Blocker), `Backend.from`-Kür,
-`test:resident`-Test-Timeout, `unravel_into`-Generalisierung (größter offener Perf-Hebel),
-Union-Guard-Soundness-Gap (MAJOR).
+- Nichts halbfertig. Alle bewusst zurückgestellten Punkte stehen in FOLLOWUPS.md
+  (Faktenstand-Hauptbuch); release-relevant darunter: **Literal|undefined-Familie**
+  (Overload-Split-Kandidat, Item-11-Entscheidung, COVENANT-M2-Notiz), Zero-dep-Guard-Test,
+  `slice-literal.ts`-Umbenennung, npm-Name erneut prüfen/sichern, WebKit/Firefox-Smoke,
+  COVENANT-M3-Wortlaut-Präzisierung (Klassen- vs. Member-Hover, v3-Kandidat).
 
 ## Nächste Schritte
-1. **Phase D — Paketierung & Release** (roadmap Items 11–14): aus `spike/` ein Paket mit EINEM
-   öffentlichen Surface (`exports`-Map, `.wasm`-Bundling, `d.ts`-Hover-Qualität prüfen — die
-   Hovers sind Teil des Produkts). Dazu der **Browser-Smoke-Test** des Standard-Surface
-   (COOP-frei, unabhängig von der Threads-Frage) und **CI** mit allen Gates inkl.
-   Freeze-Hash-Check + `bench:editor`-Latenz-Gate.
-2. Alternativ vorab: der **Union-Guard-Soundness-Gap** (MAJOR, vorbestehend — `NDArray<[2,3] |
-   [2,3,4]>.sum(2)` typt still & falsch; eigene Scheibe) oder der Perf-Hebel
-   **`unravel_into`-Generalisierung** (eigene Scheibe MIT eigener Messung vor der
-   Freeze-Zeremonie).
+1. **Item 11: API-Konsolidierung + Paketschnitt** — bindende Spec nach Haus-Muster (Spec →
+   Baustein 0 → Impl → A+B+C). In die Spec gehören die Item-11-FOLLOWUPS: Overload-Split
+   für `sum`s optionale Parameter, slice-literal.ts-Umbenennung, `exports`-Map +
+   `.wasm`-Bundling, d.ts-Hover-Qualität, npm-Name, Zero-dep-Guard-Test.
+2. Danach Item 12 (CI: alle Gates inkl. Freeze-Hash, bench:editor als Gate, Test-Timeouts)
+   und Item 13 (README/Release-Mechanik).
 
 ## Bekannte Probleme / Stolperfallen
-- **Spec-Verify VOR Impl ist jetzt Pflicht** (Baustein 0) — hat sich in Item 10 sofort
-  bezahlt gemacht (3 Blocker vor dem Bau, u. a. `WNDArray.strides` ist ein FELD, keine
-  Methode). **Zwei-Verifier-Regel** (Spec + adversarial) gilt weiter Post-Impl.
-- **Delegierte Agenten enden oft auf `git status` statt dem Report** — im Delegations-Prompt
-  „Der Report ist deine ALLERLETZTE Nachricht, git-status DAVOR" explizit vorgeben (verifiziert
-  wirksam). **Subagenten spawnen KEINE Subagenten** — nur der Haupt-Loop fannt aus.
-- **Freeze** = Ganz-Artefakt-Clean-Rebuild-Hash. Item 10 war null Rust → Hash unverändert
-  (`0b9df4f1…`).
-- **check:diag ist check-order-abhängig** (±~2.000 Rauschen bei Datei-Adds); Attribution via
-  empty-then-fill / Ablation. Item-10-Befund: `check:diag:stress`-Anstieg dominant durch
-  `threaded.ts`-Generics (D1 zieht Backend-Typen in jede NDArray-importierende Datei), nicht
-  `ambient.d.ts`.
-- **Mess-Hausregel**: Baselines/Pins nur im frischen `git worktree` des Zielcommits, immer
-  Exit-Code prüfen (zsh: `${pipestatus}`, nicht `${PIPESTATUS}`). Hintergrund-Agenten fassen
-  den Haupt-Tree nie an.
-- **Threads-Build**: pinned nightly-2026-07-09 + `-Z build-std` + rust-src (`test:threaded`,
-  `scripts/build-wasm-threads.sh`); env-RUSTFLAGS ersetzt config (`+simd128` mitführen).
-- **Kommunikation mit dem Owner auf Deutsch**; Code/README/Spec-Docs bleiben Englisch.
+- **Pins nie über Korpora oder File-Set-Änderungen hinweg vergleichen**; Datei-ADDITIONEN
+  tragen ±~2'000 Order-Noise, EDITs nicht (Kommentar-Kontrollproben-Methode). Messungen nur
+  im frischen `git worktree`, Exit-Code prüfen.
+- **`pnpm test:browser` nie als direktes `playwright test` aufrufen** — Freshness-Guard
+  wirft sonst (bewusst; stale `.emit` war ein bewiesener False-Pass-Vektor).
+- **Covenant-Regime** (CLAUDE.md „Qualitätssicherung"): substanzielle Scheiben = voller
+  Katalog A+B+C parallel + Lint im Gate-Block; Eskalationsleiter für Kleineres. Specs und
+  Delegations-Prompts benennen berührte Invarianten-IDs. Spec-Änderungen nur mit
+  Owner-Bestätigung + Version-Bump.
+- Threads-Artefakt braucht die gepinnte nightly-2026-07-09 (+rust-src); alle Kommandos vom
+  Repo-Root (cargo-Config-Discovery); Freeze-Beweis = Artefakt-Hash aus CLEAN-Rebuild.
+- `NDArray`/`WNDArray` sind BEWUSST invariant (expliziter `__variance`-Marker) —
+  property-style ist Pflicht, ein `out` ist unmöglich (TS2636 auf Transpose-Rückgaben);
+  `NDArrayView` ist die einzige enforced-kovariante Surface.
+- Optionale Parameter streifen `undefined` aus Inferenz-Unions (UA_GAP-Sentinel wacht);
+  Workaround explizites Typ-Argument.
 
 ## Wichtige Dateien & Befehle
-- **Item 10:** `spike/src/wasm/backend-api.ts` (`WasmBackend`, `checkThreadedEnv`),
-  `spike/src/wasm/threaded.ts` (`ThreadedBackend`), `spike/src/ndarray.ts` (`static backend`),
-  `spike/src/index.ts` (Exports). Tests: `spike/tests-runtime/backend-api.test.ts` (test:resident,
-  inkl. M3 D2-ordering Browser-Sicherheit), `…/backend-api-threaded.test.ts` (test:threaded,
-  inkl. M6 dispose-Plateau). Docs: `docs/item-10-backend-api-{spec,ergebnisse}.md`.
-- **Prozess:** `docs/verify-runde-template.md` (Bausteine 0/A/B) · `docs/roadmap.md`
-  (Phasen; C komplett) · `docs/phase-c-threads-scoping.md` · `FOLLOWUPS.md` (Backlog).
-- **Befehle (alle vom Repo-Root):** `pnpm check` (Verbund root+stress) · `check:diag` 175.634
-  @ 132 / `check:diag:stress` 103.882 @ 82 · `test:core` 817 · `test:resident` 4279
-  (+`:gc`) · `test:threaded` 69 (nightly) · `demo` · `cargo test --manifest-path
-  crates/core/Cargo.toml` (161). Freeze-Check: `shasum -a 256 spike/src/wasm/numtype_core.wasm`
-  = `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d`.
+- Vertrag/Prozess: `COVENANT.md` (v2) · `docs/verify-runde-template.md` (Bausteine 0/A/B/C)
+  · `FOLLOWUPS.md` · `CLAUDE.md` (Pins, Kommandos, QA-Regeln).
+- Diese Session: `docs/phase-d-vorarbeiten-spec.md` + `-v{1,2,3}-ergebnisse.md`,
+  `docs/union-axis-mini-{spec,ergebnisse}.md`.
+- Kern-Kommandos: `pnpm check` (Dreier-Verbund) · `pnpm check:diag[:stress|:browser]` ·
+  `pnpm test:core|test:resident|test:browser|test:threaded` · `cargo test --manifest-path
+  crates/core/Cargo.toml` · `pnpm demo` · `pnpm bench:editor` · `graph-a-lama . --symbols
+  && graph-a-lama query lint`.
