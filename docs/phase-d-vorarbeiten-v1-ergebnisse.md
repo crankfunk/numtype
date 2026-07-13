@@ -303,9 +303,19 @@ Union-Latenz in den Typlevel-Guards, ZWEI Facetten..."):
   heutigen Stand (TS 7.0.2, geprüft in Baustein 0 UND erneut hier: 4 Varianten, Argument- UND
   Empfänger-Form) NICHT nachvollziehbar — TS' eigene generische Inferenz/Klassen-Invarianz lehnt
   diese Form bereits ab, unabhängig von Guard/CompatDim/Broadcast (ehrliche Diskrepanz-Notiz,
-  keine stillschweigende Umdeutung: entweder hat sich TS' Inferenzverhalten seit der
-  Kern-07-Beobachtung geändert, oder die ursprüngliche Beobachtung war an einer anderen
-  Formulierung als der hier reproduzierten festgemacht — nicht mehr rekonstruierbar). Die
+  keine stillschweigende Umdeutung. **Nachgeschärft 2026-07-13, Owner-Rückfrage:** die
+  Erklärung „TS-Verhaltensänderung seit Kern 07" ist AUSGESCHLOSSEN — das Lockfile führt
+  `typescript@7.0.2` byte-identisch im Kern-07-Commit 9ab262b und heute (pnpm-lock.yaml wurde
+  überhaupt nur von Spike 01 und V3/Playwright berührt, installiert ist 7.0.2). Übrig bleibt:
+  die Addendum-PROSA beschreibt nicht die tatsächliche Probe. Indizien: der Probe-Code des
+  Fresh-Context-Verifiers wurde nie committet (nur der Prosa-Satz mit „e.g." überlebte); die
+  Befund-Überschrift „Union-of-WHOLE-SHAPES" passt auf die Shape-Union-Form
+  `NDArray<[2,3]|[7,3]>` — die damals wie heute wirklich leakt — während das Inline-Beispiel
+  die um eine Klammerposition verschiedene Instanzen-Union zeigt; und bereits der
+  Kern-09-Kontroll-Pin (einen Tag später, gleicher Compiler) hielt fest, dass die
+  Instanzen-Union „korrekt abgewiesen" wird — der Widerspruch stand seitdem unbemerkt in den
+  eigenen Docs. Prozess-Lektion: Verifier-Befunde ohne committeten Repro sind später nicht
+  rekonstruierbar — die Repro-first-Disziplin dieser Scheibe ist die Gegenmaßnahme). Die
   TATSÄCHLICH reproduzierbare Form ist eine Shape-Union IM Typparameter EINER Instanz
   (`x: NDArray<[2,3]|[7,3]>`), was mechanisch mit (c) zusammenfällt und von der D-V1.4-Guard-
   Härtung (tuple-wrapped `[Result] extends [ShapeError<infer Message>]`) abgedeckt wird: gemischt
