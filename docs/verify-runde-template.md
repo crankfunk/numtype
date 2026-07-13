@@ -38,6 +38,9 @@ bestätigen. Zusätzlich zu den gemeinsamen Pflichtregeln:
   Symbole/Signaturen/Dateien am Code prüfen (gelesene Datei:Zeile). Eine falsche
   Annahme kippt eine Binding-Entscheidung → Blocker (genau der Item-10-Fund:
   `WNDArray.strides` ist ein Feld, keine Methode).
+- **Covenant-Abgleich** (falls COVENANT.md existiert): verletzt die Spec SELBST eine
+  Invariante oder implementiert sie ein Nicht-Ziel? Die berührten Invarianten-IDs
+  benennen (sie wandern in die Spec und in die Delegations-Prompts der Scheibe).
 - **Design-Löcher**: API-Form/Overload-Auflösung, Cross-Fall-Operanden (falsche
   Kombinationen), Fehler-/Env-Detektionspfade (erreichbar? statische vs. dynamische
   Imports, Plattform-Kontamination), Lifecycle-/Dispose-Fallen, Nachbar-Effekte.
@@ -91,8 +94,26 @@ ist das Brechen):
   boolean statt true/false, `number` statt Literal), Hover-Qualität der neuen
   Signaturen, `@ts-expect-error`-Positionen wirklich am Argument.
 
+## Baustein C — covenant-verify (Vertrags-Dimension; gilt, solange COVENANT.md existiert)
+
+Läuft PARALLEL zu A und B als DRITTER frischer Kontext mit disjunkter Frage: „hält
+der Diff den STEHENDEN Vertrag?" — nicht die Scheiben-Spec (das ist A), nicht die
+Korrektheit (das ist B). Dispatch über den `covenant:covenant-verify`-Agenten mit
+GENAU diesem Input: (a) COVENANT.md wörtlich, (b) `git diff` der Scheibe, (c) die als
+berührt identifizierten Invarianten-IDs, (d) `graph-a-lama query lint`-Output + knappe
+Graph-Slices (`neighbors`/`impact`) der geänderten Knoten. KEINE Bewertung der eigenen
+Arbeit mitgeben — der Agent urteilt allein aus Spec + Diff.
+
+Arbeitsteilung (kein Doppeln): Verstöße gegen S-Invarianten stellt AUSSCHLIESSLICH
+das mechanische `graph-a-lama query lint` fest — es läuft als eigenes Gate im
+Gate-Block jeder Scheibe (Exit 1 = wie ein roter Test); der Agent prüft bei
+S-Invarianten nur die Regel↔Spec-Verknüpfung (jede `covenant-*`-Regel ↔ ihr
+Spec-Eintrag). Drift-Befunde — auch in der Richtung „die Spec ist das Veraltete" —
+gehen unverdünnt an den Owner: Code-Fix ODER Spec-Änderung mit Version-Bump +
+Changelog entscheidet der Owner, nie eine stille Anpassung.
+
 ## Abnahme
 
-Beide Reports liegen vor → Befunde mergen, jeden major+ Befund adressieren oder
-begründet als akzeptiert dokumentieren; Ergebnisdoc erhält ein
-Post-Verification-Addendum mit BEIDEN Verdikten. Erst dann Commit.
+Alle Reports liegen vor (A + B, plus C in Covenant-Projekten) → Befunde mergen, jeden
+major+ Befund adressieren oder begründet als akzeptiert dokumentieren; Ergebnisdoc
+erhält ein Post-Verification-Addendum mit ALLEN Verdikten. Erst dann Commit.

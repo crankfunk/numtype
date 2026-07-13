@@ -95,3 +95,14 @@ Substanz hielt, aber globale standing orders und Prozess-Feinheiten verlor
   (Konformität, coverage-first, eigener Mutant), einer arbeitet adversarial
   (aktiv brechen: Grenzfälle, Messrandbedingungen, Mutanten auch abseits der
   Spec). Aufträge aus docs/verify-runde-template.md, nicht frei formulieren.
+- **Covenant (seit v1, Commit 4db74e0):** COVENANT.md ist der stehende
+  Produkt-Vertrag (S1, M1–M5, Z1–Z2 + Nicht-Ziele). Vor jeder „fertig"-Meldung
+  einer substanziellen Scheibe zusätzlich: `graph-a-lama query lint` als
+  mechanisches Gate im Gate-Block (S-Invarianten; Exit 1 = roter Test) und EIN
+  `covenant:covenant-verify`-Agent PARALLEL zu Baustein A/B (dritter frischer
+  Kontext, sieht nur COVENANT.md + Diff + berührte IDs + Lint-Output; Auftrag
+  aus verify-runde-template.md Baustein C); Verdikt ins
+  Post-Verification-Addendum. Scheiben-Specs und Delegations-Prompts benennen
+  die berührten Invarianten-IDs; Baustein 0 gleicht jede neue Spec gegen den
+  Vertrag ab. Spec-Änderungen NUR mit Owner-Bestätigung + Version-Bump +
+  Changelog — nie still, auch wenn die Spec „offensichtlich veraltet" wirkt.
