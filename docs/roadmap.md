@@ -178,9 +178,20 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
 > Optional-Parameter-Familie, `slice-literal.ts`-Umbenennung, npm-Namen sichern,
 > Zero-dep-Guard-Test (alle in FOLLOWUPS).
 
+> **Status 2026-07-17: Item 11 KOMPLETT** (S1+S2+S3, je dreifach verifiziert & committet:
+> S1 48ee440, S2 87e6e6b, S3 69ab47a). **S1** sum-Overload-Umbau (COVENANT-M2-Verstoß
+> geschlossen, beide Facetten) + `slice-literal.ts`→`literal-arithmetic.ts` (docs/item-11-s1-*).
+> **S2** Emit-/Paket-Pipeline: `tsconfig.build.json` + zero-dep Post-Emit-Rewrite
+> (`scripts/postbuild-dist.mjs`, fixt die drei TS7-Emit-Blocker) + `.wasm`-Bundling +
+> package.json-Metadaten (`pnpm build:dist`; docs/item-11-s2-*). **S3** Zero-dep-Guard +
+> Paket-Smoke als geprüfte Gates (`pnpm test:package`: Laufzeit-Smoke gegen `dist/index.js`
+> inkl. `backend("wasm")`-WASM-Ladepfad, Konsumenten-Typ-Smoke, Emit-Präzisions-Gate
+> `check-dist-emit.mjs`; docs/item-11-s3-*). COVENANT v2→v4 (M2 geschlossen, Z2 präzisiert).
+> npm-Name-Sicherung + author-Feld + LICENSE-Datei bewusst nach Item 13 verschoben.
+
 11. **API-Konsolidierung + Paketschnitt:** aus `spike/` ein Paket mit einem öffentlichen
     Surface; `.wasm`-Bundling, `exports`-Map, Hover-Qualität der `d.ts` prüfen (die Hovers
-    sind Teil des Produkts).
+    sind Teil des Produkts). **✅ ERLEDIGT (2026-07-17).**
 12. Qualitäts-Portfolio + CI: Vitest-Migration (FOLLOWUPS), GitHub Actions mit allen Gates
     inkl. Artefakt-Hash-Freeze-Check.
 13. Release-Mechanik: npm-Namen sichern, Lizenz, 0.x-SemVer-Politik, README mit

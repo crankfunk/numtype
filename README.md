@@ -2,7 +2,7 @@
 
 > NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor errors.
 
-An n-dimensional array library for TypeScript with **compile-time shape checking** — matmul, broadcasting, and reduction shape mismatches appear as editor squiggles while you type, not as runtime crashes in production. Gradual by design: literal dimensions are checked statically, dynamic (`number`) dimensions degrade gracefully to runtime checks. Planned backend: from-scratch Rust/WASM kernels.
+An n-dimensional array library for TypeScript with **compile-time shape checking** — matmul, broadcasting, and reduction shape mismatches appear as editor squiggles while you type, not as runtime crashes in production. Gradual by design: literal dimensions are checked statically, dynamic (`number`) dimensions degrade gracefully to runtime checks. Backend: from-scratch Rust/WASM kernels (implemented, opt-in via `NDArray.backend("wasm")` / `"threaded"`), with a pure-JS reference runtime as the default, browser-safe path. (Full install/usage docs land with the Item-13 release pass.)
 
 ## Highlight: the type system does arithmetic over your dimensions
 
