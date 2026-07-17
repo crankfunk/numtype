@@ -1,0 +1,18 @@
+{
+  // Item 11 / S2 — dist-Emit-Konfiguration (docs/item-11-api-paket-spec.md D-S2.1).
+  // Baut das publizierbare Paket aus spike/src/** nach ./dist. KEIN Check-Korpus:
+  // `pnpm check` prüft die Sources bereits im Root-noEmit-Lauf (Z2, D-S2.6) — dies
+  // ist ausschliesslich ein BUILD (noEmit:false). ambient.d.ts erzeugt keinen Output.
+  // Blocker 1 (.d.ts behalten .ts-Endungen) + Blocker 2 (new URL(...).ts) werden
+  // NICHT von rewriteRelativeImportExtensions abgedeckt → scripts/postbuild-dist.mjs.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "rewriteRelativeImportExtensions": true,
+    "outDir": "dist",
+    "rootDir": "spike/src"
+  },
+  "include": ["spike/src/**/*.ts"],
+  "exclude": []
+}

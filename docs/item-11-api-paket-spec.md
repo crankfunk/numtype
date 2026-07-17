@@ -261,9 +261,16 @@ Kein `crates/`. Die drei verifizierten Blocker werden hier gefixt.
   `spike/src`-Baum, TS 7.0.2, `rewriteRelativeImportExtensions: true`,
   `declaration: true`): die `.js`-Emission schreibt korrekt `from "./ndarray.js"`, die
   `.d.ts` emittiert aber `from "./dim.ts"` (verifiziert: `dist/index.js` vs.
-  `dist/index.d.ts` in der Scratch-Probe). Ein Konsument bekäme „Cannot find module
-  './dim.ts'". `rewriteRelativeImportExtensions` deckt in 7.0.2 die `.d.ts`-Emission
-  nicht ab.
+  `dist/index.d.ts` in der Scratch-Probe). `rewriteRelativeImportExtensions` deckt in 7.0.2
+  die `.d.ts`-Emission nicht ab. **Präzisierung (S2-Verify A, 2026-07-17):** die ursprüngliche
+  Annahme „ein Konsument bekäme 'Cannot find module ./dim.ts'" reproduziert unter TS 7.0.2 mit
+  `moduleResolution: bundler` UND `nodenext` NICHT (der Konsument checkt sauber, EXIT 0, mit
+  korrekten Typen) — die `.ts`-Endung in der `.d.ts` bricht diese modernen Resolver nicht. Der
+  Post-Emit-Rewrite bleibt dennoch als **Publish-Standardkonformität** (publizierte `.d.ts`
+  tragen `.js`-Imports; strengere/ältere Resolver-Konfigs erwarten das) — defensiv-korrekt, nicht
+  funktional-zwingend. **Coverage-Konsequenz:** eine Regression dieses Rewrites fängt NUR der
+  Emit-Präzisions-Grep (D-S2.2), NICHT der S3-Konsumenten-Smoke (der auch mit `.ts`-Endungen grün
+  bliebe) — der Emit-Grep ist Pflicht-Gate.
 - **Blocker 2 — Worker-URL zeigt auf `.ts`.** `new URL("./threaded-worker.ts",
   import.meta.url)` (threaded.ts:121) bleibt im Emit wortgleich (verifiziert:
   `dist/wasm/threaded.js:88`). `rewriteRelativeImportExtensions` fasst String-Literale
@@ -354,8 +361,11 @@ durch** (nicht nur Stichprobe).
 `"type": "module"` bleibt. **`"private": true` bleibt bis Item 13/Release** (schützt vor
 versehentlichem `npm publish` während Item 11/12); die Publish-Metadaten werden gesetzt,
 aber das Paket ist noch nicht publish-scharf. Ergänzende Metadaten-Felder (`description`
-existiert, `keywords`, `repository`, `license`, `author`) — `license` als FELD gesetzt,
+existiert, `keywords`, `repository`, `license` gesetzt) — `license` als FELD gesetzt,
 die LICENSE-DATEI + finale Rechtewahl ist Item 13 (Release-Mechanik); Kandidat MIT.
+Das `author`-FELD bleibt — wie die LICENSE-Datei — bewusst **Item 13 überlassen** (persönliche
+Angaben sind Owner-Entscheidung beim Release; S2-Verify-A-Befund als bewusste Deferral
+dokumentiert, kein fehlendes Pflichtfeld).
 Build-Script `pnpm build:dist` (Kandidat): `tsc -p <dist-tsconfig> && node
 scripts/postbuild-dist.mjs && <copy numtype_core.wasm>`.
 

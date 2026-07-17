@@ -19,6 +19,11 @@ crates/**/target-threads/
 # source of truth; `pnpm bench:editor` regenerates on every run).
 spike/bench-dx/workloads/
 
+# Item 11 / S2: dist-Build-Output (regeneriert von `pnpm build:dist`, kommt in
+# den npm-Tarball via package.json "files":["dist"], NICHT committet). Die
+# numtype_core.wasm darin ist schon durch die *.wasm-Regel oben erfasst.
+/dist/
+
 # V3 (Browser-Smoke-Test): tsc-emitted scratch tree (test:browser regenerates
 # on every run; *.wasm inside it is already covered by the rule above) +
 # Playwright's own report/output directories.

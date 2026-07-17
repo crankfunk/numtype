@@ -3,8 +3,39 @@
   "version": "0.0.0",
   "private": true,
   "description": "NumType — n-dimensional arrays for TypeScript with compile-time shape checking (research spike)",
+  "keywords": [
+    "ndarray",
+    "tensor",
+    "typescript",
+    "type-level",
+    "shape-checking",
+    "compile-time",
+    "wasm",
+    "numpy"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/crankfunk/numtype.git"
+  },
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "sideEffects": [
+    "**/threaded-worker.js"
+  ],
   "scripts": {
+    "build:dist": "pnpm build:wasm && rm -rf dist && tsc -p tsconfig.build.json && node scripts/postbuild-dist.mjs && mkdir -p dist/wasm && cp spike/src/wasm/numtype_core.wasm dist/wasm/numtype_core.wasm",
     "check": "tsc --noEmit && tsc --noEmit -p spike/tests-stress && tsc --noEmit -p spike/tests-browser",
     "check:diag": "tsc --noEmit --extendedDiagnostics",
     "check:diag:stress": "tsc --noEmit -p spike/tests-stress --extendedDiagnostics",
