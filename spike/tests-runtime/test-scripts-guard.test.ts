@@ -56,6 +56,9 @@ const testsRuntimeDirUrl = new URL(".", import.meta.url);
 const repoRootUrl = new URL("../../", import.meta.url);
 // V3: the sibling Playwright-run corpus (docs/phase-d-vorarbeiten-spec.md).
 const testsBrowserDirUrl = new URL("../tests-browser/", import.meta.url);
+// Item 11 / S3 (D-S3.3): the package-smoke corpus — imports the BUILT dist/,
+// run by `test:package` (after `build:dist`), never by plain `node --test`.
+const testsPackageDirUrl = new URL("../tests-package/", import.meta.url);
 
 interface FsPromisesExtra {
   readFile(url: URL, encoding: string): Promise<string>;
@@ -106,18 +109,21 @@ const testResidentScript = scripts["test:resident"];
 const testResidentGcScript = scripts["test:resident:gc"];
 const testThreadedScript = scripts["test:threaded"];
 const testBrowserScript = scripts["test:browser"];
+const testPackageScript = scripts["test:package"];
 
 assert.ok(testCoreScript, `package.json is missing a "test:core" script`);
 assert.ok(testResidentScript, `package.json is missing a "test:resident" script`);
 assert.ok(testResidentGcScript, `package.json is missing a "test:resident:gc" script`);
 assert.ok(testThreadedScript, `package.json is missing a "test:threaded" script`);
 assert.ok(testBrowserScript, `package.json is missing a "test:browser" script`);
+assert.ok(testPackageScript, `package.json is missing a "test:package" script`);
 
 const testCoreFiles = extractTestFileTokens(testCoreScript);
 const testResidentFiles = extractTestFileTokens(testResidentScript);
 const testResidentGcFiles = extractTestFileTokens(testResidentGcScript);
 const testThreadedFiles = extractTestFileTokens(testThreadedScript);
 const testBrowserFiles = extractTestFileTokens(testBrowserScript);
+const testPackageFiles = extractTestFileTokens(testPackageScript);
 
 test("every spike/tests-runtime/*.test.ts file is listed in exactly one of test:core / test:resident / test:threaded", async () => {
   const entries = await fsp.readdir(testsRuntimeDirUrl);
@@ -153,13 +159,14 @@ test("every spike/tests-runtime/*.test.ts file is listed in exactly one of test:
   );
 });
 
-test("every file referenced by test:core / test:resident / test:resident:gc / test:threaded / test:browser exists on disk", async () => {
+test("every file referenced by test:core / test:resident / test:resident:gc / test:threaded / test:browser / test:package exists on disk", async () => {
   const allReferenced = [
     ...testCoreFiles.map((f) => ({ list: "test:core", file: f })),
     ...testResidentFiles.map((f) => ({ list: "test:resident", file: f })),
     ...testResidentGcFiles.map((f) => ({ list: "test:resident:gc", file: f })),
     ...testThreadedFiles.map((f) => ({ list: "test:threaded", file: f })),
     ...testBrowserFiles.map((f) => ({ list: "test:browser", file: f })),
+    ...testPackageFiles.map((f) => ({ list: "test:package", file: f })),
   ];
 
   const missing: { list: string; file: string }[] = [];
@@ -235,5 +242,71 @@ test("every spike/tests-browser/*.test.ts file is listed in test:browser, and ne
     wrongCorpusInBrowser.length,
     0,
     `test:browser references file(s) that actually live in spike/tests-runtime/, not spike/tests-browser/: ${wrongCorpusInBrowser.join(", ")}`,
+  );
+});
+
+// (e) Item 11 / S3 (D-S3.3): spike/tests-package/ is a SEPARATE corpus of
+// package-smoke tests that import the BUILT dist/ (not spike/src). They run
+// ONLY under `pnpm test:package` (which runs `build:dist` first) — never in the
+// plain `node --test` core/resident/threaded corpora, where dist/ isn't built
+// (the dynamic import of dist/index.js would throw ENOENT). Same "never
+// silently unregistered" guarantee as (a)/(d), plus the mis-registration mode.
+//
+// NOTE (S3-Verify F4): the mis-registration check compares BASENAMES (the
+// script lists hold paths; readdir gives basenames), so a tests-package test
+// whose basename collides with ANY file in the four other corpora — not just
+// tests-browser — trips a false "misregistered". This is the SAFE direction (it
+// forces a rename, never lets a file slip through unrun). House rule: keep
+// tests-package test basenames globally unique across all corpora (this is why
+// the runtime smoke is `package-smoke.test.ts`, not `smoke.test.ts` — the latter
+// already exists under tests-browser).
+test("every spike/tests-package/*.test.ts file is listed in test:package, and never in test:core/test:resident/test:threaded/test:browser", async () => {
+  const entries = await fsp.readdir(testsPackageDirUrl);
+  const onDisk = entries.filter((f: string) => f.endsWith(".test.ts"));
+  assert.ok(onDisk.length > 0, `no *.test.ts files found under ${testsPackageDirUrl.href} — readdir likely misconfigured`);
+
+  const packageBasenames = new Set(testPackageFiles.map(basename));
+  const coreBasenames = new Set(testCoreFiles.map(basename));
+  const residentBasenames = new Set(testResidentFiles.map(basename));
+  const threadedBasenames = new Set(testThreadedFiles.map(basename));
+  const browserBasenames = new Set(testBrowserFiles.map(basename));
+
+  const unregistered: string[] = [];
+  const misregistered: string[] = [];
+  for (const file of onDisk) {
+    if (!packageBasenames.has(file)) unregistered.push(file);
+    if (
+      coreBasenames.has(file) ||
+      residentBasenames.has(file) ||
+      threadedBasenames.has(file) ||
+      browserBasenames.has(file)
+    ) {
+      misregistered.push(file);
+    }
+  }
+
+  assert.strictEqual(
+    unregistered.length,
+    0,
+    `these test files exist in spike/tests-package/ but are not listed in test:package (they silently never run): ${unregistered.join(", ")}`,
+  );
+  assert.strictEqual(
+    misregistered.length,
+    0,
+    `these spike/tests-package/ test files are listed in a node/browser corpus — a package-smoke test must run ` +
+      `only under test:package (after build:dist), never in a plain node --test / Playwright list: ${misregistered.join(", ")}`,
+  );
+
+  // Symmetric: test:package must never reference a file that actually lives in
+  // spike/tests-runtime/ or spike/tests-browser/ (a copy/paste or merge mistake).
+  const runtimeEntries = await fsp.readdir(testsRuntimeDirUrl);
+  const runtimeOnDisk = new Set(runtimeEntries.filter((f: string) => f.endsWith(".test.ts")));
+  const browserEntries = await fsp.readdir(testsBrowserDirUrl);
+  const browserOnDisk = new Set(browserEntries.filter((f: string) => f.endsWith(".test.ts")));
+  const wrongCorpus = testPackageFiles.map(basename).filter((f) => runtimeOnDisk.has(f) || browserOnDisk.has(f));
+  assert.strictEqual(
+    wrongCorpus.length,
+    0,
+    `test:package references file(s) that actually live in spike/tests-runtime/ or spike/tests-browser/, not spike/tests-package/: ${wrongCorpus.join(", ")}`,
   );
 });

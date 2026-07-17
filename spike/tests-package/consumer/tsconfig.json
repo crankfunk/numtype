@@ -1,0 +1,19 @@
+{
+  // D-S3.2 (2): a stand-in CONSUMER tsconfig — deliberately NOT extending the
+  // repo's own tsconfig. It mimics an external package consumer's typical
+  // defaults so the type-smoke proves what a real user experiences:
+  //   - moduleResolution "bundler": the Vite/Next/esbuild default.
+  //   - skipLibCheck true: also the default (Vite/Next/CRA templates set it);
+  //     D-S2.3 (a) — the standard NDArray consumer must check clean WITHOUT
+  //     needing @types/node, which skipLibCheck:true delivers.
+  //   - NO allowImportingTsExtensions: a real consumer imports the built .js.
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["consumer.ts"]
+}

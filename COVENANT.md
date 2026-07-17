@@ -1,5 +1,5 @@
 # Covenant — NumType
-<!-- covenant:version 3 -->
+<!-- covenant:version 4 -->
 
 ## Invarianten
 
@@ -42,8 +42,13 @@
 - **Z1** · Zero-Dependency-Runtime: das Paket bekommt nie ein `dependencies`-Feld; Kernels und
   Typ-Maschinerie bleiben from scratch (Dev-Tooling ist erlaubt).
   Anker: `package.json`
-- **Z2** · `pnpm check` bleibt der Verbund ALLER Typ-Korpora (root + stress + browser +
-  künftige) — kein Korpus rottet ungeprüft.
+- **Z2** · `pnpm check` bleibt der Verbund aller QUELLTEXT-Typ-Korpora (root + stress +
+  browser + künftige) — kein Quelltext-Korpus rottet ungeprüft. Typchecks gegen ein
+  BAUERGEBNIS (`dist/`, das beim reinen `noEmit`-Check nicht existiert — z.B. der Item-11/S3
+  Konsumenten-Smoke `spike/tests-package/consumer/`) laufen stattdessen im Paket-Testlauf
+  (`test:package`, nach `build:dist`) — auch sie rotten nicht, liegen aber bewusst in einem
+  ANDEREN, build-abhängigen Gate. Reine Quelltext-Smokes bleiben in `pnpm check` (z.B. der
+  Laufzeit-Smoke `package-smoke.test.ts`, dessen dist-Import dynamisch/untypisiert ist).
   Anker: `package.json`
 
 ## Nicht-Ziele
@@ -53,6 +58,12 @@
 - Keine transzendenten Ops ohne eigene Determinismus-Entscheidung (brechen Bit-Parität).
 
 ## Änderungslog
+- v4 (2026-07-17) · Z2: präzisiert — der Verbund `pnpm check` deckt alle QUELLTEXT-Typ-Korpora;
+  Typchecks gegen ein Bauergebnis (`dist/`, existiert beim noEmit-Check nicht) laufen bewusst
+  im Paket-Testlauf (`test:package`), nicht in `pnpm check`. Anlass: covenant-verify-Befund
+  der Item-11/S3-Scheibe (der Konsumenten-Typ-Smoke braucht das gebaute `dist/index.d.ts`);
+  Owner-entschieden „Norm präzisieren statt Korpus erzwingen". Norm-Absicht unverändert (kein
+  Korpus rottet ungeprüft).
 - v3 (2026-07-17) · M2: der unter v2 dokumentierte offene Verstoß (Literal|undefined via
   OPTIONALE Parameter, `sum`s `axis`/`keepdims`) ist GESCHLOSSEN — Item 11 / S1
   (`sum`-Overload-Umbau nach Argument-Anzahl + `reduce.ts`-`KeepDims`-Erweiterung, KD-2),

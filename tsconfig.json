@@ -11,5 +11,5 @@
     "exactOptionalPropertyTypes": true
   },
   "include": ["spike"],
-  "exclude": ["spike/bench-dx/workloads", "spike/tests-stress", "spike/tests-browser"]
+  "exclude": ["spike/bench-dx/workloads", "spike/tests-stress", "spike/tests-browser", "spike/tests-package/consumer"]
 }
