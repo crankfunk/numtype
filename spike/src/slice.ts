@@ -24,7 +24,7 @@
  *  - `{ start?, stop?, step? }` — range slice; the axis survives. CORE rule:
  *    its dim degrades to `number` (the exact resulting count depends on dim
  *    VALUES, which tuple-recursion here never computes arithmetically).
- *    STRETCH (slice-literal.ts, gated — see that file for the precise
+ *    STRETCH (literal-arithmetic.ts, gated — see that file for the precise
  *    supported subset, extended by Spike 06 for negative literal
  *    `start`/`stop` and literal `step >= 1`, docs/spike-06-range-literals-spec.md):
  *    a literal `start`/`stop` (negative or non-negative) with
@@ -56,7 +56,7 @@
  */
 
 import { type Dim, type RankUnknowable, type Shape, type ShowShape } from "./dim.ts";
-import type { ExtractStep, LiteralIndexBounds, LiteralRangeDim, LiteralStepInvalid } from "./slice-literal.ts";
+import type { ExtractStep, LiteralIndexBounds, LiteralRangeDim, LiteralStepInvalid } from "./literal-arithmetic.ts";
 
 /** One axis's slice specification, at the type level. See file header. */
 export type SliceSpecInput = number | null | { readonly start?: number; readonly stop?: number; readonly step?: number };
@@ -81,7 +81,7 @@ type IsDynamicLength<T extends readonly unknown[]> = number extends T["length"] 
  * the argument, so this branch is never reached by code that compiles.
  *
  * Range-object dims go through `LiteralRangeDim<Head, SHead>`
- * (slice-literal.ts, the gated stretch): a literal, non-negative
+ * (literal-arithmetic.ts, the gated stretch): a literal, non-negative
  * `start`/`stop` with `step` omitted-or-`1` yields a computed literal dim;
  * everything else honestly degrades to `Dim` (`number`) — the exact same
  * fallback a core-only (no-stretch) implementation would use. Dropping the

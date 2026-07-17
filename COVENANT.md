@@ -1,5 +1,5 @@
 # Covenant — NumType
-<!-- covenant:version 2 -->
+<!-- covenant:version 3 -->
 
 ## Invarianten
 
@@ -15,13 +15,17 @@
 - **M2** · Typ-Ebene „never wrong, only incomplete": Compile-Ablehnung nur für garantierte
   Runtime-Throws; wide/Union/dynamischer Rang degradieren zu no-claim — nie ein
   konfident-falscher Claim.
-  Anker: `spike/src/dim.ts`, `spike/src/slice-literal.ts`, `sym:Guard`, `sym:OkShape`
-  · Bekannter offener Verstoß (Owner-entschieden 2026-07-13, Frist Item 11):
-  `Literal|undefined` durch OPTIONALE Parameter (`sum`s `axis?`/`keepdims?`) — TS streift
-  `undefined` bei der Inferenz, der Filter ist strukturell unerreichbar; als
-  `UA_GAP`-Sentinel-Pin beobachtbar gemacht (spike/tests/ndarray.test-d.ts), FOLLOWUPS
-  „Literal|undefined durch optionale Parameter"; Fix-Kandidat Overload-Split beim
-  Item-11-API-Schnitt.
+  Anker: `spike/src/dim.ts`, `spike/src/literal-arithmetic.ts`, `sym:Guard`, `sym:OkShape`
+  · GESCHLOSSEN in Item 11 / S1 (2026-07-17): der `Literal|undefined`-Verstoß durch OPTIONALE
+  Parameter (`sum`s `axis`/`keepdims`) ist behoben. Der `sum`-Overload-Umbau (Overloads nach
+  Argument-Anzahl 0/1/2 — keine optionalen Parameter mehr in der Mehr-Argument-Form — plus
+  `reduce.ts`-`KeepDims`-Erweiterung auf `boolean | undefined`) verhindert das
+  `undefined`-Stripping: `a.sum(u)`/`u:0|undefined` degradiert jetzt zu no-claim
+  (`readonly number[]`), `a.sum(0,kd)`/`kd:true|undefined` zu einer ehrlichen Shape-Union
+  (`readonly [3] | readonly [1,3]`). Der frühere `UA_GAP`-Sentinel-Pin ist umgekehrt
+  (`UA_AXIS_CLOSED` + `UA_KEEP_CLOSED`/`WUA_*`, spike/tests/ndarray.test-d.ts) und bewacht
+  künftig die Schließung. Dreifach verifiziert (Spec CONFIRMED + adversarial HÄLT +
+  covenant-verify kein Verstoß, 2026-07-17).
 - **M3** · Shape-Fehler erscheinen AM fehlerhaften Argument, Message-Stamm wortgleich zum
   Runtime-Throw; Klassen-Hover bleiben saubere Tupel (`NDArray<[2, 3]>`).
   Anker: `sym:Guard`, `sym:ShowShape`
@@ -49,6 +53,12 @@
 - Keine transzendenten Ops ohne eigene Determinismus-Entscheidung (brechen Bit-Parität).
 
 ## Änderungslog
+- v3 (2026-07-17) · M2: der unter v2 dokumentierte offene Verstoß (Literal|undefined via
+  OPTIONALE Parameter, `sum`s `axis`/`keepdims`) ist GESCHLOSSEN — Item 11 / S1
+  (`sum`-Overload-Umbau nach Argument-Anzahl + `reduce.ts`-`KeepDims`-Erweiterung, KD-2),
+  dreifach verifiziert; M2-Anker `slice-literal.ts` → `literal-arithmetic.ts` (Datei in T1b
+  umbenannt). Norm unverändert (der Verstoß war stets ein Norm-Bruch, jetzt behoben);
+  Owner-bestätigt.
 - v2 (2026-07-13) · M2: bekannter offener Verstoß dokumentiert (Literal|undefined via
   optionale Parameter, UA_GAP-Sentinel, Item-11-Frist) — Norm unverändert; Anlass:
   covenant-verify-Befund der Union-Axis-Mini-Scheibe, Owner-Entscheidung „dokumentieren

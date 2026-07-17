@@ -2,7 +2,7 @@
  * Kern 08 (docs/kern-08-reshape-flatten-spec.md): `ReshapeCheck<S, NS>` — the
  * compile-time guard for `NDArray.reshape`/`WNDArray.reshape`, consuming the
  * Spike-04 `LiteralShapeProduct<S>` enabler. New standalone file (keeps
- * `slice-literal.ts` untouched for the CORE check; see the stretch section
+ * `literal-arithmetic.ts` untouched for the CORE check; see the stretch section
  * below for the one append it does need).
  *
  * Decision order (binding spec, never-wrong-only-incomplete):
@@ -23,14 +23,14 @@
  *
  * Stretch (Spike-03/06 idiom, droppable independently — see the spec's
  * "Stretch" section): `LiteralReshapeDimInvalid<NS>` (appended to
- * `slice-literal.ts`, its historical discipline — that file already owns
+ * `literal-arithmetic.ts`, its historical discipline — that file already owns
  * the private classification primitives, `IsPlainDigits`/dot-form
  * detection, this needs) lifts a PROVABLY invalid literal dim of the new
  * shape to a compile error, checked BEFORE the product check above (mirrors
  * `assertReshapeArgs`'s own check order: dim validity first, then product).
  */
 import { type IsDynamicDim, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
-import { type IsUnion, type LiteralReshapeDimInvalid, type LiteralShapeProduct } from "./slice-literal.ts";
+import { type IsUnion, type LiteralReshapeDimInvalid, type LiteralShapeProduct } from "./literal-arithmetic.ts";
 
 /** Non-error sentinel, same idiom as `vector.ts`'s own local `Pass` (each
  * guard file in this codebase defines its own — no shared export exists,
@@ -54,7 +54,7 @@ type ReshapeProductCheck<POld extends number, PNew extends number, NS extends Sh
  * dim, applied here at the whole-product level), then hand off to the
  * literal-vs-literal check above. `extends infer ... extends number` binds
  * each product exactly once (the `ProductAcc`/`ResolveBoundaryDigits` idiom
- * already used throughout `slice-literal.ts`), avoiding recomputation. */
+ * already used throughout `literal-arithmetic.ts`), avoiding recomputation. */
 type ReshapeCheckCore<S extends Shape, NS extends Shape> = LiteralShapeProduct<S> extends infer POld extends number
   ? LiteralShapeProduct<NS> extends infer PNew extends number
     ? IsDynamicDim<POld> extends true
@@ -75,9 +75,9 @@ type ReshapeCheckCore<S extends Shape, NS extends Shape> = LiteralShapeProduct<S
  * reports the FIRST provably-invalid one's OWN literal value, or the
  * sentinel `"ok"` if none found — deliberately not `never` (the standard
  * "never always matches every extends check" gotcha this codebase already
- * guards against elsewhere, e.g. `slice-literal.ts`'s `NonNegDigits`). The
+ * guards against elsewhere, e.g. `literal-arithmetic.ts`'s `NonNegDigits`). The
  * message itself (mirroring `assertReshapeArgs`'s message-1 stem verbatim)
- * is built HERE, not in `slice-literal.ts` (which only returns bare
+ * is built HERE, not in `literal-arithmetic.ts` (which only returns bare
  * verdicts, by that file's own historical precedent and its append-only
  * freeze discipline — see `LiteralReshapeDimInvalid`'s own doc comment).
  * Falls through to the core product check only once no axis is provably

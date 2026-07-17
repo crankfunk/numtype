@@ -11,7 +11,7 @@
  * differential suite instead).
  */
 import { type AnyNDArray, NDArray } from "../src/ndarray.ts";
-import type { LiteralIndexBounds, LiteralStepInvalid } from "../src/slice-literal.ts";
+import type { LiteralIndexBounds, LiteralStepInvalid } from "../src/literal-arithmetic.ts";
 import type { SliceShape, SliceSpecsGuard } from "../src/slice.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
@@ -49,7 +49,7 @@ type T12 = Expect<Equal<SliceShape<[2, number], [1]>, [number]>>;
 
 // --- STRETCH: literal computed dims for a supported subset of range specs -
 // `start`/`stop` literal non-negative integers (or omitted), `step` omitted
-// or literal `1` — see slice-literal.ts's file header for the precise
+// or literal `1` — see literal-arithmetic.ts's file header for the precise
 // supported subset and why it's scoped that way (negative literals and
 // non-1 steps are explicitly NOT supported and degrade to `number`, same as
 // the core rule — a strict superset of what the core alone could resolve).

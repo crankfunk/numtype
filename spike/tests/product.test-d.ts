@@ -8,7 +8,7 @@
  * `@ts-expect-error` for negatives — not needed here since every input is
  * a valid call, just some degrade to `number`).
  */
-import type { LiteralShapeProduct } from "../src/slice-literal.ts";
+import type { LiteralShapeProduct } from "../src/literal-arithmetic.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
 // --- identities -------------------------------------------------------------

@@ -44,7 +44,7 @@ type ReplaceAtFront<S extends readonly Dim[], Idx extends number, Passed extends
     ? ReplaceAtFront<Rest, Idx, [...Passed, Head]>
     : ShapeError<"index out of range">;
 
-type ApplyAt<S extends readonly Dim[], Idx extends number, KeepDims extends boolean> = KeepDims extends true
+type ApplyAt<S extends readonly Dim[], Idx extends number, KeepDims extends boolean | undefined> = KeepDims extends true
   ? ReplaceAtFront<S, Idx>
   : RemoveAtFront<S, Idx>;
 
@@ -52,7 +52,7 @@ type ApplyAt<S extends readonly Dim[], Idx extends number, KeepDims extends bool
  * used for the `KeepDims` + "no axis" (reduce everything) combination. */
 type AllOnes<S extends readonly Dim[]> = { [K in keyof S]: 1 };
 
-type ResolveAndApply<S extends Shape, Axis extends number, KeepDims extends boolean> = `${Axis}` extends `-${infer Pos extends number}`
+type ResolveAndApply<S extends Shape, Axis extends number, KeepDims extends boolean | undefined> = `${Axis}` extends `-${infer Pos extends number}`
   ? Decrement<Pos> extends infer RIdx
     ? [RIdx] extends [never]
       ? ShapeError<"index out of range">
@@ -77,7 +77,7 @@ type ResolveAndApply<S extends Shape, Axis extends number, KeepDims extends bool
  * `Axis = undefined` reduces every axis -> `[]`. Out-of-range axes (in
  * either direction) resolve to a `ShapeError`.
  */
-export type ReduceAxis<S extends Shape, Axis extends number | undefined = undefined, KeepDims extends boolean = false> = [
+export type ReduceAxis<S extends Shape, Axis extends number | undefined = undefined, KeepDims extends boolean | undefined = false> = [
   Axis,
 ] extends [undefined]
   ? KeepDims extends true

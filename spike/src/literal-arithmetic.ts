@@ -1,4 +1,12 @@
 /**
+ * (Renamed from `slice-literal.ts` in Item 11 / S1, 2026-07-17 — the sole
+ * historical reference to the old name kept for traceability. Since Spike 04
+ * this file hosts ALL digit-string arithmetic — subtraction, addition,
+ * schoolbook multiplication (`LiteralShapeProduct`), long division (`DivCeil`)
+ * — plus the literal classifiers, not just slice-dim machinery, so the old
+ * slice-specific name was misleading. `git log --follow` preserves full
+ * history across the rename.)
+ *
  * Kern 05 STRETCH GOAL (extended by Spike 06 — negative literal start/stop
  * and literal steps >= 1 — docs/spike-06-range-literals-spec.md): statically
  * computed literal dims for range slices, via from-scratch DIGIT-STRING

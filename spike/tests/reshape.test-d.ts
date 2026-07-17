@@ -1,7 +1,7 @@
 /**
  * Kern 08 (docs/kern-08-reshape-flatten-spec.md) type-level tests:
  * `ReshapeCheck<S, NS>` (spike/src/reshape.ts) and the CORE product-mismatch
- * guard, `LiteralReshapeDimInvalid<NS>` (spike/src/slice-literal.ts, the
+ * guard, `LiteralReshapeDimInvalid<NS>` (spike/src/literal-arithmetic.ts, the
  * stretch), plus `NDArray.reshape`/`NDArray.flatten` method-level DX
  * (positive threading, error-at-argument, hover cleanliness) — same house
  * idioms as `vector.test-d.ts` (bare `Guard` message pinning) and
@@ -9,7 +9,7 @@
  */
 import { type Guard, NDArray } from "../src/ndarray.ts";
 import type { ReshapeCheck } from "../src/reshape.ts";
-import type { LiteralReshapeDimInvalid } from "../src/slice-literal.ts";
+import type { LiteralReshapeDimInvalid } from "../src/literal-arithmetic.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
 // ---------------------------------------------------------------------------
@@ -200,7 +200,7 @@ type T12 = Expect<Equal<(typeof flatDyn)["shape"], readonly [number]>>;
 // Phase-D V1 (docs/phase-d-vorarbeiten-spec.md, Union-Guard-Fix): Facette (c)
 // for `reshape`/`flatten` specifically — deliberately NOT routed through
 // `RankUnknowable` (D-V1.3 explicitly excludes `LiteralShapeProduct`,
-// slice-literal.ts:688, frozen). `ReshapeCheck` already has its OWN
+// literal-arithmetic.ts:688, frozen). `ReshapeCheck` already has its OWN
 // `IsUnion`-based product-boundary filter (reshape.ts:64-67) that degrades a
 // mixed-rank RECEIVER to no-claim on its own — these are "already-safe"
 // regression pins (no source change here), not a V1 fix.

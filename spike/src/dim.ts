@@ -46,18 +46,18 @@ export type IsDynamicDim<T extends Dim> = number extends T ? true : false;
 export type IsDynamicRank<S extends Shape> = number extends S["length"] ? true : false;
 
 /**
- * Private copy of `IsUnion` (canonical source: slice-literal.ts:629, Spike
+ * Private copy of `IsUnion` (canonical source: literal-arithmetic.ts:629, Spike
  * 04/06's boundary-filter primitive). Duplicated here — NOT imported —
  * because dim.ts is the foundational module of the import graph
  * (broadcast.ts/matmul.ts/reduce.ts/slice.ts/vector.ts all import FROM
- * dim.ts) while slice-literal.ts already imports FROM dim.ts
+ * dim.ts) while literal-arithmetic.ts already imports FROM dim.ts
  * (`IsDynamicDim`/`Dim`/`Shape`/`ShapeError`) — a reverse import would risk
  * a type-only cycle (D-V1.1, docs/phase-d-vorarbeiten-spec.md). Exported
  * (Union-Axis-Mini-Scheibe, docs/union-axis-mini-spec.md, D-A.1): this file's
  * own `CompatDim`/`DimEq`/`RankUnknowable` consume it as before, and
  * `reduce.ts`'s `ReduceAxis` now imports it too (same boundary-filter role,
  * applied to the AXIS parameter instead of a dim/rank); keep textually
- * identical to the slice-literal.ts source.
+ * identical to the literal-arithmetic.ts source.
  */
 export type IsUnion<T, U = T> = [T] extends [never] ? false : T extends unknown ? ([U] extends [T] ? false : true) : never;
 

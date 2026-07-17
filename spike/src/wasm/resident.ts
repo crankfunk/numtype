@@ -72,7 +72,7 @@ import type { MatMul } from "../matmul.ts";
 import type { ReduceAxis, Transpose } from "../reduce.ts";
 import type { ReshapeCheck } from "../reshape.ts";
 import { assertReshapeArgs, assertVectorPair, computeStrides, keepDimsShape, normalizeSliceSpecs, product, runtimeBroadcastShape, type SliceSpec } from "../runtime.ts";
-import type { LiteralShapeProduct } from "../slice-literal.ts";
+import type { LiteralShapeProduct } from "../literal-arithmetic.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "../slice.ts";
 import type { DotCheck } from "../vector.ts";
 import type { CoreExports } from "./loader.ts";
@@ -795,10 +795,18 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
    * `keepDimsShape` helper, so the summed DATA is unchanged (Kern 09); the
    * kernel call and result length are identical (a size-1 axis leaves
    * `product` unchanged). */
+  sum(): WNDArray<OkShape<ReduceAxis<S, undefined, false>>>;
+  sum<const Axis extends number | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+  ): WNDArray<OkShape<ReduceAxis<S, Axis, false>>>;
+  sum<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims: KeepDims,
+  ): WNDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>;
   sum<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
     axis?: Guard<ReduceAxis<S, Axis>, Axis>,
     keepdims?: KeepDims,
-  ): WNDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>> {
+  ): WNDArray<any> {
     this.assertLive("sum");
     const axisNum = axis as unknown as Axis | undefined;
 

@@ -9,7 +9,7 @@
  * `manifest.json` the harness (`editor-latency.ts`) reads to know exactly
  * which position to hover/complete/toggle and what result to expect —
  * hand-computed here in plain JS, mirroring the type-level rules in
- * `broadcast.ts`/`matmul.ts`/`reduce.ts`/`slice-literal.ts` by hand, never
+ * `broadcast.ts`/`matmul.ts`/`reduce.ts`/`literal-arithmetic.ts` by hand, never
  * re-deriving them via any TS compiler call.
  *
  * Determinism: no `Date.now()`/`Math.random()`/host state anywhere in the
@@ -46,7 +46,7 @@ const WORKLOAD_COMPILER_OPTIONS = {
 
 // ---------------------------------------------------------------------------
 // Shared helpers — hand computations of what the TYPE layer should resolve
-// to, mirroring dim.ts/broadcast.ts/matmul.ts/reduce.ts/slice-literal.ts.
+// to, mirroring dim.ts/broadcast.ts/matmul.ts/reduce.ts/literal-arithmetic.ts.
 // ---------------------------------------------------------------------------
 
 /** Render a shape (numbers, or the literal string "number" for a dynamic
@@ -237,7 +237,7 @@ function buildW2(): WorkloadSpec {
 // ---------------------------------------------------------------------------
 // W3 — slice/digit-arithmetic stress: many slice({start}) calls on 1-D
 // arrays with base dims 1024/4096/65536 — every step is a literal-computed
-// dim via slice-literal.ts's supported subset (step omitted, non-negative
+// dim via literal-arithmetic.ts's supported subset (step omitted, non-negative
 // literal start), Kern 05's own highest-risk type machinery. A borrow-heavy
 // K cycle (1, 9, 90, 900, 9000) forces genuine multi-digit borrow chains,
 // falling back to K=1 whenever the cycle value would exceed the remaining
@@ -269,7 +269,7 @@ function buildW3(): WorkloadSpec {
   b.push(
     GENERATED_HEADER(
       "W3 slice/digit-arithmetic stress",
-      `${SLICE_STEPS} chained slice({start}) calls per base dim (1024/4096/65536), each a\nliteral-computed dim via slice-literal.ts's digit-string subtraction (the\nproject's own highest-risk type machinery) — K cycles through\n[${SLICE_K_CYCLE.join(", ")}] (falling back to 1 once K would exceed the\nremaining dim) to force genuine multi-digit borrow chains, hand-computed here\nin plain JS (JS number subtraction; the TYPE layer is what does digit-string\narithmetic, not this generator). Plus one multi-axis range-slice case.`,
+      `${SLICE_STEPS} chained slice({start}) calls per base dim (1024/4096/65536), each a\nliteral-computed dim via literal-arithmetic.ts's digit-string subtraction (the\nproject's own highest-risk type machinery) — K cycles through\n[${SLICE_K_CYCLE.join(", ")}] (falling back to 1 once K would exceed the\nremaining dim) to force genuine multi-digit borrow chains, hand-computed here\nin plain JS (JS number subtraction; the TYPE layer is what does digit-string\narithmetic, not this generator). Plus one multi-axis range-slice case.`,
     ),
   );
   b.push(`import { NDArray } from "../../src/ndarray.ts";`);

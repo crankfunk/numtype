@@ -9,7 +9,7 @@
  * `spike/tests/product.test-d.ts` for the cases that stayed (P1-P4,
  * P6-P8, P12-P20) and for the semantic context of `LiteralShapeProduct`.
  */
-import type { LiteralShapeProduct } from "../src/slice-literal.ts";
+import type { LiteralShapeProduct } from "../src/literal-arithmetic.ts";
 import type { Equal, Expect } from "../tests/test-utils.ts";
 
 // --- zeros: digit strings are exact at any length; only the FINAL value ----

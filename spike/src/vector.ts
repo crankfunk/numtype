@@ -24,12 +24,12 @@
  * single axis typed `2 | 3`) with no filter — the pre-existing `MatMul`
  * latent hazard this design pass discovered and deliberately leaves
  * unfixed (FOLLOWUPS). `VectorLenCheck` below filters union dims FIRST via
- * the newly-exported `IsUnion` (slice-literal.ts, Spike-04/06 house rule) —
+ * the newly-exported `IsUnion` (literal-arithmetic.ts, Spike-04/06 house rule) —
  * a union dim on either side is *never* misread as a verdict, it degrades
  * to "no claim" instead, same as a dynamic (`number`) dim.
  */
 import { type Dim, type IsDynamicDim, type RankUnknowable, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
-import { type IsUnion } from "./slice-literal.ts";
+import { type IsUnion } from "./literal-arithmetic.ts";
 
 /** Non-error sentinel `DotCheck`/`VectorLenCheck` resolve to on every "pass"
  * branch (dynamic rank, dynamic dim, union dim, or equal literal lengths).

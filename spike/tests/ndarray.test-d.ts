@@ -395,21 +395,49 @@ const uWorkaroundSummed = uAxisRecv.sum<0 | undefined>(uWorkaroundAxis);
 type UA_WORKAROUND = Expect<Equal<(typeof uWorkaroundSummed)["shape"], readonly number[]>>;
 void uWorkaroundSummed;
 
-// Documenting GAP pin (Facette (2), deliberately OUT OF SCOPE, Baustein-0
-// finding): the realistic call form `a.sum(u)` with `u: 0 | undefined` and
-// NO explicit type argument still resolves CONFIDENTLY to `NDArray<[3]>`
-// today — TS strips `undefined` from the inferred type argument because the
-// `axis?` parameter itself is already optional (2x2 cross-probe,
-// Baustein-0-verified), so `Axis` is inferred as the bare literal `0`,
-// never reaching the union-axis filter this slice adds. This pin makes the
-// gap OBSERVABLE, not fixed: if a future TS version (or a signature change,
-// see the Item-11 overload-split candidate) changes this inference
-// behavior, this pin will go red and flag it. FOLLOWUPS: "Literal|undefined
-// via optionale Parameter" (same root cause also hits `keepdims?`).
+// Facette (2) axis — CLOSED in Item 11 / S1 (sum-Overload-Umbau, KD-2). The
+// realistic call form `a.sum(u)` with `u: 0 | undefined` and NO explicit type
+// argument no longer resolves confidently to `NDArray<[3]>`: the multi-arg
+// overloads make `axis` REQUIRED, so TS no longer strips `undefined` from the
+// inferred `Axis` — the `0 | undefined` union now reaches `ReduceAxis`'s
+// `IsUnion` filter and degrades to no-claim (`readonly number[]`). This pin was
+// the `UA_GAP` sentinel that OBSERVED the open gap; per its own design it flips
+// the moment the signature change lands — here it does, and is REVERSED to guard
+// the CLOSURE. COVENANT v2 M2 note, axis facet — resolved.
 declare const uGapAxis: 0 | undefined;
 const uGapSummed = uAxisRecv.sum(uGapAxis);
-type UA_GAP = Expect<Equal<(typeof uGapSummed)["shape"], readonly [3]>>;
+type UA_AXIS_CLOSED = Expect<Equal<(typeof uGapSummed)["shape"], readonly number[]>>;
 void uGapSummed;
+
+// Facette (2) keepdims — CLOSED in Item 11 / S1 (KD-2). `a.sum(0, kd)` with
+// `kd: true | undefined` no longer resolves confidently to `NDArray<[1, 3]>`
+// (as if keepdims were surely `true`): the 2-arg overload makes `keepdims`
+// REQUIRED, so `undefined` is no longer stripped from the inferred `KeepDims`,
+// and reduce.ts's widened `KeepDims extends boolean | undefined` lets the union
+// distribute HONESTLY through the `KeepDims extends true` conditionals to a real
+// shape union (keepdims=true -> [1,3], keepdims=false -> [3]). COVENANT v2 M2
+// note, keepdims facet — resolved.
+declare const uGapKeep: true | undefined;
+const uGapKeepSummed = uAxisRecv.sum(0, uGapKeep);
+type UA_KEEP_CLOSED = Expect<Equal<(typeof uGapKeepSummed)["shape"], readonly [3] | readonly [1, 3]>>;
+void uGapKeepSummed;
+
+// Same facet at the full-reduction (undefined axis) branch.
+const uGapKeepFull = uAxisRecv.sum(undefined, uGapKeep);
+type UA_KEEP_CLOSED_FULL = Expect<Equal<(typeof uGapKeepFull)["shape"], readonly [] | readonly [1, 1]>>;
+void uGapKeepFull;
+
+// WNDArray twins of both M2 closures (axis + keepdims facet) — same overload
+// umbau mirrored onto resident.ts, so the resident surface degrades identically.
+declare const wUGapAxis: 0 | undefined;
+const wUGapSummed = wUAxisRecv.sum(wUGapAxis);
+type WUA_AXIS_CLOSED = Expect<Equal<(typeof wUGapSummed)["shape"], readonly number[]>>;
+void wUGapSummed;
+
+declare const wUGapKeep: true | undefined;
+const wUGapKeepSummed = wUAxisRecv.sum(0, wUGapKeep);
+type WUA_KEEP_CLOSED = Expect<Equal<(typeof wUGapKeepSummed)["shape"], readonly [3] | readonly [1, 3]>>;
+void wUGapKeepSummed;
 
 // Negative union member.
 const uNegSummed = uAxisRecv.sum(-1 as -1 | 0);

@@ -40,7 +40,7 @@ import {
   sumRuntime,
   transposeRuntime,
 } from "./runtime.ts";
-import type { LiteralShapeProduct } from "./slice-literal.ts";
+import type { LiteralShapeProduct } from "./literal-arithmetic.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "./slice.ts";
 import type { DotCheck } from "./vector.ts";
 import { checkThreadedEnv, WasmBackend, type BackendKind, type ThreadedBackendOptions } from "./wasm/backend-api.ts";
@@ -402,10 +402,18 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * (rank preserved) — `undefined` axis + keepdims reduces every axis to an
    * all-ones shape. keepdims is pure shape metadata: the summed DATA is
    * byte-identical to the non-keepdims result (Kern 09). */
+  sum(): NDArray<OkShape<ReduceAxis<S, undefined, false>>>;
+  sum<const Axis extends number | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, false>>>;
+  sum<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims: KeepDims,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>;
   sum<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
     axis?: Guard<ReduceAxis<S, Axis>, Axis>,
     keepdims?: KeepDims,
-  ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>> {
+  ): NDArray<any> {
     const axisNum = axis as unknown as Axis | undefined;
     const { shape, data } = sumRuntime(this.shape, this.data, axisNum);
     const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : shape;
