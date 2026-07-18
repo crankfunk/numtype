@@ -1,10 +1,37 @@
-# NumType
+```
+███╗   ██╗██╗   ██╗███╗   ███╗████████╗██╗   ██╗██████╗ ███████╗
+████╗  ██║██║   ██║████╗ ████║╚══██╔══╝╚██╗ ██╔╝██╔══██╗██╔════╝
+██╔██╗ ██║██║   ██║██╔████╔██║   ██║    ╚████╔╝ ██████╔╝█████╗
+██║╚██╗██║██║   ██║██║╚██╔╝██║   ██║     ╚██╔╝  ██╔═══╝ ██╔══╝
+██║ ╚████║╚██████╔╝██║ ╚═╝ ██║   ██║      ██║   ██║     ███████╗
+╚═╝  ╚═══╝ ╚═════╝ ╚═╝     ╚═╝   ╚═╝      ╚═╝   ╚═╝     ╚══════╝
+```
 
 > NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor errors.
 
-An n-dimensional array library for TypeScript with **compile-time shape checking** — matmul, broadcasting, and reduction shape mismatches appear as editor squiggles while you type, not as runtime crashes in production. Gradual by design: literal dimensions are checked statically, dynamic (`number`) dimensions degrade gracefully to runtime checks. Backend: from-scratch Rust/WASM kernels (implemented, opt-in via `NDArray.backend("wasm")` / `"threaded"`), with a pure-JS reference runtime as the default, browser-safe path. (Full install/usage docs land with the Item-13 release pass.)
+**Status: v0.1 research preview** · Apache-2.0 · zero runtime dependencies
 
-## Highlight: the type system does arithmetic over your dimensions
+An n-dimensional array library for TypeScript with **compile-time shape checking**. `matmul`,
+broadcasting, and reduction shape mismatches appear as editor squiggles *while you type* — not
+as runtime crashes in production. It's gradual by design: literal dimensions are checked
+statically, and dynamic (`number`) dimensions degrade gracefully to runtime checks, so it stays
+usable in real code. The numeric backend is from-scratch Rust/WASM (opt-in); the default path is
+a pure-JS reference runtime that is safe to run in the browser.
+
+```ts
+import { NDArray } from "numtype";
+
+const a = NDArray.fromArray([2, 3], [1, 2, 3, 4, 5, 6]); // NDArray<[2, 3]>
+const c = a.matmul(NDArray.zeros([3, 4]));                // NDArray<[2, 4]> — hover shows it
+
+a.matmul(NDArray.zeros([5, 4]));
+//        ~~~~~~~~~~~~~~~~~~~~~ matmul: inner dimensions must match — got [2, 3] and [5, 4]
+```
+
+The red squiggle is the product; the WASM performance is a credibility feature, not the reason
+to reach for it. If you've ever shipped a tensor-shape bug to production, this is the pitch.
+
+## The core idea: the type system does arithmetic over your dimensions
 
 Shapes aren't just *matched* — where dimensions are literal, they are *computed*, while you type:
 
@@ -21,8 +48,154 @@ a.slice(1024);
 //           exactly like NumPy — so ranges are computed, never rejected)
 ```
 
-The received wisdom is that TypeScript can't do arithmetic over values this large: the standard tuple-length encoding costs one recursion step *per unit of the value*, and the checker's recursion ceiling (~1000) makes `1000 − 100` structurally out of reach. The trick is a change of representation, not a broken limit: a literal number type becomes its decimal **digit string** via template-literal types (`` `${1000}` `` → `"1000"`), and the arithmetic is schoolbook subtraction with borrow, digit by digit — **O(digit count) instead of O(value), ~7 recursion steps instead of ~1,000,000 for 7-digit dims**. Bounds checks come almost free on top: they only need the comparison half of that machinery, which is why negative indices (`a.slice(-2)`) are checked too.
+The received wisdom is that TypeScript can't do arithmetic over values this large: the standard
+tuple-length encoding costs one recursion step *per unit of the value*, and the checker's
+recursion ceiling (~1000) puts `1000 − 100` structurally out of reach. The trick is a change of
+representation, not a broken limit: a literal number type becomes its decimal **digit string**
+via template-literal types (`` `${1000}` `` → `"1000"`), and the arithmetic is schoolbook
+subtraction with borrow, digit by digit — **O(digit count) instead of O(value), ~7 recursion
+steps instead of ~1,000,000 for a 7-digit dimension**. Bounds checks come almost free on top:
+they only need the comparison half of that machinery, which is why negative indices
+(`a.slice(-2)`) are checked too. Everything outside the provable literal subset degrades honestly
+to `number` + runtime checks — never a false error.
 
-Digit-positional type-level arithmetic itself has prior art (notably [ts-arithmetic](https://github.com/arielhs/ts-arithmetic) as a standalone utility); what we believe is new here is wiring it into a *gradual ndarray shape system* — computed slice shapes and bounds checks that mirror NumPy runtime semantics exactly (proven by a generated 174-case parity grid), stay inside a measured type-checker budget (the whole slice arithmetic costs 1.59× instantiations, the bounds checks 1.036×), and keep the editor instant (headless-LSP-measured hover latency: 0.04–0.08 ms median against the native TS 7 server, ~3 orders of magnitude under our 100 ms gate). Everything outside the provable literal subset degrades honestly to `number` + runtime checks — never a false error.
+## Install
 
-**Status:** private research project. Done and verified: the type layer (Spike 01 — broadcast/matmul/reduce at the type level, gradual, errors at the offending argument), from-scratch Rust/WASM kernels bit-identical to the naive TS reference (Kern 01), zero-copy residency (Kern 02 — `WNDArray` lives in WASM linear memory, full dispose/GC lifecycle), strided views (Kern 03 — O(1) `transpose()`, refcounted shared buffers, strided kernels, `contiguous()` escape hatch), a blocked+packed+SIMD128 matmul that stays bit-identical to the reference (Kern 04 — 2.1–3.25× over the scalar kernel), NumPy-style slicing (Kern 05 — O(1) views; sliced shapes are computed statically where possible: `NDArray<[1024]>.slice({start: 100, stop: 1000})` types as `NDArray<[900]>`, via from-scratch type-level digit arithmetic), multi-threaded matmul (Kern 06 — a hand-rolled shared-memory threading substrate, no wasm-bindgen: a worker_threads pool over one shared `WebAssembly.Memory`, split only across output rows so results stay bit-identical for any worker count by construction; ~4× at n≥256 with 8 workers, honest losses below that documented; plus a measured size-based auto-router that keeps small calls on the main thread), real editor-latency measurement (Spike 02 — a zero-dependency headless LSP harness against the native TS 7 language server; the hard release gate passes with ~3 orders of magnitude headroom), compile-time bounds checks for literal indices (Spike 03 — a provably-OOB `slice()` index is an editor error with the runtime's exact message; never wrong, only incomplete, 174/174 generated parity cases against the runtime rule), type-level shape *products* via schoolbook digit-string multiplication (Spike 04 — capped at `MAX_SAFE_INTEGER` so a too-big product degrades honestly instead of silently double-rounding to a wrong literal; 177/177 BigInt parity), the variance design (Spike 05 — `NDArray<S>` stays invariant, plus a minimal checker-enforced covariant read view `NDArrayView<out S>`), negative literal range bounds and literal steps ≥ 2 for slices (Spike 06 — 280/280 parity against the imported runtime normalizer as ground truth), the elementwise family and the embedding primitives (Kern 07 — `sub`/`mul`/`div`, plus `dot`/`norm`/`cosineSimilarity` returning plain `number`; `norm`/`cosine` need no kernels of their own since `sqrt`/`*`/`/` are IEEE-exact across JS and WASM, so bit-identity reduces to two new differential-tested reduction kernels), and runtime `reshape`/`flatten` consuming the shape products (Kern 08 — `NDArray<[1024, 1024]>.flatten()` types as `NDArray<[1048576]>`, a provably wrong `reshape` is an editor error with the runtime's exact message, and real reshape call sites were measured in the editor harness at ~0.06 ms hover medians), runtime `keepdims` on `sum()` (Kern 09 — the reduced axis is kept as size 1, `NDArray<[2, 3, 4]>.sum(1, true)` types as `NDArray<[2, 1, 4]>`), IEEE-754 special values (NaN/±Inf/±0/subnormals) injected into the differential generator so the bit-identity claim holds for them too (Kern 10 — the SIMD-blocked matmul provably preserves subnormals, not flush-to-zero), and a measurement-driven contiguous elementwise fast path (Kern 11 — 13–17× on the hot path by skipping the per-element index-decode allocation, bit-identical to the general path; SIMD and packing-reuse were measured NO-GO first). **Phase B (the minimum viable op surface) is complete.** **Phase C (platform decisions) is complete too:** after a scoping pass, browser threads and a stable/`no_std` toolchain path were deliberately deferred — threading stays a Node-only, explicitly-experimental opt-in for v0 (there is no way off the pinned nightly today, and the browser port's value is gated on COOP/COEP headers a library cannot set); and the backend-choice API landed (Item 10 — `NDArray.backend("wasm" | "threaded")` exposes the WASM/threads backends as an explicit, browser-safe opt-in while the pure-JS `NDArray` stays the default, verified with a new "spec review before implementation" discipline). See `docs/` for the competitive analysis, per-phase specs, and results; `docs/roadmap.md` for the path to a possible v0.1 research preview; `FOLLOWUPS.md` for the backlog.
+```sh
+pnpm add numtype     # or: npm install numtype / yarn add numtype
+```
+
+Zero runtime dependencies; the `.wasm` core is bundled, so there is no native toolchain to
+install. The default `NDArray` runs in pure JS and works in any modern JS environment (Node or
+browser). The optional WASM/threaded backends need Node (see [Backends](#backends)). ESM only.
+
+## Usage
+
+Every operation below is exercised bit-for-bit against the WASM backend in [`spike/demo.ts`](spike/demo.ts)
+(`pnpm demo`), so these examples run verbatim.
+
+```ts
+import { NDArray } from "numtype";
+
+// Construction — the shape is inferred from the literal you pass.
+const a = NDArray.fromArray([2, 3], [1, 2, 3, 4, 5, 6]); // NDArray<[2, 3]>
+const b = NDArray.fromArray([3], [10, 20, 30]);          // NDArray<[3]>
+
+// Broadcasting add: [2, 3] + [3] -> [2, 3]
+const sum = a.add(b);            // NDArray<[2, 3]>  ([[11,22,33],[14,25,36]])
+
+// Matrix multiply: [2, 3] @ [3, 2] -> [2, 2]
+const m2 = NDArray.fromArray([3, 2], [7, 8, 9, 10, 11, 12]);
+const product = a.matmul(m2);    // NDArray<[2, 2]>  ([[58,64],[139,154]])
+
+// Reduction along an axis: [2, 3] -> [3]
+const colSums = a.sum(0);        // NDArray<[3]>
+const kept = a.sum(0, true);     // NDArray<[1, 3]>   (keepdims)
+
+// O(1) transpose (view): [2, 3] -> [3, 2]
+const t = a.transpose();         // NDArray<[3, 2]>
+
+// Slicing with statically computed shapes
+const row = a.slice(1);          // NDArray<[3]>   — integer index drops the axis
+const win = NDArray.zeros([1024]).slice({ start: 100, stop: 1000 }); // NDArray<[900]>
+
+// Reshape / flatten — the product is computed at the type level
+const cube = NDArray.zeros([2, 3, 4]);
+const flat = cube.flatten();     // NDArray<[24]>
+const re = cube.reshape([4, 6]); // NDArray<[4, 6]>
+NDArray.zeros([1024, 1024]).flatten(); // NDArray<[1048576]> — a computed literal, not number
+
+// Elementwise family + embedding primitives (the RAG/embedding use case)
+const x = NDArray.fromArray([4], [0.2, 0.4, 0.1, 0.8]);
+const y = NDArray.fromArray([4], [0.5, 0.1, 0.3, 0.2]);
+const scaled = x.mul(y);         // NDArray<[4]>  (also .sub / .div)
+const d = x.dot(y);              // number
+const cos = x.cosineSimilarity(y); // number   (also .norm())
+
+// Read the data back out
+sum.toNestedArray();             // [[11, 22, 33], [14, 25, 36]]
+```
+
+Shape mismatches are caught at the offending argument, with the runtime's exact message:
+
+```ts
+const a = NDArray.fromArray([2, 3], [1, 2, 3, 4, 5, 6]);
+
+a.matmul(NDArray.zeros([5, 4])); // ❌ compile error at the argument: inner dims [2,3] vs [5,4]
+a.add(NDArray.zeros([4]));       // ❌ compile error: shapes [2,3] and [4] are not broadcastable
+a.slice(9);                      // ❌ compile error: index 9 out of bounds for axis 0 (dim 2)
+```
+
+## Gradual typing
+
+Real programs have runtime-determined shapes. Where a dimension is `number` rather than a
+literal, NumType stops making static promises and defers to a runtime check — the same
+escape-hatch philosophy that made TypeScript itself adoptable:
+
+```ts
+async function load(): Promise<NDArray<[number, 1536]>> { /* ... */ }
+
+const emb = await load();        // NDArray<[number, 1536]>
+emb.matmul(NDArray.zeros([1536, 8])); // NDArray<[number, 8]> — the literal dim is still tracked
+```
+
+Union and dynamic-rank shapes degrade the same way: NumType never emits a *confidently wrong*
+error, only a wide (`number`) result or a deferred runtime check.
+
+## Backends
+
+The default `NDArray` computes in pure JS and is browser-safe (it eagerly loads nothing native).
+The from-scratch Rust/WASM cores are an explicit, opt-in choice:
+
+```ts
+NDArray.backend("wasm");     // single-threaded WASM core (SIMD128 blocked matmul)
+NDArray.backend("threaded"); // Node-only, experimental: multi-threaded matmul
+```
+
+Every WASM kernel is **bit-identical** to the naive JS reference — proven by a differential test
+suite that includes IEEE-754 special values (NaN, ±Inf, ±0, subnormals). Threading is a
+Node-only, explicitly-experimental opt-in for v0 (the browser port is gated on COOP/COEP headers
+a library can't set). See [`docs/`](docs/) for the backend design and benchmarks.
+
+## Honest qualifications
+
+Credibility is an asset for a research project, so the scope of the guarantee is stated plainly:
+
+1. **"Python can't do this" is verified, not asserted.** NumPy's own maintainers advise against
+   relying on shape typing, and PyTorch's static-shapes request has sat open for years — the
+   general problem resists Python's type system structurally.
+2. **"TypeScript can do this" means: newly tractable, unproven at scale.** No existing TS library
+   has delivered general compile-time shape checking with broadcasting and reductions; the prior
+   art stops at literal-dimension matmul. NumType is not validating a *proven* technique — it is
+   probing the limit. That is the point of the research.
+3. **Scope of the guarantee: realistic ranks and op chains, not "every conceivable shape."** The
+   plausible failure modes for a type-level shape system in TypeScript are high-rank tensors,
+   very large broadcast dimensions, and long chains of composed operations. The gradual design
+   (literal dims static, `number` dims at runtime) makes that a feature, not a footnote.
+
+The type-checker cost is measured, not hoped: the slice arithmetic costs ~1.59× instantiations,
+the bounds checks ~1.036×, and hover latency measured against the native TS 7 language server is
+0.04–0.08 ms median — about three orders of magnitude under a 100 ms editor gate.
+
+## What's implemented
+
+The type layer (broadcast / matmul / reduce as gradual types, errors at the offending argument,
+statically computed slice / reshape / flatten shapes, literal bounds checks) and a from-scratch
+Rust/WASM numeric core: strided O(1) views (`transpose`, `slice`), a blocked + packed + SIMD128
+matmul, zero-copy WASM residency, and a hand-rolled multi-threaded matmul — each proven
+bit-identical to the JS reference. The op surface is deliberately narrow (construction/
+conversion, `add`/`sub`/`mul`/`div`, `matmul`, `sum` with `keepdims`, `transpose`, `slice`,
+`reshape`/`flatten`, `dot`/`norm`/`cosineSimilarity`) — a *minimum viable* NumPy, not a clone.
+
+For the full per-phase specifications, results, and the competitive analysis, see [`docs/`](docs/)
+and [`docs/roadmap.md`](docs/roadmap.md). Internal research notes there are partly in German.
+
+## Non-goals
+
+No 400-operation NumPy clone, no GPU/autograd, no DataFrames, no transcendental ops that would
+break bit-parity with the JS reference.
+
+## License
+
+[Apache-2.0](LICENSE). The explicit patent grant covers the from-scratch kernel algorithms; see
+[`NOTICE`](NOTICE) for attribution.
