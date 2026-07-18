@@ -113,6 +113,11 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # test:threaded also builds the STABLE artifact (`build:wasm`) — the threads
+      # tests compare bit-for-bit against the stable core (numtype_core.wasm) — so
+      # install the pinned stable toolchain too (rust-toolchain.toml -> 1.95.0).
+      - name: Install pinned Rust toolchain (rust-toolchain.toml -> 1.95.0)
+        run: rustup show
       # Version kept in sync with scripts/build-wasm-threads.sh (TOOLCHAIN).
       - name: Install pinned nightly for the threads build
         run: rustup toolchain install nightly-2026-07-09 --profile minimal --component rust-src --target wasm32-unknown-unknown

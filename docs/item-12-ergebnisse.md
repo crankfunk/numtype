@@ -160,3 +160,27 @@ untracked, keine Reste). Die Guard-Fixes berühren nur `s1-import-guard.test.ts`
 **Gesamt: Item 12 ist verifiziert.** Alle drei Verdikte adressiert; die einzigen
 substanziellen Befunde (D7-Bypässe) sind behoben und der Fix gegen die exakten Verifier-B-
 Mutanten gegengeprüft.
+
+## 9. Erster CI-Lauf (2026-07-18, Commit 11beead, run 29628696898)
+
+Der erste echte Push-Lauf ist der End-to-End-Test der YAML (nur lokal reviewbar, nie
+ausgeführt) und der empirische Freeze-Hash-Test. Ergebnis beim ersten Anlauf: **7/8 Jobs
+grün**, ein realer Bug im test-threaded-Job aufgedeckt — genau der Wert, den §6 dem CI-Lauf
+zuschreibt.
+
+- **Freeze-Hash (D4) — GEKLÄRT: Linux == macOS.** Der `freeze`-Job ist GRÜN — der auf
+  ubuntu-x86_64 gebaute wasm-Hash ist **byte-identisch** zum macOS-arm64-Pin
+  `0b9df4f1…519c7d`. numtype's `build:wasm` nutzt KEIN wasm-opt/binaryen (die übliche
+  Cross-Host-Divergenzquelle), daher ist das Artefakt hier doch cross-host byte-stabil. Die
+  Plattform-Hash-Menge (D4) braucht vorerst nur den EINEN Eintrag; der `.gitignore`-Kommentar
+  „not byte-stable across hosts" war für dieses Projekt konservativ. Die Menge-Struktur bleibt
+  der robuste Mechanismus (falls eine künftige Änderung wasm-opt einführt).
+- **test-threaded — Bug gefunden + behoben (Commit folgt).** 4/5 threaded-Tests grün, dann
+  `ENOENT: numtype_core.wasm`: `threaded.test.ts` lädt für die Bit-Identitäts-Vergleiche auch
+  das STABLE-Artefakt, aber `test:threaded` baute nur `build:wasm:threads`. Lokal war das
+  stable-Artefakt von früheren Läufen da, in der sauberen CI-Umgebung nicht — ein latenter
+  Umgebungs-Abhängigkeits-Bug, den nur der CI-Lauf sichtbar macht. Fix: `test:threaded` baut
+  jetzt zuerst `build:wasm` (selbst-genügsam), + der test-threaded-Job installiert die
+  stable-Toolchain (`rustup show`). Lokal verifiziert durch Wegbewegen des stable-Artefakts →
+  test:threaded baut es neu + 69/69 grün, Hash unverändert `0b9df4f1`. Ein zweiter CI-Lauf
+  bestätigt den Fix end-to-end.
