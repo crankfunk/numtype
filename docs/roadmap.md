@@ -192,8 +192,16 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
 11. **API-Konsolidierung + Paketschnitt:** aus `spike/` ein Paket mit einem öffentlichen
     Surface; `.wasm`-Bundling, `exports`-Map, Hover-Qualität der `d.ts` prüfen (die Hovers
     sind Teil des Produkts). **✅ ERLEDIGT (2026-07-17).**
-12. Qualitäts-Portfolio + CI: Vitest-Migration (FOLLOWUPS), GitHub Actions mit allen Gates
-    inkl. Artefakt-Hash-Freeze-Check.
+12. Qualitäts-Portfolio + CI: GitHub Actions mit allen Gates inkl. Artefakt-Hash-Freeze-Check.
+    **✅ ERLEDIGT (2026-07-18).** 8-Job-CI (check/cargo/test-node/test-browser/test-threaded/
+    freeze/editor-gate/demo) auf ubuntu-latest, Trigger `push:[main]` + `pull_request` (keine
+    Doppelläufe); rustc 1.95.0 gepinnt (`rust-toolchain.toml`); Freeze-Hash-Gate mit
+    Plattform-Hash-Menge (`scripts/check-freeze-hash.mjs`); `bench:editor` zu hartem Gate
+    gehärtet (Correctness+Instantiation-Pins hart, Latenz 2x-Ceiling); `--test-timeout` (F6);
+    zero-dep S1-CI-Guard (string-aware Import-Scanner). **Kein Vitest** — `node --test` bleibt
+    (Owner-Entscheid, zero-dep). Dreifach verifiziert (A CONFORM + B fand+behob zwei
+    S1-Guard-Multi-Line-Bypässe + C kein Verstoß); der erste echte CI-Lauf klärt den
+    Linux-Freeze-Hash (D4). docs/item-12-ci-spec.md + docs/item-12-ergebnisse.md.
 13. Release-Mechanik: npm-Namen sichern, Lizenz, 0.x-SemVer-Politik, README mit
     10-Sekunden-Demo-GIF, Begleit-Blog-Post; Forschungsnotizen als veröffentlichbare
     Artefakte aufbereiten (USP-Doc §8.3).

@@ -119,6 +119,11 @@ declare module "node:fs" {
   export function rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void;
   export function writeFileSync(path: string, data: string): void;
   export function readFileSync(path: string, encoding: "utf8"): string;
+  /** Item 12 (CI): the S1 import guard (spike/tests-runtime/s1-import-guard.test.ts)
+   * lists spike/src recursively to scan every source file's imports. Recursive
+   * form returns each entry's path relative to `path`; same scoped-shim
+   * discipline as the rest of this file. */
+  export function readdirSync(path: string, options: { recursive: true }): string[];
 }
 
 /** Spike 02: the `path` helpers used to build workload/tsconfig file paths

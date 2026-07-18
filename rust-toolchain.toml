@@ -1,0 +1,12 @@
+# Item 12 (CI): pin the stable Rust toolchain exactly, so the frozen-baseline
+# WASM artifact hash (COVENANT M4) is reproducible locally AND in CI and does
+# not drift on a future `rustup update`. The freeze pin
+# `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` was
+# produced with rustc 1.95.0; this file fixes exactly that version.
+#
+# The threads build (scripts/build-wasm-threads.sh) is UNAFFECTED: it selects
+# its toolchain explicitly via `rustup run nightly-2026-07-09`, which overrides
+# this default-toolchain choice.
+[toolchain]
+channel = "1.95.0"
+targets = ["wasm32-unknown-unknown"]

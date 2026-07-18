@@ -16,9 +16,9 @@
  *  - M2 warm hover: >=3 warmup + 20 timed hovers per position, gated
  *    (hover text must contain the expected shape) EVERY sample, timed or
  *    not — never time (or silently accept) a wrong result.
- *  - M3 warm toggle diagnostics (W4 only — the one workload with a defined
- *    single-token toggle target, see gen-workloads.ts's W4 section; see the
- *    "M3 scope" note in main() for why this isn't attempted per-workload):
+ *  - M3 warm toggle diagnostics (every workload carrying a `toggle` spec —
+ *    currently W4 and W6, see gen-workloads.ts; see the
+ *    "M3 scope" note in main() for the per-workload details):
  *    alternating full-text didChange between the toggle's two states, N=20
  *    timed samples per direction, gated on the toggle-line diagnostic
  *    (code+line) actually flipping.
@@ -677,6 +677,78 @@ function printGateVerdict(results: WorkloadResult[]): void {
 }
 
 // ---------------------------------------------------------------------------
+// Item 12 (CI): hard CI gate — correctness (already thrown in assertHoverCorrect
+// / M3 toggle) + instantiation pins (exact) are hard; latency is gated at the 2x
+// ceiling. Additive: does NOT touch the measurement paths (M1–M4,
+// measureInstantiations) or the informational printGateVerdict; it only reads
+// their results and sets process.exitCode.
+// ---------------------------------------------------------------------------
+
+// Instantiation pins per workload (spec D5). Exact match — the counts are
+// deterministic same-platform (Spike 02 / Baustein-0: 3x/2x byte-identical).
+// Measured 2026-07-17, macos-arm64 / tsc 7.0.2. Cross-platform stability is
+// checked by the first CI run (spec §6); if a Linux run differs, evolve this to
+// a platform-labelled set like scripts/check-freeze-hash.mjs.
+const INSTANTIATION_PINS: Record<string, number> = {
+  w1: 24305,
+  w2: 26114,
+  w3: 57254,
+  w4: 24466,
+  w5: 29759,
+  w6: 30929,
+  w7: 23477,
+};
+
+function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {
+  const violations: string[] = [];
+
+  // Latency: 2x ceiling only (owner-chosen — the strict 1x gate stays
+  // informational in printGateVerdict; on shared CI hardware only the 2x
+  // ceiling is non-flaky, at ~3 orders of magnitude local headroom). The m3
+  // loop is generic, so this covers BOTH toggle-bearing workloads (W4 and W6).
+  for (const r of results) {
+    for (const h of r.m2) {
+      if (!h.gate2xPass) {
+        violations.push(`[${r.id}] M2 hover "${h.label}": median ${fmtMs(h.stats.median)} exceeds the 2x ceiling (${HOVER_GATE_MS * GATE_2X_FACTOR}ms)`);
+      }
+    }
+    if (r.m3) {
+      for (const d of r.m3) {
+        if (!d.gate2xPass) {
+          violations.push(`[${r.id}] M3 toggle "${d.label}": median ${fmtMs(d.stats.median)} exceeds the 2x ceiling (${TOGGLE_GATE_MS * GATE_2X_FACTOR}ms)`);
+        }
+      }
+    }
+  }
+
+  // Instantiation pins: exact match (deterministic). A drift is either a
+  // type-budget regression to investigate, or — on the first CI run — an
+  // expected platform difference; the actual value is printed so the reaction
+  // is a one-line pin edit.
+  for (const ir of instResults) {
+    const pin = INSTANTIATION_PINS[ir.id];
+    if (pin === undefined) {
+      violations.push(`[${ir.id}] no instantiation pin defined — add it to INSTANTIATION_PINS`);
+    } else if (ir.instantiations !== pin) {
+      const delta = ir.instantiations === null ? "?" : `${ir.instantiations - pin >= 0 ? "+" : ""}${ir.instantiations - pin}`;
+      violations.push(`[${ir.id}] instantiations = ${ir.instantiations}, pin = ${pin} (delta ${delta})`);
+    }
+  }
+
+  console.log("\n--- Hard CI gate (spec D5: correctness + instantiation pins hard, latency at 2x ceiling) ---");
+  if (violations.length === 0) {
+    console.log("Hard CI gate: PASS");
+    return;
+  }
+  console.log("Hard CI gate: FAIL");
+  for (const v of violations) console.log(`  - ${v}`);
+  // `process` is deliberately typed `unknown` in ambient.d.ts (feature-detect
+  // only). Narrow locally just for the exit-code write, rather than widening the
+  // shared shim's intentional "never dereference a property on it" contract.
+  (process as { exitCode?: number }).exitCode = 1;
+}
+
+// ---------------------------------------------------------------------------
 // Main.
 // ---------------------------------------------------------------------------
 
@@ -694,13 +766,13 @@ async function main(): Promise<void> {
 
   const exe = await resolveTscExe();
   console.log(`Resolved native tsc exe: ${exe}`);
-  // M3 scope note: the spec's Workloads section defines a togglable-error
-  // target only for W4 ("M3 toggle: a single-token edit that fixes/
-  // reintroduces ONE of them"); W1/W2/W3/W5 are deliberately clean/valid
-  // workloads with no natural toggle target. M3 is therefore measured on W4
-  // only — M1/M2/M4 run on every workload. Documented explicitly (not
-  // silently dropped) per the task's instructions.
-  console.log(`M2/M3/M4: ${WARMUP_SAMPLES} warmup + ${TIMED_SAMPLES} timed samples per position/direction. M3 measured on W4 only (see scope note in source).`);
+  // M3 scope note: M3 (toggle-diagnostic latency) is measured on every workload
+  // carrying a `toggle` spec — currently W4 AND W6 (Kern 08 gave W6 a reshape/
+  // flatten toggle target). W1/W2/W3/W5/W7 have no toggle target. The loop in
+  // measureWorkload gates on `if (entry.toggle)`, so this is generic; M1/M2/M4
+  // run on every workload. (Item-12 Baustein-0 finding F1: the earlier "W4 only"
+  // wording predated Kern 08's W6 toggle and was stale.)
+  console.log(`M2/M3/M4: ${WARMUP_SAMPLES} warmup + ${TIMED_SAMPLES} timed samples per position/direction. M3 measured on toggle-bearing workloads (W4, W6).`);
 
   const results: WorkloadResult[] = [];
   for (const entry of manifest.workloads) {
@@ -721,6 +793,7 @@ async function main(): Promise<void> {
   printM4Table(results);
   printInstantiationTable(instResults);
   printGateVerdict(results);
+  enforceHardGate(results, instResults);
 
   console.log("\n=== Run complete. ===");
 }

@@ -1,0 +1,183 @@
+# Item 12 — NumType CI. Reproduces every local gate on GitHub (hard release
+# gate: roadmap §Release-Gates "CI reproduziert alle Gates inkl. Freeze-Hash").
+# Binding spec: docs/item-12-ci-spec.md.
+#
+# Trigger (spec D3, owner-approved after Baustein-0 finding D-2): push only on
+# main + pull_request for all branches → no double runs (an in-repo PR commit
+# would otherwise fire push AND pull_request for the same commit; the per-ref
+# concurrency group does not collapse them, different github.ref).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Fastest gate: the pnpm check triple-verbund (root + stress + browser
+  # tsconfigs). Node + tsc only, no Rust.
+  check:
+    name: check (types, triple-verbund)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+  # Native cargo tests. rust-stable (pinned 1.95.0 via rust-toolchain.toml),
+  # no wasm target needed for native tests, and NO Node/pnpm (spec D-4).
+  cargo:
+    name: cargo test (native)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain (rust-toolchain.toml -> 1.95.0)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/core
+      - run: cargo test --manifest-path crates/core/Cargo.toml
+
+  # Node test corpora that build the stable wasm/dist artifact.
+  test-node:
+    name: test-node (core + resident + package)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install pinned Rust toolchain (rust-toolchain.toml -> 1.95.0)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/core
+      - run: pnpm test:core
+      - run: pnpm test:resident
+      - run: pnpm test:package
+
+  # Real-browser smoke (Chromium via Playwright, COOP-free standard surface).
+  test-browser:
+    name: test-browser (Playwright/Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install pinned Rust toolchain (rust-toolchain.toml -> 1.95.0)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/core
+      - name: Install Playwright Chromium + OS deps
+        run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:browser
+
+  # Threads artifact: pinned nightly + rust-src + -Z build-std. Most expensive
+  # job. build-wasm-threads.sh selects the nightly explicitly via `rustup run`.
+  test-threaded:
+    name: test-threaded (nightly + build-std)
+    runs-on: ubuntu-latest
+    # 45 min: a cold runner with no rust-cache hit compiles std for wasm32 from
+    # scratch (-Z build-std) plus the nightly install — the first CI run may
+    # approach 30 min, so leave headroom (Item-12 Verify-B MINOR-6).
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Version kept in sync with scripts/build-wasm-threads.sh (TOOLCHAIN).
+      - name: Install pinned nightly for the threads build
+        run: rustup toolchain install nightly-2026-07-09 --profile minimal --component rust-src --target wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/core
+          key: threads
+      - run: pnpm test:threaded
+
+  # Frozen-baseline artifact hash gate (COVENANT M4). See spec D4: the first
+  # ubuntu run may (likely will) produce a different Linux hash than the macOS
+  # pin — that is an EXPECTED, actionable result (add the Linux hash to the
+  # pin set in scripts/check-freeze-hash.mjs), not a broken CI.
+  freeze:
+    name: freeze (artifact hash M4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install pinned Rust toolchain (rust-toolchain.toml -> 1.95.0)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/core
+      - run: pnpm build:wasm
+      - run: pnpm check:freeze
+
+  # Editor-latency gate (spec D5): correctness + instantiation pins hard,
+  # latency at the 2x ceiling. Node + tsc only, no Rust.
+  editor-gate:
+    name: editor-gate (bench:editor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm bench:editor
+
+  # Cheap end-to-end gate: all three backends, asserted equal.
+  demo:
+    name: demo (all backends, assert equal)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install pinned Rust toolchain (rust-toolchain.toml -> 1.95.0)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/core
+      - run: pnpm demo
