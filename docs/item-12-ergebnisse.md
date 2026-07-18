@@ -182,5 +182,18 @@ zuschreibt.
   Umgebungs-Abhängigkeits-Bug, den nur der CI-Lauf sichtbar macht. Fix: `test:threaded` baut
   jetzt zuerst `build:wasm` (selbst-genügsam), + der test-threaded-Job installiert die
   stable-Toolchain (`rustup show`). Lokal verifiziert durch Wegbewegen des stable-Artefakts →
-  test:threaded baut es neu + 69/69 grün, Hash unverändert `0b9df4f1`. Ein zweiter CI-Lauf
-  bestätigt den Fix end-to-end.
+  test:threaded baut es neu + 69/69 grün, Hash unverändert `0b9df4f1`.
+
+**Zweiter CI-Lauf (Commit e625593, run 29628909005) — test-threaded GRÜN (der build:wasm-Fix
+greift), aber ein zweiter, pre-existing Befund.** Der `cargo`-Job wurde rot durch den
+Kern-06-`zero_alloc`-Integrationstest (`matmul_blocked_partial` allokationsfrei) — delta=4
+statt 0. Ursache: sein `#[global_allocator]`-Counter zählt transiente Allokationen der
+Test-Harness (stdout-capture-Bookkeeping auf anderen Threads) im Messfenster mit — vom
+Test-Autor als Restlücke dokumentiert (Modul-Doc), lokal (macOS, geringe Last) nie sichtbar,
+auf CI (Linux, geteilte Last) sporadisch. **Die getestete Eigenschaft ist WAHR; nur die
+Messung ist kontaminierbar** (delta=4 im ersten Lauf war 0). Fix (owner-abgenommen): die
+Messung N=16-mal, das MINIMUM-delta prüfen — eine echte Allokation wäre INHÄRENT (min≥1), die
+transiente Kontamination wird strukturell herausgefiltert. Kein Freeze-Anker/kein wasm
+berührt (nur der native Integration-Test `crates/core/tests/zero_alloc.rs`), Freeze-Hash
+byte-identisch. Lokal `cargo test` 161+1 grün, zero_alloc 3× deterministisch. Ein dritter
+CI-Lauf bestätigt beide Fixes end-to-end.
