@@ -157,6 +157,21 @@ suite that includes IEEE-754 special values (NaN, ±Inf, ±0, subnormals). Threa
 Node-only, explicitly-experimental opt-in for v0 (the browser port is gated on COOP/COEP headers
 a library can't set). See [`docs/`](docs/) for the backend design and benchmarks.
 
+The bundled `.wasm` is the **single-threaded** core, so `backend("wasm")` works out of the box.
+The multi-threaded core is **not shipped in the npm package** — it requires a pinned nightly Rust
+toolchain with `-Z build-std` to compile, which the published (stable-Rust) package deliberately
+does not depend on. `backend("threaded")` is therefore build-it-yourself from a checkout: clone
+the repo and run `pnpm build:wasm:threads`.
+
+## Zero dependencies, from scratch
+
+numtype has **no runtime dependencies** — the `package.json` has no `dependencies` field at all,
+enforced by a CI guard. There is nothing transitive to audit and no supply-chain surface. Both
+halves are hand-written: the Rust/WASM kernels (no `wasm-bindgen`, no BLAS, no `ndarray` crate —
+a hand-rolled `extern "C"` ABI) and the entire type-level machinery (the digit-string arithmetic).
+The single-threaded `.wasm` is pre-built and bundled, so `pnpm add numtype` compiles nothing
+native on your machine.
+
 ## Honest qualifications
 
 Credibility is an asset for a research project, so the scope of the guarantee is stated plainly:
