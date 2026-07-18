@@ -1,6 +1,6 @@
 # NumType — Infra 01: Stress-Typtests in eine separat gemessene Messstrecke (Spec + Ergebnisse)
 
-Date: 2026-07-11 · Status: binding (Owner-Entscheidung Marvin, 2026-07-11: „Extremtests separat
+Date: 2026-07-11 · Status: binding (Owner-Entscheidung, 2026-07-11: „Extremtests separat
 messen" — Auflösung des Kern-08-G2-Trend-Flags) · Ergebnisse werden nach Implementierung unten
 ergänzt.
 
