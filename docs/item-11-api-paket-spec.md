@@ -362,7 +362,9 @@ durch** (nicht nur Stichprobe).
 versehentlichem `npm publish` während Item 11/12); die Publish-Metadaten werden gesetzt,
 aber das Paket ist noch nicht publish-scharf. Ergänzende Metadaten-Felder (`description`
 existiert, `keywords`, `repository`, `license` gesetzt) — `license` als FELD gesetzt,
-die LICENSE-DATEI + finale Rechtewahl ist Item 13 (Release-Mechanik); Kandidat MIT.
+die LICENSE-DATEI + finale Rechtewahl ist Item 13 (Release-Mechanik); Kandidat war MIT,
+final entschieden: **Apache-2.0** (Patent-Grant + Attribution, passend zur permissiven
+TS/Rust/WASM-Familie; Owner-Entscheidung).
 Das `author`-FELD bleibt — wie die LICENSE-Datei — bewusst **Item 13 überlassen** (persönliche
 Angaben sind Owner-Entscheidung beim Release; S2-Verify-A-Befund als bewusste Deferral
 dokumentiert, kein fehlendes Pflichtfeld).
