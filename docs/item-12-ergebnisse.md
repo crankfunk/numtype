@@ -195,5 +195,12 @@ Messung ist kontaminierbar** (delta=4 im ersten Lauf war 0). Fix (owner-abgenomm
 Messung N=16-mal, das MINIMUM-delta prüfen — eine echte Allokation wäre INHÄRENT (min≥1), die
 transiente Kontamination wird strukturell herausgefiltert. Kein Freeze-Anker/kein wasm
 berührt (nur der native Integration-Test `crates/core/tests/zero_alloc.rs`), Freeze-Hash
-byte-identisch. Lokal `cargo test` 161+1 grün, zero_alloc 3× deterministisch. Ein dritter
-CI-Lauf bestätigt beide Fixes end-to-end.
+byte-identisch. Lokal `cargo test` 161+1 grün, zero_alloc 3× deterministisch.
+
+**Dritter CI-Lauf (Commit d8e76d7, run 29636831573): ALLE 8 JOBS GRÜN.** check · cargo ·
+test-node · test-threaded · test-browser · freeze · editor-gate · demo — alle success. Beide
+Fixes bestätigt, **Item 12 ist damit auch end-to-end in CI verifiziert.** Die drei Läufe
+zusammengefasst: Lauf 1 (7/8) deckte den test-threaded-Artefakt-Bug auf, Lauf 2 (7/8) den
+pre-existing zero_alloc-Flaky-Test, Lauf 3 (8/8) bestätigt beide Fixes. Beide Befunde waren
+pre-existing Kern-06-Umgebungs-/Mess-Abhängigkeiten, nur durch die saubere CI-Umgebung
+sichtbar — kein Item-12-Regress; genau der Wert, den der erste echte CI-Lauf liefert.
