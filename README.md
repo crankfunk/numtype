@@ -248,8 +248,10 @@ bit-identical to the JS reference. The op surface is deliberately narrow (constr
 conversion, `add`/`sub`/`mul`/`div`, `matmul`, `sum` with `keepdims`, `transpose`, `slice`,
 `reshape`/`flatten`, `dot`/`norm`/`cosineSimilarity`) — a *minimum viable* NumPy, not a clone.
 
-For the full per-phase specifications, results, and the competitive analysis, see [`docs/`](docs/)
-and [`docs/roadmap.md`](docs/roadmap.md). Internal research notes there are partly in German.
+For the full per-phase specifications, results, and the competitive analysis, start at the
+[research-notes reading guide](docs/README.md) (curated entry points by interest) or the
+[roadmap](docs/roadmap.md). Internal research notes are partly in German — the guide says
+which, and why.
 
 ## Non-goals
 
