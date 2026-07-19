@@ -11,6 +11,8 @@
 
 **Status: v0.1 research preview** · Apache-2.0 · zero runtime dependencies
 
+![Editor demo: types computed while typing — matmul result NDArray<[2, 4]>, slice arithmetic NDArray<[900]>, and a shape mismatch surfacing as a compile error at the argument](docs/assets/numtype-demo.gif)
+
 An n-dimensional array library for TypeScript with **compile-time shape checking**. `matmul`,
 broadcasting, and reduction shape mismatches appear as editor squiggles *while you type* — not
 as runtime crashes in production. It's gradual by design: literal dimensions are checked
