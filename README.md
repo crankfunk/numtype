@@ -76,6 +76,13 @@ they only need the comparison half of that machinery, which is why negative indi
 (`a.slice(-2)`) are checked too. Everything outside the provable literal subset degrades honestly
 to `number` + runtime checks — never a false error.
 
+The digit-string representation itself is established prior art in the type-level community —
+general-purpose arithmetic libraries (notably [ts-arithmetic](https://github.com/arielhs/ts-arithmetic))
+compute over digit representations to escape the same recursion ceiling. NumType's contribution
+is the application, not the trick: wiring that arithmetic into an n-d array API — dimensions,
+slice lengths, bounds, shape products — where a computed number becomes a compile-time shape
+error.
+
 ## Install
 
 ```sh
