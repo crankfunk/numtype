@@ -1,5 +1,13 @@
 # NumType
 
+> **Note for contributors:** This file is the maintainer's internal working memory
+> for an agent-assisted workflow (Claude Code). It references private tooling and
+> plugins (`brainroute`, `graph-a-lama`, `coding-kb`, `covenant`, …) that are not
+> part of this repository, and it mixes English with German research notes.
+> Nothing in here is required to build, test, or use NumType — see
+> [README.md](README.md) and [docs/](docs/) instead. The commands in the
+> "Commands" section work for everyone, though.
+
 NumPy-like n-dimensional array library: TypeScript type-level shape checking + (later) from-scratch Rust/WASM kernels. Research project — the explicit goal is probing the limits of what's feasible.
 
 ## Hard constraints (user-set, 2026-07-09)

@@ -32,3 +32,9 @@ playwright-report/
 test-results/
 blob-report/
 playwright/.cache/
+
+# Item 13 (Release-Vorbereitung): HANDOFF.md ist reiner Session-Zustand des
+# Maintainer-Workflows — bleibt lokal erhalten und in Benutzung, gehört aber
+# nicht ins (bald öffentliche) Repo. Entfernt aus dem Index via
+# `git rm --cached HANDOFF.md` (Datei bleibt auf der Platte).
+HANDOFF.md
