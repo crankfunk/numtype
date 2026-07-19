@@ -1,7 +1,7 @@
 {
   "name": "numtype",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "description": "NumType — n-dimensional arrays for TypeScript with compile-time shape checking (research spike)",
   "keywords": [
     "ndarray",
