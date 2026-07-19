@@ -31,6 +31,10 @@ a.matmul(NDArray.zeros([5, 4]));
 //        ~~~~~~~~~~~~~~~~~~~~~ matmul: inner dimensions must match — got [2, 3] and [5, 4]
 ```
 
+**[Try it in your browser →](https://www.typescriptlang.org/play/?#code/JYWwDg9gTgLgBAbzgOQCIEEpQIYE84C+cAZlBCHAEQB2AriDLmAKaUDcAUBwPTdwDKAC2wsAznGxRmcAMbkwtGMwAmcAEb4Yg6YxaztMgNbMocQCgEcQRABuJuFunXJwbGoA2zUQDoOc6qPhsOABeFAwsPC9SckwcXAAKAG0AJgAaOABmAF10xIBGdLTM9IAWdIBWdIA2LIBKTj8AuDAyZVoZeFDsLxBsGBBaN3i0WMiALxMIUSSM0rr6uF5LGxMALjDR3AAeFLmAPi4l-jdgGWlnLRBmGFP05QhqaQ17bX1mIzW4PIAGX7gAWi+f1CAE5fr4Hk0AO7AaghDYRXBeCZkab5b7JEp1LyiE5neJIAKSGDrH7fdIBCBgUm-b6EeqHPjoOCiYR6EDAUS9GAyQRwTkSWTyYAeOAmMimdAAFRe5ygAHN6MxqPALNQIIE4FBaCrQNIZDhWasON1uQMhiNEcjJmjKnAsbUGTw+KhcNRsByZHBlKBxMpmPKcP64IHsGdiIM3Pg1RASNg3KJpOLoKJ0sxbFBjf6ZG5JPrIfBqOs6CA1CYGgXvW74Za4tbUUlqOk8uUMjVaj0+ubhuE6yipkkW230gAOeacIA)**
+— the types load straight from npm into the TypeScript Playground; hover the variables, break
+the shapes. Nothing to install.
+
 The red squiggle is the product; the WASM performance is a credibility feature, not the reason
 to reach for it. If you've ever shipped a tensor-shape bug to production, this is the pitch.
 
