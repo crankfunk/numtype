@@ -9,7 +9,8 @@
 
 > NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor errors.
 
-**Status: v0.1 research preview** · Apache-2.0 · zero runtime dependencies
+**Status: v0.1 research preview** · Apache-2.0 · zero runtime dependencies ·
+launch post: [*Teaching the type checker arithmetic*](https://marvinmuegge.com/notes/teaching-the-checker-arithmetic/)
 
 ![Editor demo: types computed while typing — matmul result NDArray<[2, 4]>, slice arithmetic NDArray<[900]>, and a shape mismatch surfacing as a compile error at the argument](https://raw.githubusercontent.com/crankfunk/numtype/main/docs/assets/numtype-demo.gif)
 
