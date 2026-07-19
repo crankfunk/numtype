@@ -14,7 +14,7 @@ NumPy-like n-dimensional array library: TypeScript type-level shape checking + (
 
 - **No external libraries.** All kernels and all type machinery written from scratch. Dev tooling (typescript, later test runners) is allowed; product/runtime dependencies are not. Never suggest pulling in `ndarray`/`faer`/BLAS bindings etc.
 - Brand name: **NumType** (npm package name stays lowercase `numtype`).
-- Public repo + npm release since 2026-07-19 (v0.1.0). Write code/README/spec docs in English (OSS-facing); internal research notes may be German.
+- Public repo + npm release since 2026-07-19 (v0.1.0). **All user-/public-facing text is English** (owner-set 2026-07-19): commit messages, tag/release notes, issue/PR text, README/spec docs, code comments, error messages, GitHub/npm metadata. Internal process & research docs (docs/ research notes, projekt-log, FOLLOWUPS, COVENANT, HANDOFF) may stay German — disclosed as such in the README. Chat with the owner stays German.
 - Research fan-outs stay small: targeted agents (≤3), no broad sweeps.
 
 ## USP (defensible form — sources in docs/wettbewerbsanalyse-und-usp.md)
