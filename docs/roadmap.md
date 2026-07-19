@@ -205,6 +205,15 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
 13. Release-Mechanik: npm-Namen sichern, Lizenz, 0.x-SemVer-Politik, README mit
     10-Sekunden-Demo-GIF, Begleit-Blog-Post; Forschungsnotizen als veröffentlichbare
     Artefakte aufbereiten (USP-Doc §8.3).
+    **🔶 UNTERWEGS (2026-07-19).** Metadaten/Doku fertig + committet + gepusht:
+    **Apache-2.0** (LICENSE + NOTICE + package.json; Owner-Entscheidung — Patent-Grant statt MIT,
+    Commit 3d7e7ba), **README-Vollüberarbeitung** (ANSI-Shadow-figlet-Banner als Signature-Move +
+    typecheck-verifizierte Beispiele + §5-Qualifikationen wörtlich + Zero-Dep-Abschnitt, bfdb01b/
+    dd6012b), **`engines` node >=20** (2e33a65), **`author` crankfunk** (8e3c495). Privacy-Audit vor
+    OSS gemacht (Repo sauber). OFFEN (Owner-Aktionen, bewusst zuletzt): `"private": false` +
+    `npm publish` (2FA Pflicht 2026; `npm pack --dry-run` vorab) + Repo public schalten (dann
+    Trusted Publishing möglich). Befund: das Threads-`.wasm` ist NICHT im Tarball (FOLLOWUPS,
+    Empfehlung Checkout-only für v0). Details docs/... + HANDOFF.md.
 14. **v0.1 research preview.**
 
 ## Release-Gates (Definition „release-fähig")
