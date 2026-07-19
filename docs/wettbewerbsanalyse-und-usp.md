@@ -226,3 +226,30 @@ A striking demand signal: **[pytorch/pytorch#26889](https://github.com/pytorch/p
 3. **The claim should be scoped by rank/dimension size, not stated unconditionally.** TypeScript's own documented limits — ~100 non-tail-recursive / ~1000 tail-recursive instantiation depth, a version-fragile ~5M global instantiation budget, and multi-second IDE slowdowns at large union/tuple sizes — mean numtype's compile-time guarantees will hold reliably for realistic tensor ranks and common operation chains, but the marketing claim needs an implicit or explicit "within practical rank/size bounds" rather than "for any shape whatsoever," to avoid the same overclaiming that sank Dex's and dependent-typing's broader ambitions.
 
 **Recommended reframing of the USP:** *"NumPy's own maintainers say don't rely on shape typing yet, and PyTorch's static-shapes request has sat open for six years because the general problem resists Python's type system. TypeScript's variadic tuple types make type-level shape arithmetic newly tractable — and numtype is the first library to seriously execute on it, catching common matmul/broadcast/reduction shape errors as editor squiggles instead of runtime crashes."** This keeps every clause anchored to a fetched source, concedes prior-art nascency honestly (a credibility asset, not a weakness), and implicitly scopes the guarantee to realistic tensor sizes rather than universal shape arithmetic.
+
+---
+
+## Addendum 2026-07-20 — numpy-ts re-verifiziert (nach Launch, Owner-Frage)
+
+Anlass: Owner-Frage zur Abgrenzung, einen Tag nach dem v0.1-Launch. numpy-ts heute erneut
+geprüft (numpyts.dev + npm-Registry, live): Version **1.5.0 → 1.6.0** (publiziert 2026-07-17 —
+das Projekt shippt weiter schnell), 6,3 MB unpacked, weiterhin kein `dependencies`-Feld.
+Website-Claims der Art nach unverändert: „94% API Coverage" (476/507), „Pure TypeScript + WASM",
+„1.25x faster than NumPy on average", „NumPy-Validated" (20.000+ Vergleichstests gegen NumPy),
+und „Full TypeScript type definitions for every function, dtype, and array operation. Catch
+errors at compile time, not runtime."
+
+**Der letzte Claim bleibt Signatur-/dtype-Ebene:** kein Hinweis auf Shape-Level-Typen — keine
+literalen Dimensionen, keine generischen Shape-Parameter, keine berechneten Ergebnis-Shapes.
+`matmul([2,3] × [5,4])` typechecked dort sauber und wirft zur Laufzeit. Das Anhang-A-Verdikt
+(„most direct current attempt at ‚NumPy for TS', doesn't solve the shape-typing problem")
+gilt unverändert; die README-Qualifikation „no existing TS library has delivered general
+compile-time shape checking" ist damit auch nach dem Launch re-verifiziert.
+
+Abgrenzung in einem Satz (seit heute auch als FAQ-Absatz in der README): numpy-ts portiert
+NumPys **API** nach TypeScript (Breite, Validierung gegen NumPy), NumType bringt dem
+**Typchecker** NumPys Shape-Arithmetik bei (Tiefe, Bit-Identität zwischen eigenen Backends,
+gemessene Checker-Budgets). Die Projekte konkurrieren kaum — wer heute 476 Funktionen braucht,
+ist bei numpy-ts besser aufgehoben; wer Shape-Fehler beim Tippen will, hier. Beobachtungspunkt
+bleibt: Sollte numpy-ts je Shape-Typen nachrüsten, ist unser Vorsprung die bewiesene
+Maschinerie samt gemessener Budgets (docs/, Spikes 01–06).

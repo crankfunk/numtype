@@ -53,6 +53,19 @@ viable NumPy** — a deliberately narrow op surface with the shape-typed core do
 a 400-operation clone. The obvious limitations that come with that claim are stated, not
 hidden: see [Honest qualifications](#honest-qualifications) and [Non-goals](#non-goals).
 
+### How is this different from numpy-ts?
+
+[numpy-ts](https://numpyts.dev/) ports NumPy's *API* to TypeScript — impressively broadly (its
+headline is 94% API coverage), with outputs validated against NumPy itself. NumType teaches
+TypeScript's *type checker* to do NumPy's shape arithmetic. numpy-ts's "catch errors at compile
+time" is signature- and dtype-level typing: a `matmul` of `[2, 3] × [5, 4]` type-checks there
+and fails at runtime, while here it is a compile error at the offending argument. The two
+projects barely compete — if you need 476 functions today, use numpy-ts; if you want shape
+mismatches as red squiggles while you type, on a deliberately narrow op surface, that is what
+NumType exists for. (Survey of the wider landscape, numpy-ts claims re-verified 2026-07-20:
+[docs/wettbewerbsanalyse-und-usp.md](docs/wettbewerbsanalyse-und-usp.md) — Appendix A is in
+English.)
+
 ## The core idea: the type system does arithmetic over your dimensions
 
 Shapes aren't just *matched* — where dimensions are literal, they are *computed*, while you type:
