@@ -226,6 +226,14 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
     Bewusst nach Item 14 verschoben: Demo-GIF, Blog-Post, Forschungsnotizen-Aufbereitung
     (FOLLOWUPS). Befund: das Threads-`.wasm` ist NICHT im Tarball (Checkout-only für v0).
 14. **v0.1 research preview.**
+    **✅ ERLEDIGT (2026-07-19) — die Roadmap ist damit durchgespielt.** Alle vier Bausteine:
+    (a) Demo-GIF in der README (drei verifizierte Szenen, AppleScript-getippter Take),
+    (d) README-Sektion „Versioning: what to expect before 1.0" (0.x-SemVer, inferierte Typen
+    als Teil der API), (c) docs/README.md als englischer Reading Guide über die
+    Forschungsnotizen, (b) Launch-Blog-Post „Teaching the type checker arithmetic"
+    (https://marvinmuegge.com/notes/teaching-the-checker-arithmetic/; Code-Beispiel gegen das
+    veröffentlichte Paket typecheck-verifiziert). Dazu im Zuge: Prior-Art-Credit
+    (ts-arithmetic) in „The core idea".
 
 ## Release-Gates (Definition „release-fähig")
 
