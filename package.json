@@ -35,6 +35,9 @@
   "sideEffects": [
     "**/threaded-worker.js"
   ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build:dist": "pnpm build:wasm && rm -rf dist && tsc -p tsconfig.build.json && node scripts/postbuild-dist.mjs && mkdir -p dist/wasm && cp spike/src/wasm/numtype_core.wasm dist/wasm/numtype_core.wasm",
     "check": "tsc --noEmit && tsc --noEmit -p spike/tests-stress && tsc --noEmit -p spike/tests-browser",
