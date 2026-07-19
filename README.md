@@ -31,6 +31,21 @@ a.matmul(NDArray.zeros([5, 4]));
 The red squiggle is the product; the WASM performance is a credibility feature, not the reason
 to reach for it. If you've ever shipped a tensor-shape bug to production, this is the pitch.
 
+## Why NumType exists
+
+The original motivation is a gap in the TypeScript ecosystem: there is no real counterpart to
+NumPy. Python's entire scientific stack rests on one shared n-dimensional array foundation; the
+JS/TS world has adjacent pieces — TensorFlow.js is an ML framework, math.js targets general
+(mostly low-rank) math, scijs/ndarray predates modern TypeScript — but no general, typed n-d
+array layer that feels like standard infrastructure. And the one thing a TS-native answer could
+uniquely add is exactly what none of the existing options attempt: putting the type system
+itself to work on shapes.
+
+NumType tries to close that gap in the only form that is honest for a new library: a **minimum
+viable NumPy** — a deliberately narrow op surface with the shape-typed core done properly — not
+a 400-operation clone. The obvious limitations that come with that claim are stated, not
+hidden: see [Honest qualifications](#honest-qualifications) and [Non-goals](#non-goals).
+
 ## The core idea: the type system does arithmetic over your dimensions
 
 Shapes aren't just *matched* — where dimensions are literal, they are *computed*, while you type:
