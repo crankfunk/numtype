@@ -84,6 +84,15 @@ Zero runtime dependencies; the `.wasm` core is bundled, so there is no native to
 install. The default `NDArray` runs in pure JS and works in any modern JS environment (Node or
 browser). The optional WASM/threaded backends need Node (see [Backends](#backends)). ESM only.
 
+**The shape checking works in your editor out of the box.** Everything type-level ships as
+plain `.d.ts` files inside the package, so any editor running the TypeScript language service —
+VS Code, WebStorm, Neovim, Zed, … — shows the hovers and shape errors immediately after
+installing: no editor extension, no compiler plugin, no codegen step. Two requirements: your
+project uses TypeScript (a plain-JS project still gets hovers and IntelliSense from the
+`.d.ts`, but errors only with `checkJs`), and a reasonably current compiler — NumType is
+developed and verified against TypeScript 7.x (the current npm `latest`); the type machinery
+uses features introduced in TS 5.0, but older majors are untested.
+
 ## Usage
 
 Every operation below is exercised bit-for-bit against the WASM backend in [`spike/demo.ts`](spike/demo.ts)
