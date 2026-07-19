@@ -210,10 +210,21 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
     Commit 3d7e7ba), **README-Vollüberarbeitung** (ANSI-Shadow-figlet-Banner als Signature-Move +
     typecheck-verifizierte Beispiele + §5-Qualifikationen wörtlich + Zero-Dep-Abschnitt, bfdb01b/
     dd6012b), **`engines` node >=20** (2e33a65), **`author` crankfunk** (8e3c495). Privacy-Audit vor
-    OSS gemacht (Repo sauber). OFFEN (Owner-Aktionen, bewusst zuletzt): `"private": false` +
-    `npm publish` (2FA Pflicht 2026; `npm pack --dry-run` vorab) + Repo public schalten (dann
-    Trusted Publishing möglich). Befund: das Threads-`.wasm` ist NICHT im Tarball (FOLLOWUPS,
-    Empfehlung Checkout-only für v0). Details docs/... + HANDOFF.md.
+    OSS gemacht (Repo sauber).
+    **✅ ERLEDIGT (2026-07-19): numtype@0.1.0 ist LIVE auf npm, das Repo ist PUBLIC.**
+    Release-Session: Pre-Flight verifiziert (Name frei, Tarball via `npm pack --dry-run` sauber,
+    CI grün, keine CI-Secrets/Rulesets, Commits durchgehend noreply-Identität); drei Lücken
+    vor dem Publish geschlossen (**NOTICE fehlte im Tarball** — npm nimmt LICENSE/README
+    automatisch mit, die Apache-2.0-NOTICE nicht → in `files`; Version 0.0.0→**0.1.0**;
+    **`prepublishOnly` = `pnpm test:package`** als Publish-Airbag); README um „Why NumType
+    exists" (Motivation: fehlendes NumPy-Pendant im TS-Ökosystem) + Editor-out-of-the-box-
+    Absatz ergänzt. Erst-Publish manuell mit 2FA, Registry-verifiziert (41 Files / ~435 kB
+    unpacked); Tag `v0.1.0` (37335d0); GitHub-Metadaten gesetzt (Description, Homepage→npm,
+    11 Topics). Fakten-Korrektur (npm-Doku): Trusted Publishing geht auch aus privaten Repos
+    (Paket muss existieren, Konfiguration in den npm-Paket-Settings + `id-token: write`);
+    nur das Provenance-BADGE braucht ein public Repo — Setup als optionales FOLLOWUP.
+    Bewusst nach Item 14 verschoben: Demo-GIF, Blog-Post, Forschungsnotizen-Aufbereitung
+    (FOLLOWUPS). Befund: das Threads-`.wasm` ist NICHT im Tarball (Checkout-only für v0).
 14. **v0.1 research preview.**
 
 ## Release-Gates (Definition „release-fähig")
