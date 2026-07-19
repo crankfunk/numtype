@@ -216,6 +216,26 @@ The type-checker cost is measured, not hoped: the slice arithmetic costs ~1.59×
 the bounds checks ~1.036×, and hover latency measured against the native TS 7 language server is
 0.04–0.08 ms median — about three orders of magnitude under a 100 ms editor gate.
 
+## Versioning: what to expect before 1.0
+
+NumType follows SemVer with 0.x semantics, sharpened for a library whose *inferred types are
+part of the API*:
+
+- **Breaking changes bump the minor** (0.1 → 0.2) and are listed in the release notes. Anything
+  that can change an inferred type or reject previously-accepted code counts as breaking and
+  never lands in a patch.
+- **Stable through all of 0.x:** zero runtime dependencies, WASM kernels bit-identical to the JS
+  reference, and the "never wrong, only incomplete" type philosophy — a confidently wrong
+  compile-time claim is always a bug; please report it. These aren't aspirations: CI enforces
+  them with a zero-dep guard, a frozen artifact hash, and the differential test suite.
+- **Types get more precise over time:** shapes that degrade to `number` today may become
+  computed literals in a later minor. If you pin exact inferred types in your own tests, expect
+  those pins to move on minor bumps — never on patches.
+- **The op surface grows additively.** Existing operations only change with a minor bump.
+  `backend("threaded")` is experimental and sits outside any stability promise.
+- **Research-preview honesty:** the stated goal is probing whether this approach holds up at
+  scale. If it hits a structural wall, 0.x may see substantial redesign.
+
 ## What's implemented
 
 The type layer (broadcast / matmul / reduce as gradual types, errors at the offending argument,
