@@ -1,6 +1,6 @@
 {
   "name": "numtype",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "NumType — n-dimensional arrays for TypeScript with compile-time shape checking (research spike)",
   "keywords": [
@@ -31,7 +31,8 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "NOTICE"
   ],
   "sideEffects": [
     "**/threaded-worker.js"
@@ -40,6 +41,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "prepublishOnly": "pnpm test:package",
     "build:dist": "pnpm build:wasm && rm -rf dist && tsc -p tsconfig.build.json && node scripts/postbuild-dist.mjs && mkdir -p dist/wasm && cp spike/src/wasm/numtype_core.wasm dist/wasm/numtype_core.wasm",
     "check": "tsc --noEmit && tsc --noEmit -p spike/tests-stress && tsc --noEmit -p spike/tests-browser",
     "check:diag": "tsc --noEmit --extendedDiagnostics",
