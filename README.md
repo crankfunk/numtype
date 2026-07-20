@@ -177,6 +177,10 @@ a.add(NDArray.zeros([4]));       // ❌ compile error: shapes [2,3] and [4] are 
 a.slice(9);                      // ❌ compile error: index 9 out of bounds for axis 0 (dim 2)
 ```
 
+A larger, real consumer application — a from-scratch RAG (retrieval) demo that embeds documents,
+scores queries against them with a single `matmul`, and ranks the results — lives in
+[`examples/rag-demo`](examples/rag-demo) and installs `numtype` from npm like any other project.
+
 ## Gradual typing
 
 Real programs have runtime-determined shapes. Where a dimension is `number` rather than a

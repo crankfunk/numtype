@@ -31,8 +31,11 @@ Launch-Blog-Post (https://marvinmuegge.com/notes/teaching-the-checker-arithmetic
 **Richtung (Owner-entschieden 2026-07-20): wachsendes OSS-Projekt mit Nutzern.** Reihenfolge:
 (1) Launch-Post streuen — der README-Playground-Link (ATA lädt die Typen von npm; live
 verifiziert, Playground läuft TS 6.0.3) ist das Erlebe-es-selbst-Asset für HN/Reddit-Kommentare;
-(2) Dogfooding-Scheibe (Embedding/RAG-Demo auf numtype, Friction-Log = begründete
-Op-Wunschliste); (3) Scale-Probe als bindende Spec („unproven at scale" → gemessen).
+(2) Dogfooding-Scheibe — **ERLEDIGT 2026-07-20** (examples/rag-demo konsumiert das
+veröffentlichte Paket aus der Registry, CI-Job `example`, kuratierte Op-Wunschliste W1–W5 in
+docs/dogfooding-rag-ergebnisse.md: argmax/topk > Skalar-Overloads > sqrt > stack > item;
+dreifach verifiziert; offene Owner-Fragen in FOLLOWUPS: Z2-Einordnung des Registry-Korpus +
+Example-Dep-Bump je Release); (3) Scale-Probe als bindende Spec („unproven at scale" → gemessen).
 FOLLOWUPS-Minis nebenher; Trusted Publishing optional (Fakten in FOLLOWUPS).
 Repo-Härtung aktiv seit 2026-07-20: Rulesets `protect-main` (kein Force-Push/Delete auf main —
 gilt auch für den Owner; bewusste Ausnahme nur via Ruleset-Deaktivierung) +
@@ -58,8 +61,10 @@ Session-Zustand).
 - **check:diag** Haupt-Pin **187,918 @ 135 Files** (nur Root-Korpus) · **check:diag:stress
   102,877 @ 82** · **check:diag:browser 2,142 @ 75** (stress/browser ungated by design,
   `pnpm check` compoundet alle drei).
-- **Testzahlen:** test:core 818 · test:resident 4278+2 · test:threaded 69 · test:browser 4 ·
-  test:package 3 + Typ-Smoke · cargo 161.
+- **Testzahlen:** test:core 822 (818 war vorbestehende Drift — 822 auch am Vor-Scheiben-HEAD
+  7fbdb28 im frischen Worktree gemessen, Verify-A der Dogfooding-Scheibe) · test:resident 4278+2 ·
+  test:threaded 69 · test:browser 4 · test:package 3 + Typ-Smoke · cargo 161 · test:example
+  (Registry-Install + Example-Typcheck + 8 asserted Queries).
 - **Editor-Gate:** `bench:editor` W1–W7 — Instantiation-Pins exact-match hart, Latenz am
   2x-Ceiling, Correctness wirft.
 - **Mess-Regeln (tragend):** Der Instantiation-Counter ist CHECK-ORDER-abhängig — Pins sind nur

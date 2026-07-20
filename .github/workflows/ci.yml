@@ -167,6 +167,31 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm bench:editor
 
+  # Dogfooding example: installs the PUBLISHED numtype package from the npm
+  # registry (not the local workspace), type-checks it, and runs its demo.
+  # Node-only, no Rust. The example is its own standalone install root (own
+  # pnpm-workspace.yaml), and the job runs its steps directly instead of
+  # going through the root `test:example` script: invoking ANY root script
+  # on a cold runner makes pnpm implicitly install the root devDependencies
+  # first (pnpm 11 behavior, verified empirically) — which this job neither
+  # needs nor caches. cache-dependency-path points at the example's OWN
+  # lockfile (the default would be the root lockfile — a dead cache).
+  example:
+    name: example (rag-demo, published package)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: examples/rag-demo/pnpm-lock.yaml
+      - run: pnpm -C examples/rag-demo install --frozen-lockfile
+      - run: pnpm -C examples/rag-demo run check
+      - run: pnpm -C examples/rag-demo run demo
+
   # Cheap end-to-end gate: all three backends, asserted equal.
   demo:
     name: demo (all backends, assert equal)

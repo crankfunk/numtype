@@ -6,8 +6,8 @@
       "severity": "error",
       "kind": "import",
       "from": "^spike/src/",
-      "to": "^spike/(tests|bench|demo)",
-      "comment": "COVENANT.md S1: Runtime-Quellcode importiert nie aus Test-, Bench- oder Demo-Verzeichnissen."
+      "to": "^(spike/(tests|bench|demo)|examples/)",
+      "comment": "COVENANT.md S1: Runtime-Quellcode importiert nie aus Test-, Bench- oder Demo-Verzeichnissen (examples/ ergänzt für die Dogfooding-Scheibe)."
     }
   ]
 }

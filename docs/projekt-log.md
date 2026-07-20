@@ -44,3 +44,39 @@ echt). Dazu im Zuge: Prior-Art-Credit für die Digit-String-Repräsentation (ts-
 „The core idea" — Beitrag ist die Anwendung, nicht der Trick. Offener Mini-Befund: der Post
 verlinkt Repo/npm nicht (liegt auf der Website). Die Roadmap ist damit vollständig
 durchgespielt; weiter geht es post-Roadmap (FOLLOWUPS-Minis, optional Trusted Publishing).
+
+## Dogfooding-Scheibe — RAG-Demo auf dem veröffentlichten Paket (2026-07-20, post-Roadmap)
+
+Erste Scheibe des OSS-Wachstumskurses (Owner-Reihenfolge Punkt 2): eine echte
+Konsumenten-Anwendung auf numtype@0.1.1, WIE SIE EIN NUTZER ERLEBT — `examples/rag-demo`
+installiert das veröffentlichte Paket aus der npm-Registry (eigenes Install-Root, committetes
+Lockfile), kein Workspace-Link auf den lokalen Stand. Deterministische RAG-Retrieval-Demo:
+16 Dokumente, 8 Queries, from-scratch gehashte Zeichen-Trigramm-TF-Embeddings (djb2, D=256),
+L2-Normalisierung als Matrix-Ausdruck, EIN matmul `[8,256] @ [256,16]` für die gesamte
+Ähnlichkeitsmatrix, Ranking + Margin-Assertions (Schwelle 0.03, knappste echte Margin 0.0778),
+Mean-Pooling-Sektion, zwei `@ts-expect-error`-Shape-Pins gegen die dist-Typen. Kern-Deliverable
+war nicht die Demo, sondern der Friction-Log (F1–F6) und die kuratierte Op-Wunschliste W1–W5
+(docs/dogfooding-rag-ergebnisse.md): **argmax/topk (P1, doppelt aufgetreten, null Ersatz) >
+Skalar-Overloads für add/sub/mul/div (P2, macht mean fast gratis) > elementweises sqrt als
+benannte exakte Unary-Op (P3, IEEE-korrekt gerundet = determinismus-sicher, KEIN Transzendenten-
+Gate-Fall) > stack/fromRows (P4) > item/at (P5)**. Ehrliche Kalibrierung gegen die
+HANDOFF-Erwartung: argmax/stack bestätigt, mean granularer als erwartet (die echte Lücke ist die
+Skalar-Division), concat trat NIE auf (bleibt evidenzlos ohne Listenplatz), sqrt war der
+unerwartete Doppel-Fund; Transzendente wurden im gesamten Workload nicht gebraucht.
+
+Prozess: bindende Spec (docs/dogfooding-rag-spec.md, v1→v3) mit Baustein-0-Spec-Verify VOR der
+Implementierung — der Verifier fing einen echten Blocker: pnpm-11-Default `minimumReleaseAge`
+(≈24h) hätte das CI-Gate nach JEDEM künftigen Release gebrochen (`ERR_PNPM_MINIMUM_RELEASE_AGE_
+VIOLATION`, dreifach reproduziert inkl. Cold-HOME); Mitigation = committetes pnpm-workspace.yaml
+mit `minimumReleaseAge: 0` im Example. Verify-Runde A+B+C parallel: A CONFIRMED (alle Gates
+frisch, check:diag-Pin 187,918 @ 135 exakt, Pflicht-Mutant beißt; klärte nebenbei die
+test:core-Zahl: 822 auch am Vor-Scheiben-HEAD — die CLAUDE.md-„818" war vorbestehende Drift).
+B HÄLT-mit-Befunden, MAJOR-Fund: „kein Root-pnpm-install" im CI-Job war empirisch falsch (pnpm
+installiert beim Aufruf JEDES Root-Scripts auf kaltem Runner implizit die Root-devDeps) →
+CI-Job auf direkte `-C`-Steps umgestellt (Spec-v3-Nachtrag); dazu engines-Feld, F-Nummern-
+Angleich, `≈`-Fix. B bewies zudem Nicht-Vakuität breit (Margin-Mutant, Hash-Korruptions-Mutant,
+@ts-expect-error-Positionsproben, Cold-Install-Repro des Baustein-0-Blockers). C (covenant-
+verify): Z1/S1/M1–M5/Nicht-Ziele halten; EIN mittlerer Z2-Befund, unverdünnt: test:package prüft
+ein Bauergebnis des AKTUELLEN Commits, test:example ein eingefrorenes Registry-Artefakt eines
+VERGANGENEN — der Korpus rottet „still zwischen Releases". Owner-Entscheidung offen (FOLLOWUPS:
+Covenant-v5-Präzisierung vs. mechanischer Registry-Tripwire), keine stille Auflösung.

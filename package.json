@@ -67,7 +67,8 @@
     "bench:slice": "pnpm build:wasm && node spike/bench-core/slice.ts",
     "bench:threaded": "pnpm build:wasm:threads && node spike/bench-core/threaded.ts",
     "bench:crossover": "pnpm build:wasm:threads && node spike/bench-core/threaded-crossover.ts",
-    "bench:editor": "node spike/bench-dx/gen-workloads.ts && node spike/bench-dx/editor-latency.ts"
+    "bench:editor": "node spike/bench-dx/gen-workloads.ts && node spike/bench-dx/editor-latency.ts",
+    "test:example": "pnpm -C examples/rag-demo install --frozen-lockfile && pnpm -C examples/rag-demo run check && pnpm -C examples/rag-demo run demo"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
