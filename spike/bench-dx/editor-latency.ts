@@ -701,14 +701,44 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // before/after record. Latency medians and the correctness gate
 // (`printGateVerdict`) were unaffected (still PASS, still under the 2x
 // ceiling) — only these exact counts moved.
+//
+// Re-measured again 2026-07-21 (Op-Scheibe W2, docs/op-w2-scalar-mean-spec.md,
+// D8): the D6-v2 scalar-overload conversion of `add`/`sub`/`mul`/`div` (each
+// gains a new overload signature) plus the new `mean` method are the same
+// class-of-ripple as W1's argmax/topk — every workload instantiates
+// `NDArray<S>` against a now-larger overload set. Measured TWICE,
+// byte-identical both times: a UNIFORM **+1181** shift on w1/w2/w3/w5/w6/w7,
+// and **+1220** on w4 specifically (w4 is the deliberate-type-errors
+// workload — its two `ShapeError`/`Guard` diagnostic paths resolve
+// differently against the now-larger add/div overload sets than the other,
+// error-free workloads; a genuine, reproducible, attributable difference,
+// not measurement noise — not optimized away, per house rule). Prior values
+// (post-W1) preserved in this commit's diff for the before/after record.
+// Latency medians and the correctness gate were unaffected (still PASS,
+// still under the 2x ceiling) — only these exact counts moved.
+//
+// Re-measured again 2026-07-21 (W2 Verify-B finding F1, MAJOR): the two
+// add/sub/mul/div overload signatures were reordered (scalar overload
+// declared FIRST, the generic `Guard`-carrying overload declared LAST) so a
+// failed overload set surfaces TS's own "last candidate" diagnostic as the
+// shape-naming `__shapeError` message instead of the scalar decoy ("not
+// assignable to type 'number'") — a resolution-order-invariant change
+// (`number` arguments still match the scalar overload first; only the
+// FAILURE-path diagnostic detail moves). Measured TWICE, byte-identical
+// both times: w1/w2/w3/w5/w6/w7 UNCHANGED from the post-W2 pins above
+// (their code never hits a failed-overload-set diagnostic path); **w4
+// alone shifts by -37** (26490 -> 26453) — w4 is the deliberate-type-errors
+// workload, so its two failing calls are the only ones whose diagnostic
+// resolution order actually changed. Latency medians and the correctness
+// gate were unaffected (still PASS, still under the 2x ceiling).
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 25109,
-  w2: 26918,
-  w3: 58058,
-  w4: 25270,
-  w5: 30563,
-  w6: 31733,
-  w7: 24281,
+  w1: 26290,
+  w2: 28099,
+  w3: 59239,
+  w4: 26453,
+  w5: 31744,
+  w6: 32914,
+  w7: 25462,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

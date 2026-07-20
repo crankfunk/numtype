@@ -694,3 +694,90 @@ export function topkRuntime(
   }
   return { values, indices };
 }
+
+// ---------------------------------------------------------------------------
+// Op-Scheibe W2 (docs/op-w2-scalar-mean-spec.md): scalar-overload + `mean`
+// runtime reference. Appended strictly after all pre-existing content in
+// this file (freeze discipline — every line above this point is byte-for-byte
+// unchanged). Pure reference functions with NO kernel counterpart (D1/M1 —
+// like W1's argmax/topk above, this slice adds no WASM surface at all).
+// ---------------------------------------------------------------------------
+
+/**
+ * Elementwise `data[i] op s` for a single scalar `s`, in strictly ascending
+ * index order, into a fresh `Float64Array` (D3, docs/op-w2-scalar-mean-spec.md):
+ * the runtime backing for `NDArray.add/sub/mul/div`'s new scalar overload.
+ * Shape is untouched by this function — the caller (`NDArray`'s scalar branch)
+ * passes `this.shape` straight through, unlike the binary `elementwiseBinary`
+ * path (D2's shape-preserving, NumPy-scalar semantics: no [1]-broadcast temp,
+ * no shape change even at rank 0). Pure IEEE 754 throughout, same as the
+ * existing binary closures (`add`/`sub`/`mul`/`div` on `NDArray`) — no
+ * zero/NaN/Infinity guards, no throws; `x/0 -> +/-Infinity`, `0/0 -> NaN`,
+ * signed zeros/infinities propagate per the standard. A `switch` dispatcher
+ * (rather than four separate exported closures) — a deliberate, spec-freed
+ * style choice (Baustein-0 Nit 4) — keeps the four ops' loops each a single
+ * straight-line pass, no per-element branch inside the hot loop.
+ */
+export function scalarElementwiseRuntime(op: "add" | "sub" | "mul" | "div", data: Float64Array, s: number): Float64Array {
+  const out = new Float64Array(data.length);
+  switch (op) {
+    case "add":
+      for (let i = 0; i < data.length; i++) out[i] = (data[i] ?? 0) + s;
+      break;
+    case "sub":
+      for (let i = 0; i < data.length; i++) out[i] = (data[i] ?? 0) - s;
+      break;
+    case "mul":
+      for (let i = 0; i < data.length; i++) out[i] = (data[i] ?? 0) * s;
+      break;
+    case "div":
+      for (let i = 0; i < data.length; i++) out[i] = (data[i] ?? 0) / s;
+      break;
+  }
+  return out;
+}
+
+/**
+ * Mean-reduce along `axis` (negative axes count from the end), or over every
+ * element if `axis` is `undefined` (D4/D5, docs/op-w2-scalar-mean-spec.md):
+ * `sumRuntime`'s own reduction, then EXACTLY ONE division per output element
+ * by `n` — the pinned determinism decision (`sum/n` per element, NEVER
+ * `sum * (1/n)`, which rounds differently in f64). `n` is `shape[normAxis]`
+ * for the axis form, or the total input element count (`product(shape)`) for
+ * the full-reduction form — mirroring `sumRuntime`'s own axis-vs-undefined
+ * split exactly.
+ *
+ * Axis validation/normalization and the out-of-range throw are entirely
+ * `sumRuntime`'s own (this function adds no separate check) — so the thrown
+ * message is, by construction, WORD-FOR-WORD `sumRuntime`'s `reduce: axis …`
+ * stem (same guarantee D4 gave `argmaxRuntime` above, here for free via
+ * delegation rather than a hand-duplicated check). Consequently `n`'s own
+ * axis normalization below only ever runs once `sumRuntime` has already
+ * proven the axis in range.
+ *
+ * size-0 (an empty receiver, or a size-0 axis): the reduced sum is `0` and
+ * `n` is `0`, so every output element is `0/0 -> NaN` — NumPy-conformant
+ * ("mean of empty is NaN"), never a throw (unlike `argmaxRuntime`, which
+ * DOES throw on an empty/size-0-axis receiver — `mean` follows `sum`'s
+ * always-well-defined-on-size-0 precedent instead, D5).
+ */
+export function meanRuntime(
+  shape: readonly number[],
+  data: Float64Array,
+  axis: number | undefined,
+): { shape: number[]; data: Float64Array } {
+  const summed = sumRuntime(shape, data, axis);
+  let n: number;
+  if (axis === undefined) {
+    n = product(shape);
+  } else {
+    const rank = shape.length;
+    const normAxis = axis < 0 ? rank + axis : axis;
+    n = shape[normAxis] ?? 1;
+  }
+  const out = new Float64Array(summed.data.length);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = (summed.data[i] ?? 0) / n;
+  }
+  return { shape: summed.shape, data: out };
+}

@@ -248,4 +248,7 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
 Die Roadmap (Items 1–14) ist durchgespielt; neue Ops entstehen jetzt evidenzbasiert aus der
 Dogfooding-Scheibe (docs/dogfooding-rag-ergebnisse.md, Wunschliste W1–W5). **W1 (argmax/topk):
 implementiert 2026-07-20** (docs/op-w1-argmax-topk-spec.md/-ergebnisse.md, NDArray-only, kein
-WASM-Kernel). W2–W5 (Skalar-Overloads, sqrt, stack/fromRows, item/at) bleiben offen.
+WASM-Kernel). **W2 (Skalar-Overloads add/sub/mul/div + mean): implementiert 2026-07-21**
+(docs/op-w2-scalar-mean-spec.md/-ergebnisse.md, D6-v2-Overload-Umbau der vier Bestandsmethoden +
+neue `mean`-Methode nach sum-Muster, NDArray-only, kein WASM-Kernel). W3–W5 (sqrt, stack/fromRows,
+item/at) bleiben offen.

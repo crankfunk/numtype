@@ -196,3 +196,28 @@ declare module "node:child_process" {
    * than relying on this type alone. */
   export function execFileSync(command: string, args: readonly string[], options: { encoding: "utf8"; cwd?: string }): string;
 }
+
+/** W2 verify round (Verify-B finding F1 — the diagnostic-quality pin in
+ * spike/tests-runtime/scalar-mean.test.ts): that test compiles a throwaway
+ * fixture OUTSIDE the repo with the real tsc and asserts the MESSAGE
+ * CONTENT of the broadcast ShapeError (an `@ts-expect-error` cannot see
+ * message text). It needs a collision-safe temp dir (`mkdtempSync` +
+ * `tmpdir` — pid-safe, unlike a fixed path; see the parallel-test temp-dir
+ * lesson) and a child-process runner that reports status + output WITHOUT
+ * throwing on the expected non-zero exit (`spawnSync` — `execFileSync`
+ * above throws on exactly the exit this test wants to observe). Re-opened
+ * module blocks merge with the declarations above; same scoped-shim
+ * discipline as every other block in this file. */
+declare module "node:fs" {
+  export function mkdtempSync(prefix: string): string;
+}
+declare module "node:os" {
+  export function tmpdir(): string;
+}
+declare module "node:child_process" {
+  export function spawnSync(
+    command: string,
+    args: readonly string[],
+    options: { cwd?: string; encoding: "utf8" },
+  ): { status: number | null; stdout: string | null; stderr: string | null };
+}

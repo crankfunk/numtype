@@ -651,3 +651,123 @@ declare const topkMixedRankRecv: NDArray<readonly [2, 3] | readonly [5]>;
 const topkMixedRankNegK = topkMixedRankRecv.topk(-1);
 type TOPK_MIXEDRANK_NEG_K_VALUES = Expect<Equal<(typeof topkMixedRankNegK.values)["shape"], readonly [number]>>;
 type TOPK_MIXEDRANK_NEG_K_INDICES = Expect<Equal<(typeof topkMixedRankNegK.indices)["shape"], readonly [number]>>;
+
+// =============================================================================
+// Op-Scheibe W2 (docs/op-w2-scalar-mean-spec.md): scalar-overload (`add`/
+// `sub`/`mul`/`div`) + `mean` type pins.
+// =============================================================================
+
+// --- div(s): shape-preserving scalar overload (D2) — exact tuple, rank 0,
+// wide/dynamic-rank receiver, readonly-S receiver -----------------------
+
+const scalarBase = NDArray.zeros([2, 3]);
+const scalarDivided = scalarBase.div(2);
+type SCALAR_DIV_SHAPE = Expect<Equal<(typeof scalarDivided)["shape"], readonly [2, 3]>>;
+
+const scalarRank0 = NDArray.zeros([]);
+const scalarRank0Divided = scalarRank0.div(2);
+type SCALAR_DIV_RANK0 = Expect<Equal<(typeof scalarRank0Divided)["shape"], readonly []>>;
+
+// wide/dynamic-rank receiver: the scalar overload stays callable and
+// degrades exactly like the binary overload already does — never a
+// confident literal claim on an unknowable shape.
+declare const scalarWide: NDArray<readonly number[]>;
+const scalarWideDivided = scalarWide.div(2);
+type SCALAR_DIV_WIDE = Expect<Equal<(typeof scalarWideDivided)["shape"], readonly number[]>>;
+
+// Readonly-S receiver (a literal `readonly [...]` type argument threads
+// through the scalar overload identically to every other op above).
+declare const scalarReadonlyS: NDArray<readonly [4, 5]>;
+const scalarReadonlySDivided = scalarReadonlyS.div(2);
+type SCALAR_DIV_READONLY_S = Expect<Equal<(typeof scalarReadonlySDivided)["shape"], readonly [4, 5]>>;
+
+// --- union-over-boundary (D2 v2): a UNION argument spanning both the scalar
+// and the NDArray overload is rejected AS A WHOLE (TS2769), even though each
+// member alone would be valid — the exact overload-resolution kink
+// `NDArray.backend(kind)` already carries (see its doc comment, ndarray.ts).
+
+declare const scalarOrArray: number | NDArray<[3]>;
+// @ts-expect-error - a UNION argument spanning both the scalar overload and the NDArray overload is rejected as a whole (TS2769) even though each member alone is individually valid — documented D2 v2 kink, same precedent as NDArray.backend(kind) above
+scalarBase.add(scalarOrArray);
+
+// The documented narrowing workaround (`typeof x === "number" ? … : …`,
+// same recipe `backend()`'s own doc comment recommends) actually compiles
+// and resolves each branch to its own precise overload.
+declare const narrowInput: number | NDArray<[2, 3]>;
+if (typeof narrowInput === "number") {
+  const narrowedNum = scalarBase.add(narrowInput);
+  type SCALAR_NARROW_NUM = Expect<Equal<(typeof narrowedNum)["shape"], readonly [2, 3]>>;
+  void narrowedNum;
+} else {
+  const narrowedArr = scalarBase.add(narrowInput);
+  type SCALAR_NARROW_ARR = Expect<Equal<(typeof narrowedArr)["shape"], readonly [2, 3]>>;
+  void narrowedArr;
+}
+
+// --- workaround path (D3): the OLD `[1]`-wrap call still compiles and still
+// resolves through the ordinary binary overload, unaffected by the new
+// scalar overload's addition (overload-set growth is additive, not
+// replacing). ----------------------------------------------------------
+
+const scalarWorkaround = scalarBase.div(NDArray.fromArray([1], [2]));
+type SCALAR_DIV_WORKAROUND = Expect<Equal<(typeof scalarWorkaround)["shape"], readonly [2, 3]>>;
+
+// `div(nd)` stays generic/unaffected: a plain NDArray argument still resolves
+// through the broadcast overload, never mistaken for the scalar one.
+const scalarDivByArray = scalarBase.div(NDArray.zeros([3]));
+type SCALAR_DIV_BY_ARRAY = Expect<Equal<(typeof scalarDivByArray)["shape"], readonly [2, 3]>>;
+
+// --- mean: overloads 0/1/2 mirror `sum`'s own shape (D4) — WIRING pins only
+// (argmax precedent, docs/op-w1-argmax-topk-spec.md section above): proves
+// `mean` reuses `ReduceAxis`/`Guard`/`OkShape` correctly, does NOT re-litigate
+// the union-axis mini-scheibe's own 15-pin degradation family (sum-only).
+// =============================================================================
+
+// mean(): niladic -> NDArray<[]>-shaped, like `sum()` (D7) — NOT a bare
+// `number` (D4: mean stays a chainable reduction, unlike argmax()).
+const meanFlat = wArg.mean();
+type MEAN_FLAT = Expect<Equal<(typeof meanFlat)["shape"], readonly []>>;
+
+// mean(axis[, keepdims]): exact literal tuples (basic positive wiring proof).
+const meanAxis1 = wArg.mean(1);
+type MEAN_AXIS1 = Expect<Equal<(typeof meanAxis1)["shape"], readonly [2, 4]>>;
+
+const meanAxis1Keep = wArg.mean(1, true);
+type MEAN_AXIS1_KEEP = Expect<Equal<(typeof meanAxis1Keep)["shape"], readonly [2, 1, 4]>>;
+
+const meanNeg = wArg.mean(-1);
+type MEAN_NEG = Expect<Equal<(typeof meanNeg)["shape"], readonly [2, 3]>>;
+
+// mean(axis): degradations — same ReduceAxis machinery as sum/argmax, only
+// the WIRING is proven here (dyn axis, mixed rank, union axis, keepdims-union).
+
+declare const dynAxisMean: number;
+const meanDynAxis = wArg.mean(dynAxisMean);
+type MEAN_DYN_AXIS = Expect<Equal<(typeof meanDynAxis)["shape"], readonly number[]>>;
+
+declare const meanMixedRankRecv: NDArray<[2, 3] | [2, 3, 4]>;
+const meanMixedSummed = meanMixedRankRecv.mean(2);
+type MEAN_MIXED_RANK = Expect<Equal<(typeof meanMixedSummed)["shape"], readonly number[]>>;
+
+const meanUnionAxis = uAxisRecv.mean(0 as 0 | 2);
+type MEAN_UNION_AXIS = Expect<Equal<(typeof meanUnionAxis)["shape"], readonly number[]>>;
+
+declare const meanDynKeep: true | undefined;
+const meanKeepUnion = wArg.mean(1, meanDynKeep);
+type MEAN_KEEP_UNION = Expect<Equal<(typeof meanKeepUnion)["shape"], readonly [2, 4] | readonly [2, 1, 4]>>;
+
+// @ts-expect-error - axis 5 is out of range for rank-3 shape [2,3,4]: error stays at the argument (ReduceAxis reused unmodified from sum, verbatim message)
+wArg.mean(5);
+
+// Message-equality pin (mirrors ARGMAX_AXIS_OOB_MSG above): the compile-time
+// ShapeError for an out-of-range literal axis is the SAME `ReduceAxis` type
+// sum/argmax already use — proves `mean`'s axis machinery is the identical
+// import, not a re-derivation, wording byte-for-byte the `reduce:` stem
+// `sumRuntime`/`meanRuntime` throw at runtime (runtime.ts, D5).
+type MEAN_AXIS_OOB_MSG = Expect<
+  Equal<Guard<ReduceAxis<[2, 3, 4], 5>, 5>, { readonly __shapeError: "reduce: axis 5 is out of range for shape [2,3,4] (rank 3)" }>
+>;
+
+// WNDArray twin note (D7 v2, structural — not a pin): `WNDArray` has NEITHER
+// add/sub/mul/div NOR mean today, so there is no WUA-style mirror section to
+// write here — a documented absence, not an oversight (see spec D7 v2).

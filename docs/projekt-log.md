@@ -172,3 +172,94 @@ W1–W7 +804 uniform, doppelt gemessen. Prozess-Notiz: Baustein 0 fing den Expor
 dem Bau (Owner-Entscheid „Exporte ergänzen"), die MAJOR-Warnung vor LiteralIndexBounds hat die
 Implementierung nachweislich befolgt — zweite Scheibe in Folge, in der der Pre-Impl-Verifier
 den teuersten Fehler abfing.
+
+### W2: Skalar-Overloads (add/sub/mul/div) + `mean` (2026-07-21)
+
+Zweite Op-Scheibe aus der Wunschliste (docs/dogfooding-rag-ergebnisse.md W2/F2 — der
+`fromArray([1],[2])`-Skalar-Wrap-Workaround, HANDOFF-Erwartung „mean" als granularere Lücke),
+docs/op-w2-scalar-mean-spec.md (Version 2 nach Baustein-0-Addendum). Baustein 0 fing VOR dem Bau
+einen echten BLOCKER: die v1-Annahme „Skalar-Overloads = reine Insertion" war falsch — TS2394
+verbietet Overload-Signaturen vor einer body-tragenden Deklaration, die vier Bestandsmethoden
+add/sub/mul/div MÜSSEN ediert werden (kein Richtungs-Spielraum, Alternativen brechen D1/D2) →
+als erzwungene D6-v2-Ausnahme in die Spec gearbeitet (bodylose Overload-Signatur + neue
+Skalar-Overload-Signatur + neue union-typisierte Implementierungssignatur, deren Rumpf die
+ORIGINALE Logik byte-identisch in den `else`-Zweig verschiebt). Umgesetzt: `runtime.ts`
+(Append) bekommt `scalarElementwiseRuntime(op, data, s)` (String-Dispatcher, elementweise
+`data[i] op s`) und `meanRuntime` (`sumRuntime` + GENAU EINE Division pro Output-Element durch
+`n` — bewusst NICHT `sum*(1/n)`, andere f64-Rundung); `ndarray.ts` konvertiert die vier
+Bestandsmethoden nach D6-v2 (git diff bestätigt: die drei Rumpfzeilen jeder Methode erscheinen
+als reine Kontextzeilen, kein `+`/`-` — byte-identisch verschoben, nicht neu geschrieben) und
+bekommt eine neue `mean`-Methode (Overloads 0/1/2 exakt nach `sum`-Muster, KEIN
+`arguments.length`-Sonderfall nötig — anders als `argmax` geben alle `mean`-Overloads
+`NDArray<...>` zurück, die W1-Verwechslungsgefahr entfällt strukturell). D2 v2: ein
+UNION-Argument über die Overload-Grenze (`number | NDArray<B>`) wird von TS als Ganzes
+abgelehnt (TS2769) — dieselbe Kante, die `NDArray.backend(kind)` schon trägt, inkl.
+funktionierendem `typeof`-Narrowing-Workaround, per Mutationsprobe (Direktive entfernt → echter
+TS2769/TS2345 mit der vorhergesagten Message) non-vakuös bewiesen.
+
+Der bindende Determinismus-Punkt D5 (`sum/n`, nie `sum*(1/n)`) ist zweifach nicht-vakuös
+konstruiert: volle Reduktion (n=49, sum=5 → `5/49 = 0.10204081632653061` vs.
+`5*(1/49) = 0.1020408163265306`, verschiedene letzte Nachkommastelle) UND ein Achsen-Fall
+(shape=[4,49], Zeilensummen [5,9,1,2] — genau 2 von 4 Zeilen diskriminieren, die Spec-Warnung
+„nicht jedes Beispiel diskriminiert" ist damit selbst bewiesen, nicht nur zitiert). Neues Testfile
+`spike/tests-runtime/scalar-mean.test.ts` (482 Tests, in test:core registriert): expliziter
+Op×Rang(0/1/2)×Spezialwert-Katalog gegen den nativen IEEE-Operator selbst, 160 randomisierte
+`[1]`-Wrap-Byte-Äquivalenz-Fälle, ein Rang-0-Kontrast-Test gegen den ALTEN `[1]`-Wrap-Workaround
+(beweist D2s Motivation als echten Lauf), 300 randomisierte `mean`-Cross-Checks gegen eine
+unabhängig geschriebene Brute-Force-Referenz, `mean`-von-empty → NaN auf beiden
+Reduktionspfaden (Kontrast zu `argmax`, das dort wirft), Stem-Wortgleichheit, `mean(undefined,
+true)`. Typ-Pins (+19: 17 benannte `Expect<Equal<...>>` + 2 `@ts-expect-error`) in
+ndarray.test-d.ts: `div(2)`-Shape-Erhalt exakt (Rang 0/2/wide/Readonly-S), Union-über-Grenze +
+Narrowing-Workaround, `mean`-Wiring nach argmax-Präzedenz (niladisch, positive/negative Achse,
+keepdims, plus die vier von der Spec namentlich verlangten Degradationsfacetten dyn-axis/
+union-axis/mixed-rank/keepdims-union, plus OOB-Message-Pin) — bewusst mehr als die „≈4-6"-
+Schätzung des Spec-Addendums (10 statt 4–6 in der `mean`-Gruppe), weil D7 den niladischen Pin
+separat verlangt und „argmax-Muster" selbst ≈10 Pins trägt; ehrlich als Abweichung im
+Ergebnisse-Doc vermerkt statt stillschweigend übernommen.
+
+Pin-Protokoll (gestufte Attribution, empty-then-fill dekomponiert): Baseline im frischen
+Worktree exakt reproduziert (184,330 @ 136 · stress 103,719 @ 82 · browser 2,142 @ 75). ①
+runtime.ts+ndarray.ts (D6-v2 + mean): 185,204 (+874, Klassen-Surface-Wachstum). ②a neues
+Testfile LEER registriert: 187,404 @ 137 (+2,200, Order-Noise). ②b Testfile GEFÜLLT: 189,368
+(+1,964, echte Testkosten). final +test-d.ts-Pins: **190,092 @ 137 (+724)**. Gesamtwachstum
+ggü. Baseline **+5,762**, deutlich innerhalb des Absolut-Gates ≤+10,000 — zweimal gemessen,
+byte-identisch. stress: 103,719→**104,900 @ 82 (Δ+1,181)**, derselbe Klassen-Surface-
+Ripple-Mechanismus wie W1s +842 (Datei-Anzahl unverändert, `spike/tests-runtime` ist nicht Teil
+dieses Korpus), zweimal deterministisch reproduziert. browser: unverändert 2,142 @ 75, exakt.
+`bench:editor` W1–W7 verschoben sich UNIFORM um +1,181 (w1/w2/w3/w5/w6/w7); w4 (die
+Fehler-Datei mit den zwei absichtlichen Typfehlern) verschob sich um +1,220 — eine echte,
+zweifach reproduzierte, attribuierte Abweichung (die `ShapeError`/`Guard`-Diagnosepfade lösen
+sich gegen das größere Overload-Set anders auf), nicht weiter root-caused (Diagnosewert, kein
+Korrektheitsrisiko). Pins in `editor-latency.ts` aktualisiert, `check:diag`-neutral verifiziert
+(190,092 unverändert vor/nach dem reinen Daten-/Kommentar-Edit). Alle D8-Gates frisch grün:
+`pnpm check` (Dreier-Verbund), test:core 852→**1,334** (482 neu), test:resident 4278+2
+unverändert, cargo 161 unverändert (kein Rust berührt), `check:freeze`-Hash byte-identisch,
+`bench:editor` Hard-Gate PASS nach Pin-Update, `graph-a-lama query lint` 0/0, `pnpm test:example`
+weiterhin auf numtype@0.1.1, `pnpm demo` PASS (zusätzliche Absicherung). README: neuer
+eigenständiger Absatz im „What's implemented"-Abschnitt direkt nach der W1-Notiz (die
+bit-for-bit-Zeile im Usage-Codeblock bleibt unangetastet — der Block ruft `.mul()`/`.div()` nur
+mit NDArray-Argumenten auf). FOLLOWUPS: das W1-Paritätsitem um einen W2-Nachtrag erweitert
+(Skalar-Overload + `mean` fehlen auch auf `WNDArray`). Vollständige Zahlen, Diskriminator-Beispiele
+und der Byte-Erhaltungs-Nachweis: docs/op-w2-scalar-mean-ergebnisse.md. Post-Verification-Addendum
+(Verify-Runde A+B+C, Stufe 3) steht noch aus.
+
+### W2-Nachtrag: Verify-Runde, F1-Fix & Recovery (2026-07-21)
+
+Verify-Runde A+B+C: **A CONFIRMED** (drei Mutanten beißen, Byte-Erhaltung am Diff),
+**B HÄLT-mit-Befunden** mit EINEM echten MAJOR: Der Overload-Umbau ließ die Shape-Message
+des häufigsten Fehlerfalls (simpler Broadcast-Mismatch) hinter dem number-Decoy
+verschwinden — TS meldet den Fehler des LETZTEN Overload-Kandidaten, kein bestehender Pin
+sah Message-INHALT. Fix: Deklarations-Reihenfolge getauscht (Skalar zuerst, Guard-Träger
+zuletzt, jetzt bindend in Spec v3) + neuer Diagnose-Qualitäts-Pin (echter tsc-Lauf auf
+Außer-Repo-Fixture, assertiert den Broadcast-Stem; Nicht-Vakuität per Reihenfolgen-Mutant
+bewiesen; drei schmale ambient.d.ts-Shims). **C kein Verstoß** — erste Anwendung des
+M1-v5-Wortlauts (Paritätslücken-Bedingung erfüllt); ein M2-Wortlaut-Grenzfall
+(Union-über-Overload-Grenze) als v6-Kandidat nach FOLLOWUPS. **Prozess-Zwischenfall,
+offengelegt:** ein versehentliches `git checkout --` beim Mutanten-Revert warf die
+uncommittete ndarray.ts auf HEAD zurück (exakt der Fall der Template-Regel „Mutanten als
+revertierter Edit, nie checkout"); Recovery byte-genau durch den Implementierungs-Agenten
+aus dessen Kontext, erneut am Diff verifiziert. Finale Zahlen: Haupt-Pin 188,563 @ 137
+(+4,233 zur W1-Baseline), stress 104,900 @ 82, browser 2,142, test:core 1,335,
+bench:editor PASS (w4 26453), Hash byte-identisch. Damit sind die Wunschlisten-Plätze
+1 UND 2 geschlossen: `x.div(2)` liest sich als durch-2-teilen, `mean` existiert in
+allen drei Formen — der F2-Workaround der RAG-Demo ist obsolet (Rückprobe bit-identisch).

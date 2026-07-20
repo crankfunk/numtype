@@ -33,9 +33,11 @@ import {
   elementwiseBinary,
   keepDimsShape,
   matmulRuntime,
+  meanRuntime,
   normalizeSliceSpecs,
   normSqRuntime,
   product,
+  scalarElementwiseRuntime,
   sliceRuntime,
   type SliceSpec,
   sumRuntime,
@@ -356,8 +358,38 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
     return new mod.ThreadedBackend(pool, opts?.minPoolWork);
   }
 
-  /** Broadcasting elementwise add. */
-  add<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> {
+  /** Broadcasting elementwise add.
+   *
+   * Scalar overload (Op-Scheibe W2, docs/op-w2-scalar-mean-spec.md, D1/D2):
+   * `x.add(s)` for a plain `number` `s` is shape-PRESERVING (NumPy-scalar
+   * semantics, not a `[1]`-broadcast) — `NDArray<S>` in, `NDArray<S>` out,
+   * unchanged even at rank 0 (`[]` stays `[]`; the old `x.add(fromArray([1],
+   * [s]))` workaround would have turned `[]` into `[1]`, which is
+   * NumPy-false). No guard on the scalar: every finite/non-finite `number`
+   * is valid, IEEE propagation only (NaN/±Infinity), same as the existing
+   * broadcast path. A UNION argument spanning BOTH overloads (`x: number |
+   * NDArray<B>`) is rejected by TS as a whole (TS2769) even when every
+   * member would individually be valid — an inherent property of real
+   * overloads, the exact precedent already living on `NDArray.backend(kind)`
+   * above (see its doc comment): narrow with `typeof x === "number"` first
+   * if a caller genuinely needs to accept both forms through one variable.
+   *
+   * Declaration ORDER of the two overloads is LOAD-BEARING (Verify-B finding
+   * F1, W2): on a failed overload set TS surfaces the error of the LAST
+   * candidate, so the generic `Guard`-carrying overload must be declared
+   * LAST — otherwise a plain broadcast mismatch reports the scalar decoy
+   * ("not assignable to type 'number'") instead of the shape-naming
+   * `__shapeError` (M3). Resolution is unaffected: a `number` argument
+   * matches the scalar overload FIRST. Pinned by the diagnostic-quality
+   * test in scalar-mean.test.ts (asserts the broadcast stem in real tsc
+   * output — an `@ts-expect-error` alone cannot see message content). */
+  add(s: number): NDArray<S>;
+  add<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>>;
+  add<B extends Shape>(other: number | Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
+    if (typeof other === "number") {
+      const data = scalarElementwiseRuntime("add", this.data, other);
+      return new NDArray<S>(this.shape as unknown as S, data);
+    }
     const o = other as unknown as NDArray<B>;
     const { shape, data } = elementwiseBinary(this.shape, this.data, o.shape, o.data, (x, y) => x + y);
     return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, data);
@@ -365,16 +397,44 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
 
   /** Broadcasting elementwise subtract (Kern 07). Structural mirror of
    * `add` — same `Broadcast`/`Guard`/`OkShape` pattern, pinned closure
-   * `(x, y) => x - y`. */
-  sub<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> {
+   * `(x, y) => x - y`.
+   *
+   * Scalar overload (Op-Scheibe W2, docs/op-w2-scalar-mean-spec.md, D1/D2):
+   * structural mirror of `add`'s own scalar overload — shape-preserving
+   * NumPy-scalar semantics (rank 0 stays `[]`), no guard on the scalar
+   * (IEEE propagation only), pinned closure `x - s`. Same documented
+   * union-over-boundary rejection (TS2769), the same LOAD-BEARING overload
+   * order (scalar first, generic Guard-carrier last — Verify-B F1), and
+   * `NDArray.backend(kind)` precedent as `add` above — see its doc comment. */
+  sub(s: number): NDArray<S>;
+  sub<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>>;
+  sub<B extends Shape>(other: number | Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
+    if (typeof other === "number") {
+      const data = scalarElementwiseRuntime("sub", this.data, other);
+      return new NDArray<S>(this.shape as unknown as S, data);
+    }
     const o = other as unknown as NDArray<B>;
     const { shape, data } = elementwiseBinary(this.shape, this.data, o.shape, o.data, (x, y) => x - y);
     return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, data);
   }
 
   /** Broadcasting elementwise multiply (Kern 07). Structural mirror of
-   * `add` — pinned closure `(x, y) => x * y`. */
-  mul<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> {
+   * `add` — pinned closure `(x, y) => x * y`.
+   *
+   * Scalar overload (Op-Scheibe W2, docs/op-w2-scalar-mean-spec.md, D1/D2):
+   * structural mirror of `add`'s own scalar overload — shape-preserving
+   * NumPy-scalar semantics (rank 0 stays `[]`), no guard on the scalar
+   * (IEEE propagation only), pinned closure `x * s`. Same documented
+   * union-over-boundary rejection (TS2769), the same LOAD-BEARING overload
+   * order (scalar first, generic Guard-carrier last — Verify-B F1), and
+   * `NDArray.backend(kind)` precedent as `add` above — see its doc comment. */
+  mul(s: number): NDArray<S>;
+  mul<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>>;
+  mul<B extends Shape>(other: number | Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
+    if (typeof other === "number") {
+      const data = scalarElementwiseRuntime("mul", this.data, other);
+      return new NDArray<S>(this.shape as unknown as S, data);
+    }
     const o = other as unknown as NDArray<B>;
     const { shape, data } = elementwiseBinary(this.shape, this.data, o.shape, o.data, (x, y) => x * y);
     return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, data);
@@ -384,8 +444,26 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * — pinned closure `(x, y) => x / y`. Pure IEEE 754: no zero checks, no
    * throws (`x/0 -> +/-Infinity`, `0/0 -> NaN`, signed zeros/infinities
    * propagate per the standard — a documented divergence from NumPy, which
-   * additionally warns; see spec). */
-  div<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> {
+   * additionally warns; see spec).
+   *
+   * Scalar overload (Op-Scheibe W2, docs/op-w2-scalar-mean-spec.md, D1/D2):
+   * `x.div(s)` reads as "divide by `s`" — shape-preserving NumPy-scalar
+   * semantics (rank 0 stays `[]`, no `[1]`-broadcast temp), no guard on the
+   * scalar (same pure-IEEE contract as above: `x/0 -> +/-Infinity`, `0/0 ->
+   * NaN`, no special-casing). Same documented union-over-boundary rejection
+   * (TS2769), the same LOAD-BEARING overload order (scalar first, generic
+   * Guard-carrier last — Verify-B F1), and `NDArray.backend(kind)`
+   * precedent as `add` above — see its doc comment. The old
+   * `x.div(fromArray([1], [s]))` `[1]`-wrap workaround still compiles and
+   * still works (byte-identical to this overload for rank >= 1, D3), just
+   * no longer necessary. */
+  div(s: number): NDArray<S>;
+  div<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>>;
+  div<B extends Shape>(other: number | Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
+    if (typeof other === "number") {
+      const data = scalarElementwiseRuntime("div", this.data, other);
+      return new NDArray<S>(this.shape as unknown as S, data);
+    }
     const o = other as unknown as NDArray<B>;
     const { shape, data } = elementwiseBinary(this.shape, this.data, o.shape, o.data, (x, y) => x / y);
     return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, data);
@@ -626,5 +704,50 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
       values: new NDArray<OkShape<TopkShape<S, K>>>([kNum] as unknown as OkShape<TopkShape<S, K>>, values),
       indices: new NDArray<OkShape<TopkShape<S, K>>>([kNum] as unknown as OkShape<TopkShape<S, K>>, indices),
     };
+  }
+
+  /** Mean-reduce along `axis` (negative axes count from the end); omit
+   * `axis` to average every element down to a rank-0 array (Op-Scheibe W2,
+   * docs/op-w2-scalar-mean-spec.md, D1/D4): overloads 0/1/2 are EXACTLY
+   * `sum`'s own shape (same `ReduceAxis`/`Guard`/`OkShape` machinery,
+   * `reduce.ts` unchanged) — `mean` is a reduction like `sum`, not a
+   * scalar-consumer op like `dot`/`norm`/`argmax()`, so it stays chainable
+   * and returns `NDArray<...>`, never a bare `number`. Pass `keepdims =
+   * true` for the same size-1-instead-of-removed semantics `sum` documents.
+   *
+   * Runtime composition (D5, pinned order): `meanRuntime` = `sumRuntime`,
+   * then EXACTLY ONE division per output element by `n` (`shape[axis]` for
+   * the axis form, the total input element count for the full-reduction
+   * form) — deliberately NOT `sum * (1/n)`, which rounds differently in f64;
+   * see `runtime.ts`'s `meanRuntime` doc comment for the full determinism
+   * note. Because the axis validation is entirely `sumRuntime`'s own, a
+   * bad literal/dynamic axis throws the identical `reduce: axis …` stem
+   * `sum` throws (M3) — no separate `mean`-specific message exists.
+   *
+   * size-0 disclosure (D5): the mean of an empty receiver, or of a size-0
+   * axis, is `0/0 -> NaN` (NumPy-conformant), never a throw — unlike
+   * `argmax()`, which throws on the same input. A caller relying on `mean`
+   * to reject an empty input the way `argmax` does will be surprised;
+   * this is a deliberate, disclosed divergence between the two reductions,
+   * not an oversight. */
+  mean(): NDArray<OkShape<ReduceAxis<S, undefined, false>>>;
+  mean<const Axis extends number | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, false>>>;
+  mean<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims: KeepDims,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>;
+  mean<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
+    axis?: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims?: KeepDims,
+  ): NDArray<any> {
+    const axisNum = axis as unknown as Axis | undefined;
+    const { shape, data } = meanRuntime(this.shape, this.data, axisNum);
+    const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : shape;
+    return new NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>(
+      outShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
+      data,
+    );
   }
 }
