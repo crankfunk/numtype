@@ -189,6 +189,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: examples/rag-demo/pnpm-lock.yaml
       - run: pnpm -C examples/rag-demo install --frozen-lockfile
+      # Registry tripwire: fails as soon as the registry's `latest` major.minor
+      # differs from what the example installs — a release without the example
+      # dependency bump turns this job red instead of silently testing the old
+      # version forever (owner decision 2026-07-20, option b).
+      - run: node scripts/check-example-registry-drift.mjs
       - run: pnpm -C examples/rag-demo run check
       - run: pnpm -C examples/rag-demo run demo
 

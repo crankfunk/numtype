@@ -34,8 +34,10 @@ verifiziert, Playground läuft TS 6.0.3) ist das Erlebe-es-selbst-Asset für HN/
 (2) Dogfooding-Scheibe — **ERLEDIGT 2026-07-20** (examples/rag-demo konsumiert das
 veröffentlichte Paket aus der Registry, CI-Job `example`, kuratierte Op-Wunschliste W1–W5 in
 docs/dogfooding-rag-ergebnisse.md: argmax/topk > Skalar-Overloads > sqrt > stack > item;
-dreifach verifiziert; offene Owner-Fragen in FOLLOWUPS: Z2-Einordnung des Registry-Korpus +
-Example-Dep-Bump je Release); (3) Scale-Probe als bindende Spec („unproven at scale" → gemessen).
+dreifach verifiziert; Z2-Frage Owner-entschieden 2026-07-20 = Option (b): Registry-Tripwire
+`scripts/check-example-registry-drift.mjs` in test:example + CI-Job, erzwingt den
+Example-Dep-Bump je Release mechanisch); (3) Scale-Probe als bindende Spec („unproven at
+scale" → gemessen).
 FOLLOWUPS-Minis nebenher; Trusted Publishing optional (Fakten in FOLLOWUPS).
 Repo-Härtung aktiv seit 2026-07-20: Rulesets `protect-main` (kein Force-Push/Delete auf main —
 gilt auch für den Owner; bewusste Ausnahme nur via Ruleset-Deaktivierung) +

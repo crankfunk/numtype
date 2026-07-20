@@ -346,3 +346,17 @@ frische Kontexte), plus mechanisches covenant-check.sh + `graph-a-lama query lin
 
 Nach den Befund-Fixes wurden die betroffenen Gates erneut gefahren (test:example,
 GFM über alle geänderten .md; Zahlen im Commit-Gate-Block der Session).
+
+### Nachtrag zum Addendum (2026-07-20, nach Owner-Entscheid)
+
+Der offene Z2-Punkt aus Baustein C ist entschieden: **Option (b), mechanischer
+Registry-Tripwire** — `scripts/check-example-registry-drift.mjs` läuft in
+`test:example` und im CI-Job `example` nach dem Install und failt, sobald
+Registry-`latest` eine andere Major.Minor trägt als die installierte
+Example-Version (Patch-Drift bewusst toleriert, SemVer-Politik). Das „stille
+Rotten zwischen Releases" ist damit strukturell unmöglich; der manuelle
+Release-Bump bleibt als FOLLOWUPS-Checklisten-Punkt, wird aber vom Gate
+erzwungen. Nicht-Vakuität bewiesen: simulierte 0.2.0-Drift in
+node_modules → Exit 1 mit Bump-Anweisung; fehlender Install → Exit 1;
+Restore → Exit 0. COVENANT.md bleibt unverändert auf v4 (Option (a),
+Text-Präzisierung, bewusst nicht genommen — nach (b) Kür, kein Loch).
