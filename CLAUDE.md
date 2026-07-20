@@ -37,7 +37,11 @@ docs/dogfooding-rag-ergebnisse.md: argmax/topk > Skalar-Overloads > sqrt > stack
 dreifach verifiziert; Z2-Frage Owner-entschieden 2026-07-20 = Option (b): Registry-Tripwire
 `scripts/check-example-registry-drift.mjs` in test:example + CI-Job, erzwingt den
 Example-Dep-Bump je Release mechanisch); (3) Scale-Probe als bindende Spec („unproven at
-scale" → gemessen).
+scale" → gemessen). Erste Op-Scheibe aus der Wunschliste: **W1 (argmax/topk) — ERLEDIGT
+2026-07-20, dreifach verifiziert** (docs/op-w1-argmax-topk-spec.md v4 /-ergebnisse.md;
+NDArray-only, kein WASM-Kernel — FOLLOWUPS: WNDArray/Threaded-Parität + M1-Präzisierungs-
+Empfehlung; der stress-Pin-Ripple +842 ist als legitime Klassen-Surface-Typkosten
+akzeptiert und neu gepinnt, Spec-v3-Korrektur).
 FOLLOWUPS-Minis nebenher; Trusted Publishing optional (Fakten in FOLLOWUPS).
 Repo-Härtung aktiv seit 2026-07-20: Rulesets `protect-main` (kein Force-Push/Delete auf main —
 gilt auch für den Owner; bewusste Ausnahme nur via Ruleset-Deaktivierung) +
@@ -60,11 +64,13 @@ Session-Zustand).
 - **Artefakt-Hash** (Clean-Rebuild, SHA256 von `spike/src/wasm/numtype_core.wasm`):
   `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` (seit Kern 11; CI-Gate
   `check:freeze` mit plattform-gelabelter Pin-Menge).
-- **check:diag** Haupt-Pin **187,918 @ 135 Files** (nur Root-Korpus) · **check:diag:stress
-  102,877 @ 82** · **check:diag:browser 2,142 @ 75** (stress/browser ungated by design,
+- **check:diag** Haupt-Pin **184,330 @ 136 Files** (nur Root-Korpus; seit W1 — Netto-Abnahme von
+  187,918 trotz neuer Maschinerie, Order-Noise-dominiert; 184,225 nach Implementierung + 105
+  durch zwei Post-Verify-Policy-Pins, siehe docs/op-w1-argmax-topk-ergebnisse.md)
+  · **check:diag:stress 103,719 @ 82** (Δ+842 zu 102,877 seit W1 — offener Befund, siehe dort) ·
+  **check:diag:browser 2,142 @ 75** (unverändert, stress/browser ungated by design,
   `pnpm check` compoundet alle drei).
-- **Testzahlen:** test:core 822 (818 war vorbestehende Drift — 822 auch am Vor-Scheiben-HEAD
-  7fbdb28 im frischen Worktree gemessen, Verify-A der Dogfooding-Scheibe) · test:resident 4278+2 ·
+- **Testzahlen:** test:core 852 (822 + 30 aus W1) · test:resident 4278+2 ·
   test:threaded 69 · test:browser 4 · test:package 3 + Typ-Smoke · cargo 161 · test:example
   (Registry-Install + Example-Typcheck + 8 asserted Queries).
 - **Editor-Gate:** `bench:editor` W1–W7 — Instantiation-Pins exact-match hart, Latenz am

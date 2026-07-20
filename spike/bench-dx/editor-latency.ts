@@ -689,14 +689,26 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // Measured 2026-07-17, macos-arm64 / tsc 7.0.2. Cross-platform stability is
 // checked by the first CI run (spec §6); if a Linux run differs, evolve this to
 // a platform-labelled set like scripts/check-freeze-hash.mjs.
+//
+// Re-measured 2026-07-20 (Op-Scheibe W1, docs/op-w1-argmax-topk-spec.md, D7):
+// `NDArray.argmax`/`.topk` add two overloaded generic methods to the class
+// surface every workload instantiates `NDArray<S>` against — a UNIFORM
+// +804 shift across all seven workloads (measured twice, byte-identical
+// both times), independent of each workload's own subject matter. Pins
+// updated per D7's explicit allowance ("bench:editor-Instantiation-Pins
+// dürfen sich durch die ndarray.ts-Surface-Erweiterung verschieben"); the
+// prior values are preserved in the same commit's diff for the
+// before/after record. Latency medians and the correctness gate
+// (`printGateVerdict`) were unaffected (still PASS, still under the 2x
+// ceiling) — only these exact counts moved.
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 24305,
-  w2: 26114,
-  w3: 57254,
-  w4: 24466,
-  w5: 29759,
-  w6: 30929,
-  w7: 23477,
+  w1: 25109,
+  w2: 26918,
+  w3: 58058,
+  w4: 25270,
+  w5: 30563,
+  w6: 31733,
+  w7: 24281,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

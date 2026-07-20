@@ -25,6 +25,7 @@ import type { MatMul } from "./matmul.ts";
 import type { ReduceAxis, Transpose } from "./reduce.ts";
 import type { ReshapeCheck } from "./reshape.ts";
 import {
+  argmaxRuntime,
   assertReshapeArgs,
   assertVectorPair,
   computeStrides,
@@ -38,11 +39,12 @@ import {
   sliceRuntime,
   type SliceSpec,
   sumRuntime,
+  topkRuntime,
   transposeRuntime,
 } from "./runtime.ts";
 import type { LiteralShapeProduct } from "./literal-arithmetic.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "./slice.ts";
-import type { DotCheck } from "./vector.ts";
+import type { DotCheck, TopkCheck, TopkShape } from "./vector.ts";
 import { checkThreadedEnv, WasmBackend, type BackendKind, type ThreadedBackendOptions } from "./wasm/backend-api.ts";
 import { initCore } from "./wasm/loader.ts";
 import type { ThreadedBackend } from "./wasm/threaded.ts";
@@ -538,5 +540,91 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
       return out;
     };
     return build(0, 0);
+  }
+
+  /** Index of the maximum element (Op-Scheibe W1,
+   * docs/op-w1-argmax-topk-spec.md): `argmax()` (no axis) returns the index
+   * into the ROW-MAJOR FLATTENING of every element (NumPy's `np.argmax(a)`
+   * without an axis) — a deliberate departure from every other op above,
+   * which stays inside the `NDArray` world: `argmax()`, like `dot`/`norm`/
+   * `cosineSimilarity`, is a scalar-consumer op that TERMINATES a chain
+   * (D2). `argmax(axis)`/`argmax(axis, keepdims)` instead stay inside the
+   * `NDArray` world, mirroring `sum`'s own Arity-0/1/2 overload shape
+   * exactly (same `ReduceAxis`/`Guard`/`OkShape` machinery, UNCHANGED —
+   * reduce.ts is not touched by this slice). Total order (D4, pinned): NaN
+   * counts as MAXIMAL (NumPy `argmax` behavior); ties (including `0`/`-0`,
+   * compared via plain `>`, never `Object.is`) are broken by the FIRST
+   * index. A niladic call has no argument to hang a compile-time guard on
+   * (same reasoning as `norm()` above) — an empty receiver is a pure
+   * runtime throw, never a compile-time claim.
+   *
+   * Result data is always an f64-encoded INTEGRAL index (this codebase is
+   * f64-only throughout — `NDArray.data` is always a `Float64Array`, so an
+   * index like `3` is stored as the exact double `3.0`, safely
+   * round-trippable since every index here stays far below
+   * `Number.MAX_SAFE_INTEGER`).
+   *
+   * Surface asymmetry (D1, disclosed): `argmax`/`topk` exist ONLY on this
+   * naive `NDArray` — no WASM kernel, no `WNDArray`/threaded parity yet
+   * (FOLLOWUPS.md tracks the follow-up). */
+  argmax(): number;
+  argmax<const Axis extends number | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, false>>>;
+  argmax<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims: KeepDims,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>;
+  argmax<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
+    axis?: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims?: KeepDims,
+  ): NDArray<any> | number {
+    // `arguments.length`, not `axis === undefined`: the TRULY niladic
+    // overload (`argmax()`, zero arguments -> `number`) is a DIFFERENT
+    // overload from the 1-/2-arg forms with an axis value that happens to
+    // BE `undefined` (`argmax(undefined)` / `argmax(undefined, true)` ->
+    // full-reduction `NDArray<...>`, mirroring `sum(undefined[, keepdims])`
+    // above exactly) — TS's own overload resolution already distinguishes
+    // these by ARGUMENT COUNT at the call site (D2), so the implementation
+    // must too, or a 2-arg `argmax(undefined, true)` call would silently
+    // fall through to the bare-`number` branch and drop `keepdims`.
+    if (arguments.length === 0) {
+      const flat = argmaxRuntime(this.shape, this.data, undefined);
+      return flat.data[0] ?? 0;
+    }
+    const axisNum = axis as unknown as Axis | undefined;
+    const { shape, data } = argmaxRuntime(this.shape, this.data, axisNum);
+    const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : shape;
+    return new NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>(
+      outShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
+      data,
+    );
+  }
+
+  /** Top-`k` values + indices along a rank-1 receiver (Op-Scheibe W1,
+   * docs/op-w1-argmax-topk-spec.md, D3): `torch.topk`'s shape — BOTH
+   * `values` and `indices`, since retrieval-style ranking needs both and
+   * there is no `gather`/`take` op (yet) to recover one from the other.
+   * Rank-1-only, `DotCheck`-family precedent for WHERE the error surfaces:
+   * a receiver-rank problem is reported AT THE `k` ARGUMENT (`TopkCheck`,
+   * vector.ts), same reasoning `dot`/`cosineSimilarity` already establish
+   * above. `k = 0` and `k = length` are both valid (an empty result / the
+   * whole vector, sorted). Total order (D4, pinned, same NaN-is-maximal
+   * rule as `argmax`): NaN entries first (by ascending index among
+   * themselves), then descending by value, ties broken by ascending index —
+   * `values[i] === data[indices[i]]` exactly (a `Float64Array`-to-
+   * `Float64Array` copy, so a NaN's exact bit payload survives).
+   *
+   * Same f64-index and surface-asymmetry notes as `argmax` above apply to
+   * `indices`. */
+  topk<const K extends number>(
+    k: Guard<TopkCheck<S, K>, K>,
+  ): { values: NDArray<OkShape<TopkShape<S, K>>>; indices: NDArray<OkShape<TopkShape<S, K>>> } {
+    const kNum = k as unknown as K;
+    const { values, indices } = topkRuntime(this.shape, this.data, kNum);
+    return {
+      values: new NDArray<OkShape<TopkShape<S, K>>>([kNum] as unknown as OkShape<TopkShape<S, K>>, values),
+      indices: new NDArray<OkShape<TopkShape<S, K>>>([kNum] as unknown as OkShape<TopkShape<S, K>>, indices),
+    };
   }
 }

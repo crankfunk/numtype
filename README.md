@@ -277,6 +277,11 @@ bit-identical to the JS reference. The op surface is deliberately narrow (constr
 conversion, `add`/`sub`/`mul`/`div`, `matmul`, `sum` with `keepdims`, `transpose`, `slice`,
 `reshape`/`flatten`, `dot`/`norm`/`cosineSimilarity`) — a *minimum viable* NumPy, not a clone.
 
+**`argmax`/`topk`** (ranking primitives — index of the maximum element, and the top-`k` values +
+indices of a 1-D vector) are also available on `NDArray`, but — unlike every op listed above —
+**TypeScript-runtime surface only, no WASM kernel yet**: a deliberate, disclosed surface
+asymmetry, not an oversight.
+
 For the full per-phase specifications, results, and the competitive analysis, start at the
 [research-notes reading guide](docs/README.md) (curated entry points by interest) or the
 [roadmap](docs/roadmap.md). Internal research notes are partly in German — the guide says

@@ -242,3 +242,10 @@ Spec → Implementierung → Fresh-Context-Verify → Ergebnisdoc → KB-Capture
 - Differentialtests inkl. Spezialwerte grün; CI reproduziert alle Gates inkl. Freeze-Hash.
 - Threads entweder browser-fähig oder sauber als Node-only/experimentell abgegrenzt.
 - USP-Qualifikationen (Geltungsbereich, „im Maßstab unbewiesen") stehen wörtlich in README/Docs.
+
+## Post-Roadmap: Op-Wunschliste (OSS-Wachstumskurs, seit 2026-07-20)
+
+Die Roadmap (Items 1–14) ist durchgespielt; neue Ops entstehen jetzt evidenzbasiert aus der
+Dogfooding-Scheibe (docs/dogfooding-rag-ergebnisse.md, Wunschliste W1–W5). **W1 (argmax/topk):
+implementiert 2026-07-20** (docs/op-w1-argmax-topk-spec.md/-ergebnisse.md, NDArray-only, kein
+WASM-Kernel). W2–W5 (Skalar-Overloads, sqrt, stack/fromRows, item/at) bleiben offen.

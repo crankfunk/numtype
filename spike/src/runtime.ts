@@ -535,3 +535,162 @@ export function keepDimsShape(shape: readonly number[], axis: number | undefined
   const normAxis = axis < 0 ? rank + axis : axis;
   return shape.map((d, i) => (i === normAxis ? 1 : d));
 }
+
+// ---------------------------------------------------------------------------
+// Op-Scheibe W1 (docs/op-w1-argmax-topk-spec.md): argmax/topk runtime
+// reference. Appended strictly after all pre-existing content in this file
+// (freeze discipline — every line above this point is byte-for-byte
+// unchanged). Pure reference functions with NO kernel counterpart (D1/M1 —
+// this slice adds no WASM surface at all, unlike every op above).
+// ---------------------------------------------------------------------------
+
+/** Does `el` beat the current running maximum `max` (D4's pinned total
+ * order, shared by `argmaxRuntime` and `topkRuntime`'s comparator below)?
+ * NaN counts as MAXIMAL (NumPy `argmax` behavior) — an element beats the
+ * max iff it's a NaN the max isn't, or it's numerically greater; a tie
+ * (including `0`/`-0`, compared via plain `>`, never `Object.is`, and
+ * including NaN-vs-NaN) leaves the max/first-seen index in place, since
+ * callers only ever call this as a strict "does the NEW element win"
+ * challenger check (never `>=`). */
+function beatsMax(el: number, max: number): boolean {
+  return (Number.isNaN(el) && !Number.isNaN(max)) || el > max;
+}
+
+/**
+ * Index of the maximum element (Op-Scheibe W1, D4): niladic (`axis ===
+ * undefined`) flattens row-major over every element, mirroring
+ * `sumRuntime`'s own "reduce everything" branch exactly (same `{shape: [],
+ * data: Float64Array.from([...])}` return shape — `NDArray.argmax()`
+ * unwraps `.data[0]` to produce the public `number` result, D2). An empty
+ * receiver throws (`argmax` has no answer for zero elements); the message
+ * stem is pinned, compile-time-unreachable (no static claim is possible for
+ * a niladic call — no argument to hang a `Guard` on, D2).
+ *
+ * `axis` normalization/validation is EXACTLY `sumRuntime`'s own (same
+ * negative-axis wraparound, same out-of-range throw, WORD-FOR-WORD the same
+ * message stem as `runtime.ts:222` above — the compile-time `ReduceAxis`
+ * guard this function's caller reuses unmodified produces that exact string
+ * as ITS OWN message, D4). Unlike `sumRuntime`, an axis whose OWN dim is `0`
+ * also throws (the empty-receiver stem) — summing zero elements is `0`, a
+ * well-defined answer; taking the argmax of zero candidates is not.
+ */
+export function argmaxRuntime(
+  shape: readonly number[],
+  data: Float64Array,
+  axis: number | undefined,
+): { shape: number[]; data: Float64Array } {
+  if (axis === undefined) {
+    if (data.length === 0) {
+      throw new Error(`argmax: attempt to get argmax of an empty array`);
+    }
+    let maxIdx = 0;
+    let maxVal = data[0] ?? 0;
+    for (let i = 1; i < data.length; i++) {
+      const v = data[i] ?? 0;
+      if (beatsMax(v, maxVal)) {
+        maxVal = v;
+        maxIdx = i;
+      }
+    }
+    return { shape: [], data: Float64Array.from([maxIdx]) };
+  }
+
+  const rank = shape.length;
+  const normAxis = axis < 0 ? rank + axis : axis;
+  if (normAxis < 0 || normAxis >= rank) {
+    throw new Error(`reduce: axis ${axis} is out of range for shape [${shape.join(",")}] (rank ${rank})`);
+  }
+  const axisDim = shape[normAxis] ?? 1;
+  if (axisDim === 0) {
+    throw new Error(`argmax: attempt to get argmax of an empty array`);
+  }
+
+  const outShape = [...shape.slice(0, normAxis), ...shape.slice(normAxis + 1)];
+  const strides = computeStrides(shape);
+  const outStrides = computeStrides(outShape);
+  const outSize = product(outShape);
+  const out = new Float64Array(outSize);
+  const axisStride = strides[normAxis] ?? 0;
+
+  for (let outFlat = 0; outFlat < outSize; outFlat++) {
+    const idx = unravel(outFlat, outShape, outStrides);
+    let baseOffset = 0;
+    let outAxis = 0;
+    for (let inAxis = 0; inAxis < rank; inAxis++) {
+      if (inAxis === normAxis) continue;
+      baseOffset += (idx[outAxis] ?? 0) * (strides[inAxis] ?? 0);
+      outAxis++;
+    }
+    let maxIdx = 0;
+    let maxVal = data[baseOffset] ?? 0;
+    for (let a = 1; a < axisDim; a++) {
+      const v = data[baseOffset + a * axisStride] ?? 0;
+      if (beatsMax(v, maxVal)) {
+        maxVal = v;
+        maxIdx = a;
+      }
+    }
+    out[outFlat] = maxIdx;
+  }
+  return { shape: outShape, data: out };
+}
+
+/** `topk`'s selection-order comparator (D4): NaN entries sort first; among
+ * two non-NaN entries, the larger VALUE sorts first. A tie (either two NaNs,
+ * or two equal non-NaN values, `0`/`-0` included via plain `>`/`<`, never
+ * `Object.is`) is left to the caller's trailing `|| (i - j)` index
+ * tiebreak — this function alone only orders by value, returning a negative
+ * number when `a` should sort before `b` (the `Array.prototype.sort`
+ * comparator contract). */
+function topkCompareValues(a: number, b: number): number {
+  const aNaN = Number.isNaN(a);
+  const bNaN = Number.isNaN(b);
+  if (aNaN && bNaN) return 0;
+  if (aNaN) return -1;
+  if (bNaN) return 1;
+  if (a > b) return -1;
+  if (a < b) return 1;
+  return 0;
+}
+
+/**
+ * Top-`k` values + indices of a rank-1 `data` (Op-Scheibe W1, D4). Validated
+ * in the SAME order, with the SAME message stems, as the compile-time
+ * `TopkCheck` (vector.ts): rank first, then `k`'s own validity (non-integer
+ * or negative), then `k` against the vector's length. `k = 0` and `k =
+ * length` both succeed (an empty result / the whole vector, sorted).
+ *
+ * Selection order: every index is sorted by `topkCompareValues` (NaN first,
+ * then descending value), ties broken by ascending index — the first `k`
+ * entries of that order become the result. `values[i] = data[indices[i]]`
+ * is a plain `Float64Array`-element read/copy (never routed through any
+ * arithmetic), so a NaN's exact bit payload survives untouched.
+ */
+export function topkRuntime(
+  shape: readonly number[],
+  data: Float64Array,
+  k: number,
+): { values: Float64Array; indices: Float64Array } {
+  if (shape.length !== 1) {
+    throw new Error(`topk: expected a 1-D vector (got shape [${shape.join(",")}])`);
+  }
+  if (!Number.isInteger(k) || k < 0) {
+    throw new Error(`topk: k must be a non-negative integer (got ${k})`);
+  }
+  const n = shape[0] ?? 0;
+  if (k > n) {
+    throw new Error(`topk: k=${k} exceeds the vector length ${n}`);
+  }
+
+  const order = Array.from({ length: n }, (_, i) => i);
+  order.sort((i, j) => topkCompareValues(data[i] ?? 0, data[j] ?? 0) || i - j);
+
+  const values = new Float64Array(k);
+  const indices = new Float64Array(k);
+  for (let i = 0; i < k; i++) {
+    const srcIdx = order[i] ?? 0;
+    indices[i] = srcIdx;
+    values[i] = data[srcIdx] ?? 0;
+  }
+  return { values, indices };
+}

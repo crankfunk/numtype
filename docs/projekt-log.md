@@ -80,3 +80,95 @@ verify): Z1/S1/M1–M5/Nicht-Ziele halten; EIN mittlerer Z2-Befund, unverdünnt:
 ein Bauergebnis des AKTUELLEN Commits, test:example ein eingefrorenes Registry-Artefakt eines
 VERGANGENEN — der Korpus rottet „still zwischen Releases". Owner-Entscheidung offen (FOLLOWUPS:
 Covenant-v5-Präzisierung vs. mechanischer Registry-Tripwire), keine stille Auflösung.
+
+## Op-Scheibe W1 — `argmax`/`topk` auf `NDArray` (2026-07-20, post-Roadmap)
+
+Erste konkrete Op aus der Dogfooding-Wunschliste (docs/dogfooding-rag-ergebnisse.md, W1/F4 —
+argmax trat zweimal auf, null Ersatz in der Surface). Bindende Spec
+(docs/op-w1-argmax-topk-spec.md, v2 nach Baustein-0-Addendum): D1 grenzt bewusst auf die naive
+JS-Klasse ein (kein WASM-Kernel, keine `WNDArray`/Threaded-Parität — FOLLOWUPS-Eintrag). `argmax`
+übernimmt exakt `sum`s Arity-0/1/2-Overload-Muster (`ReduceAxis`/`Guard`/`OkShape` unverändert
+wiederverwendet), mit EINER bewussten Abweichung: die niladische Form gibt `number` zurück
+(Scalar-Consumer-Präzedenz von `dot`/`norm`/`cosineSimilarity`), nicht `NDArray<[]>`. `topk`
+(Rang-1-only, `{values, indices}` im `torch.topk`-Stil) brauchte neue Typ-Maschinerie —
+`TopkCheck<S,K>`/`TopkShape<S,K>` in vector.ts, appended, wiederverwendet die bestehende
+Digit-String-Arithmetik aus literal-arithmetic.ts (`Compare`+`NonNegDigits`, minimal exportiert —
+vorher unexportiert, Baustein-0-Blocker, Owner-Entscheidung „Exporte ergänzen"), NICHT
+`LiteralIndexBounds` (dessen Index-Semantik `k=D` fälschlich als „out" und negatives `k`
+fälschlich als „in" klassifiziert hätte — empirisch bewiesen, als verbindliche Warnung in die
+Spec eingearbeitet). Datei-Disziplin D5 v2: runtime.ts/vector.ts zeigen im Diff AUSSCHLIESSLICH
+Additionen nach dem letzten Bestandscode (vector.ts brauchte dafür einen zweiten, eigenständigen
+`import`-Block statt die bestehende Zeile zu erweitern); ndarray.ts-Klassenkörper insertion-only,
+Import-Zeilen am Dateikopf erweitert (Präzedenz: `sum`s eigene Importzeile wuchs genauso über
+mehrere Kerne).
+
+Zwei echte Befunde während der Implementierung, beide gefangen und gefixt VOR dem Commit: (1)
+`argmax(undefined, true)` fiel erst fälschlich in den niladischen `number`-Zweig (Check war
+`axisNum === undefined` statt `arguments.length === 0` — TS unterscheidet die Overloads nach
+Argument-ANZAHL an der Call-Site, nicht nach Wert; ein 2-Arg-Aufruf mit Achsenwert `undefined`
+verwarf so still `keepdims`), reproduzierbar rot vor dem Fix, grün danach. (2) Ein Test mit
+handkonstruierter NICHT-kanonischer NaN-Payload (`0x7FF800000000DEAD`) zeigte gelegentlich die
+kanonische statt die echte Payload — bisektiert auf eine V8-JIT-Tier-Eigenheit des bestehenden
+`bitsOf`-Helfers (`new Float64Array([x])`-Array-Literal-Konstruktion), NICHT auf `topkRuntime`
+selbst (separat per direktem `DataView`-Buffer-Read 5/5-mal als korrekt bewiesen); Test auf einen
+lokalen `bitsAt`-Helfer umgestellt (Buffer-Read statt Array-Literal), seither deterministisch
+grün über mehrere volle Testfile-Läufe.
+
+Pin-Protokoll (D7 v2, gestufte Attribution, alle Zwischenpunkte gemessen): Baseline im frischen
+Worktree exakt reproduziert (187,918 @ 135 · stress 102,877 @ 82 · browser 2,142 @ 75). ①
+runtime.ts+ndarray.ts(nur argmax)+literal-arithmetic-Exporte: 188,383 (+465). ② +vector.ts-
+Maschinerie+ndarray.ts-topk: 188,726 (+343). ③a neues Testfile LEER registriert: 179,186 @ 136
+(−9,540 — Order-Noise, Datei-Hinzufügen reshuffelt die Fresh-vs-Cached-Instantiation-Partition,
+deutlich über dem „±≈2,000"-Präzedenzfall, aber dieselbe dokumentierte Mechanik). ③b Testfile
+GEFÜLLT: 182,249 (+3,063 echte Testkosten). final +test-d.ts-Pins: **184,225 @ 136 (+1,976)**.
+Gesamtwachstum ggü. Baseline: **−3,693 — eine NETTO-ABNAHME**, weit innerhalb des
+Absolut-Gates ≤+12,000 (Order-Noise dominiert die echten Neukosten). Zweimal gemessen,
+byte-identisch. `bench:editor` W1–W7 verschoben sich UNIFORM um +804 (D7-explizit erlaubt,
+Latenz/Correctness-Gate unverändert PASS) — Pins in editor-latency.ts aktualisiert.
+
+**Ein offener Befund, ehrlich berichtet statt stillschweigend hingenommen:** `check:diag:stress`
+verschob sich um +842 (102,877→103,719 @ 82, zweimal deterministisch reproduziert) — eine
+Abweichung von T2s „stress/browser EXAKT unverändert"-Anforderung (`check:diag:browser` hielt
+exakt, 2,142 @ 75). Bisektiert (temporärer Revert + Re-Messung, danach exakt wiederhergestellt):
+`argmax` allein +469, `topk`s inkrementeller Beitrag +373 — Ursache ist NDArrays gewachsene
+Klassen-Member-Fläche (zwei neue überladene generische Methoden), die JEDE `NDArray<S>`-
+Instanziierung im stress-Korpus (der viele große literale Shapes für Digit-Arithmetik-
+Grenzfälle instanziiert) marginal mehr Auflösungsarbeit kostet — dieselbe Ripple-Klasse wie bei
+bench:editor, nur dass D7 diese Verschiebung dort EXPLIZIT erlaubt, für stress/browser aber
+straffer formulierte, als die Realität hergab. NICHT ins Gate optimiert (Code nicht verkleinert,
+um den alten Pin zu erzwingen); Owner-/Verify-Entscheidung, ob der Pin analog zu bench:editor
+mitgezogen wird, steht aus.
+
+Tests: `spike/tests-runtime/argmax-topk.test.ts` (30 Fälle, in test:core registriert — kein
+WASM-Gegenstück existiert für D1, also kein klassischer Differential-Partner: Coverage kombiniert
+mutations-scharfe Fixtures, eine selbstverifizierende Wort-für-Wort-Stem-Gleichheitsprobe gegen
+`sumRuntime`s eigenen Throw, unabhängig geschriebene Brute-Force-Referenzen über ≈150
+Zufallsfälle je Op inkl. NaN-Injektion, strukturelle keepdims-Invarianten und transponierte/
+gesliceste Empfänger mit unabhängig hergeleiteten Erwartungswerten) + 37 neue Typ-Pins in
+ndarray.test-d.ts (exakte Tupel, alle Degradationskanten, `@ts-expect-error` AM `k`-/Achsen-
+Argument mit Mutationsprobe, vier Message-Gleichheits-Pins via `Guard<TopkCheck<…>,…>`+`Equal<>`,
+MAX_SAFE_INTEGER-Kante). test:core 822→**852**. Alle D8-Gates frisch grün: `pnpm check`
+(Dreier-Verbund), test:resident 4278+2 unverändert, cargo 161 unverändert (kein Rust berührt),
+`check:freeze`-Hash byte-identisch, `graph-a-lama query lint` 0/0, `pnpm test:example` weiterhin
+auf numtype@0.1.1. README: neuer eigenständiger Satz im „What's implemented"-Abschnitt (NICHT im
+bit-for-bit-Usage-Block, der für argmax/topk falsch wäre) mit explizitem
+„TypeScript-runtime surface only (no WASM kernel yet)"-Caveat. Vollständige Zahlen, Pin-Tabelle
+und der offene stress-Befund: docs/op-w1-argmax-topk-ergebnisse.md. Post-Verification-Addendum
+(Verify-Runde A+B+C) folgt.
+
+### W1-Nachtrag: Verify-Runde & Abschluss (2026-07-20)
+
+Verify-Runde A+B+C parallel: **A CONFIRMED** (beide Pflicht-Mutanten beißen exakt, alle Gates
+doppelt deterministisch, Attributions-Tabelle nachgerechnet), **B HÄLT-mit-Befunden** (eigener
+220-Shape-Differential 0 Abweichungen; Friction-Rückprobe: der F4-Workaround der RAG-Demo ist
+real durch topk(2) ersetzt; Befunde F1 vorbestehender non-integer-Achsen-Fallback → FOLLOWUPS,
+F2 RankUnknowable-Kante → Spec v4 folgt der D-V1.3-Hauspolitik statt der Spec-v1-Formulierung,
+Policy-Pin ergänzt), **C kein Verstoß** (M1-Auslegung: kernel-lose Referenz-Ops nicht verboten;
+Owner-Empfehlung M1-Präzisierung vor W2–W5 → FOLLOWUPS). Finale Pins: Haupt 184,330 @ 136
+(Netto −3,588 zur Vor-W1-Baseline, Order-Noise-dominiert; echte W1-Maschinerie-Kosten in der
+Attributions-Tabelle des Ergebnisse-Docs), stress 103,719 @ 82 (akzeptierter, attribuierter
+Klassen-Surface-Ripple +842), browser 2,142 @ 75 (exakt). test:core 852. bench:editor-Pins
+W1–W7 +804 uniform, doppelt gemessen. Prozess-Notiz: Baustein 0 fing den Export-Blocker VOR
+dem Bau (Owner-Entscheid „Exporte ergänzen"), die MAJOR-Warnung vor LiteralIndexBounds hat die
+Implementierung nachweislich befolgt — zweite Scheibe in Folge, in der der Pre-Impl-Verifier
+den teuersten Fehler abfing.

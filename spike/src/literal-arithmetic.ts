@@ -247,7 +247,7 @@ type LexCompareSameLen<A extends string, B extends string> = A extends `${infer 
 
 /** Compare two non-negative integer digit strings: length first, then
  * lexicographic (only meaningful/invoked once lengths are equal). */
-type Compare<A extends string, B extends string> = LenCompare<A, B> extends infer LC
+export type Compare<A extends string, B extends string> = LenCompare<A, B> extends infer LC
   ? LC extends "eq"
     ? LexCompareSameLen<A, B>
     : LC
@@ -261,7 +261,7 @@ type Min<A extends string, B extends string> = Compare<A, B> extends "gt" ? B : 
  * satisfy every subsequent `extends` check and silently "succeed" wrong;
  * this is the standard `never`-always-matches gotcha, confirmed while
  * prototyping this file, and the reason for the explicit sentinel). */
-type NonNegDigits<T> = [T] extends [number]
+export type NonNegDigits<T> = [T] extends [number]
   ? IsDynamicDim<T> extends true
     ? "unsupported"
     : IsPlainDigits<`${T}`> extends true

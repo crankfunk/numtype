@@ -1,6 +1,8 @@
 import type { Broadcast } from "../src/broadcast.ts";
 import type { Shape } from "../src/dim.ts";
 import { type AnyNDArray, type Guard, NDArray, type NDArrayView } from "../src/ndarray.ts";
+import type { ReduceAxis } from "../src/reduce.ts";
+import type { TopkCheck } from "../src/vector.ts";
 import type { WNDArray } from "../src/wasm/resident.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
@@ -488,3 +490,164 @@ void uControlDynamic;
 
 // @ts-expect-error - axis 2 is out of range for rank-2 shape [2,3]: error stays at the argument, message unchanged from pre-fix
 uAxisRecv.sum(2);
+
+// =============================================================================
+// Op-Scheibe W1 (docs/op-w1-argmax-topk-spec.md): `argmax`/`topk` type pins.
+// `argmax(axis[, keepdims])` reuses `ReduceAxis`/`Guard`/`OkShape` UNCHANGED
+// (same machinery `sum` above is already pinned against), so this section
+// proves the WIRING (D2's overload shape + the niladic `number` deviation),
+// not the underlying degradation rules a second time — mirrors the WNDArray
+// section's own "same imported machinery, proven not assumed" precedent.
+// `topk(k)` gets full first-class coverage (D3): its own `TopkCheck`/
+// `TopkShape` guard is new machinery, not a reuse.
+// =============================================================================
+
+// --- argmax(): niladic -> plain `number` (D2), never `NDArray<[]>` --------
+
+const wArg = NDArray.zeros([2, 3, 4]);
+const argmaxFlat = wArg.argmax();
+type ARGMAX_FLAT = Expect<Equal<typeof argmaxFlat, number>>;
+
+// --- argmax(axis[, keepdims]): exact literal tuples ------------------------
+
+const argmaxAxis1 = wArg.argmax(1);
+type ARGMAX_AXIS1 = Expect<Equal<(typeof argmaxAxis1)["shape"], readonly [2, 4]>>;
+
+const argmaxAxis1Keep = wArg.argmax(1, true);
+type ARGMAX_AXIS1_KEEP = Expect<Equal<(typeof argmaxAxis1Keep)["shape"], readonly [2, 1, 4]>>;
+
+const argmaxAxis1NoKeep = wArg.argmax(1, false); // explicit `false` == default
+type ARGMAX_AXIS1_NOKEEP = Expect<Equal<(typeof argmaxAxis1NoKeep)["shape"], readonly [2, 4]>>;
+
+// `argmax(undefined)` is the 1-ARG overload with an axis VALUE of `undefined`
+// (full reduction), a DIFFERENT overload from the true 0-arg `argmax()`
+// above — mirrors `sum(undefined)`'s own existing shape exactly (D2).
+const argmaxUndefAxis = wArg.argmax(undefined);
+type ARGMAX_UNDEF_AXIS = Expect<Equal<(typeof argmaxUndefAxis)["shape"], readonly []>>;
+
+const argmaxUndefKeep = wArg.argmax(undefined, true);
+type ARGMAX_UNDEF_KEEP = Expect<Equal<(typeof argmaxUndefKeep)["shape"], readonly [1, 1, 1]>>;
+
+const argmaxNeg = wArg.argmax(-1);
+type ARGMAX_NEG = Expect<Equal<(typeof argmaxNeg)["shape"], readonly [2, 3]>>;
+
+// --- argmax(axis): degradations (same ReduceAxis machinery as sum) --------
+
+declare const dynAxisArgmax: number;
+const argmaxDynAxis = wArg.argmax(dynAxisArgmax);
+type ARGMAX_DYN_AXIS = Expect<Equal<(typeof argmaxDynAxis)["shape"], readonly number[]>>;
+
+declare const argmaxMixedRankRecv: NDArray<[2, 3] | [2, 3, 4]>;
+const argmaxMixedSummed = argmaxMixedRankRecv.argmax(2);
+type ARGMAX_MIXED_RANK = Expect<Equal<(typeof argmaxMixedSummed)["shape"], readonly number[]>>;
+
+const argmaxUnionAxis = uAxisRecv.argmax(0 as 0 | 2);
+type ARGMAX_UNION_AXIS = Expect<Equal<(typeof argmaxUnionAxis)["shape"], readonly number[]>>;
+
+declare const argmaxDynKeep: true | undefined;
+const argmaxKeepUnion = wArg.argmax(1, argmaxDynKeep);
+type ARGMAX_KEEP_UNION = Expect<Equal<(typeof argmaxKeepUnion)["shape"], readonly [2, 4] | readonly [2, 1, 4]>>;
+
+// @ts-expect-error - axis 5 is out of range for rank-3 shape [2,3,4]: error stays at the argument (ReduceAxis reused unmodified from sum, verbatim message)
+wArg.argmax(5);
+
+// Message-equality pin (T3d): the compile-time ShapeError for an
+// out-of-range literal axis is the SAME `ReduceAxis` type `sum` already
+// uses — this is a Guard/Equal proof that `argmax`'s axis machinery is the
+// identical import, not a re-derivation, and that its wording is
+// byte-for-byte the `reduce:` stem `argmaxRuntime` throws at runtime
+// (runtime.ts, D4).
+type ARGMAX_AXIS_OOB_MSG = Expect<
+  Equal<Guard<ReduceAxis<[2, 3, 4], 5>, 5>, { readonly __shapeError: "reduce: axis 5 is out of range for shape [2,3,4] (rank 3)" }>
+>;
+
+// --- topk(k): exact literal tuples, incl. the k=0/k=D valid boundaries ----
+
+const vTopk = NDArray.zeros([5]);
+
+const topk3 = vTopk.topk(3);
+type TOPK3_VALUES = Expect<Equal<(typeof topk3.values)["shape"], readonly [3]>>;
+type TOPK3_INDICES = Expect<Equal<(typeof topk3.indices)["shape"], readonly [3]>>;
+
+const topk0 = vTopk.topk(0); // k=0: VALID (D3 boundary)
+type TOPK0_VALUES = Expect<Equal<(typeof topk0.values)["shape"], readonly [0]>>;
+type TOPK0_INDICES = Expect<Equal<(typeof topk0.indices)["shape"], readonly [0]>>;
+
+const topkD = vTopk.topk(5); // k=D: VALID (D3 boundary)
+type TOPKD_VALUES = Expect<Equal<(typeof topkD.values)["shape"], readonly [5]>>;
+type TOPKD_INDICES = Expect<Equal<(typeof topkD.indices)["shape"], readonly [5]>>;
+
+// --- topk(k): compile errors AT the k argument (DotCheck precedent) -------
+
+// @ts-expect-error - k=-1 is negative: error stays at the k argument
+vTopk.topk(-1);
+
+// @ts-expect-error - k=1.5 is non-integer (dot-form): error stays at the k argument
+vTopk.topk(1.5);
+
+// @ts-expect-error - k=6 exceeds the vector length 5: error stays at the k argument
+vTopk.topk(6);
+
+// @ts-expect-error - k = Number.MAX_SAFE_INTEGER vastly exceeds length 5: still a PROVABLE compile error (the digit machinery does not choke on large-but-representable literals)
+vTopk.topk(9007199254740991);
+
+const rank2Recv = NDArray.zeros([2, 3]);
+// @ts-expect-error - rank-2 receiver: topk requires rank-1 (DotCheck precedent: the RECEIVER's problem surfaces at the k argument, same as dot/cosineSimilarity)
+rank2Recv.topk(2);
+
+const rank0Recv = NDArray.zeros([]);
+// @ts-expect-error - rank-0 receiver: topk requires rank-1; error stays at the k argument
+rank0Recv.topk(1);
+
+// --- topk(k): degradations (never a confidently-wrong literal claim) ------
+
+declare const dynK: number;
+const topkDyn = vTopk.topk(dynK);
+type TOPK_DYN_K_VALUES = Expect<Equal<(typeof topkDyn.values)["shape"], readonly [number]>>;
+type TOPK_DYN_K_INDICES = Expect<Equal<(typeof topkDyn.indices)["shape"], readonly [number]>>;
+
+declare const unionK: 2 | 3; // uniformly-valid union: still no-claim (union filter runs unconditionally)
+const topkUnion = vTopk.topk(unionK);
+type TOPK_UNION_K = Expect<Equal<(typeof topkUnion.values)["shape"], readonly [number]>>;
+
+declare const unionKMixed: 2 | 10; // 10 alone would be a hard error; the union as a whole still degrades, never confidently accepts OR rejects
+const topkUnionMixed = vTopk.topk(unionKMixed);
+type TOPK_UNION_K_MIXED = Expect<Equal<(typeof topkUnionMixed.values)["shape"], readonly [number]>>;
+
+// MAX_SAFE_INTEGER-adjacent edge: an exponent-form literal (`1e21`, beyond
+// the digit machinery's plain-digit-string subset, CLAUDE.md's TS-limits
+// section) degrades to no-claim rather than lying either way.
+const topkExp = vTopk.topk(1e21);
+type TOPK_EXP_K_VALUES = Expect<Equal<(typeof topkExp.values)["shape"], readonly [number]>>;
+type TOPK_EXP_K_INDICES = Expect<Equal<(typeof topkExp.indices)["shape"], readonly [number]>>;
+
+// --- topk(k): message-equality pins (T3d), via Guard/Equal directly -------
+
+type TOPK_RANK_MSG = Expect<
+  Equal<Guard<TopkCheck<[2, 3], 2>, 2>, { readonly __shapeError: "topk: expected a 1-D vector (got shape [2,3])" }>
+>;
+type TOPK_NEGATIVE_K_MSG = Expect<
+  Equal<Guard<TopkCheck<[5], -1>, -1>, { readonly __shapeError: "topk: k must be a non-negative integer (got -1)" }>
+>;
+type TOPK_DOTFORM_K_MSG = Expect<
+  Equal<Guard<TopkCheck<[5], 1.5>, 1.5>, { readonly __shapeError: "topk: k must be a non-negative integer (got 1.5)" }>
+>;
+type TOPK_BOUNDS_K_MSG = Expect<
+  Equal<Guard<TopkCheck<[5], 10>, 10>, { readonly __shapeError: "topk: k=10 exceeds the vector length 5" }>
+>;
+
+// --- topk(k): RankUnknowable receiver -> uniform no-claim (policy pin) ----
+
+declare const topkMixedRankRecv: NDArray<readonly [2, 3] | readonly [5]>;
+// Deliberately COMPILES, with NO static claim: on a mixed-rank-union
+// receiver even a provably-invalid k (-1 throws at runtime regardless of
+// which rank is realized) degrades to no-claim, mirroring the uniform
+// degrade of ALL seven rank gates (D-V1.3 house policy,
+// docs/phase-d-vorarbeiten-v1-ergebnisse.md) instead of making a partial
+// claim on an unknowable receiver. The runtime backstop (`topkRuntime`'s
+// unconditional k validation) stays authoritative. Spec v4 corrected D3 to
+// exactly this form (Verify-B finding F2) — this pin documents the policy;
+// a future deliberate strengthening must consciously re-express it.
+const topkMixedRankNegK = topkMixedRankRecv.topk(-1);
+type TOPK_MIXEDRANK_NEG_K_VALUES = Expect<Equal<(typeof topkMixedRankNegK.values)["shape"], readonly [number]>>;
+type TOPK_MIXEDRANK_NEG_K_INDICES = Expect<Equal<(typeof topkMixedRankNegK.indices)["shape"], readonly [number]>>;
