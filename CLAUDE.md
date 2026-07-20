@@ -23,12 +23,21 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 
 ## Status (v0.1.0 — released)
 
-**numtype@0.1.0 ist live auf npm (2026-07-19), das Repo ist public, Tag `v0.1.0`, Apache-2.0.**
-Roadmap-Phasen A–D und Items 1–14 sind komplett — **die Roadmap ist durchgespielt** (Phase-C-
-Items 8/9 — Browser-Threads/no_std — bewusst deferred). Item 14 schloss 2026-07-19: Demo-GIF,
-SemVer-Sektion, Reading Guide (docs/README.md), Launch-Blog-Post
-(https://marvinmuegge.com/notes/teaching-the-checker-arithmetic/). Next: post-Roadmap —
-FOLLOWUPS-Minis, optional Trusted Publishing; Richtung ab hier Owner-entschieden.
+**numtype@0.1.1 ist live auf npm (0.1.0 + Docs-Patch 0.1.1, beide 2026-07-19), das Repo ist
+public, Tags `v0.1.0`/`v0.1.1`, Apache-2.0.** Roadmap-Phasen A–D und Items 1–14 sind komplett —
+**die Roadmap ist durchgespielt** (Phase-C-Items 8/9 — Browser-Threads/no_std — bewusst
+deferred). Item 14 schloss 2026-07-19: Demo-GIF, SemVer-Sektion, Reading Guide (docs/README.md),
+Launch-Blog-Post (https://marvinmuegge.com/notes/teaching-the-checker-arithmetic/).
+**Richtung (Owner-entschieden 2026-07-20): wachsendes OSS-Projekt mit Nutzern.** Reihenfolge:
+(1) Launch-Post streuen — der README-Playground-Link (ATA lädt die Typen von npm; live
+verifiziert, Playground läuft TS 6.0.3) ist das Erlebe-es-selbst-Asset für HN/Reddit-Kommentare;
+(2) Dogfooding-Scheibe (Embedding/RAG-Demo auf numtype, Friction-Log = begründete
+Op-Wunschliste); (3) Scale-Probe als bindende Spec („unproven at scale" → gemessen).
+FOLLOWUPS-Minis nebenher; Trusted Publishing optional (Fakten in FOLLOWUPS).
+Repo-Härtung aktiv seit 2026-07-20: Rulesets `protect-main` (kein Force-Push/Delete auf main —
+gilt auch für den Owner; bewusste Ausnahme nur via Ruleset-Deaktivierung) +
+`protect-release-tags` (`v*` unverrückbar). README trägt seit 2026-07-20 eine
+numpy-ts-Abgrenzungs-FAQ (re-verifiziert: dort weiterhin keine Shape-Level-Typen).
 Der naive TS-Runtime bleibt die Korrektheits-Referenz; das v1-Copy-Backend bleibt die eingefrorene
 Performance-Baseline (Kernels/Einstiegspunkte byte-für-byte unberührt).
 
