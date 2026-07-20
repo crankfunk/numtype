@@ -46,7 +46,12 @@ add/sub/mul/div + mean) — ERLEDIGT 2026-07-21** (docs/op-w2-scalar-mean-spec.m
 /-ergebnisse.md; D6-v2-Overload-Umbau der vier Bestandsmethoden, `mean` neu nach
 sum-Muster, NDArray-only/kein WASM-Kernel wie W1 — FOLLOWUPS-Paritätsitem erweitert; der
 stress-Pin-Ripple +1,181 ist derselbe Klassen-Surface-Mechanismus wie W1, akzeptiert und
-neu gepinnt).
+neu gepinnt). Dritte Op-Scheibe: **W3 (`sqrt`) — ERLEDIGT 2026-07-21** (docs/op-w3-sqrt-spec.md v1
+/-ergebnisse.md; niladisch, shape-erhaltend, NDArray-only/kein WASM-Kernel wie W1/W2 —
+IEEE-754-korrekt-gerundet wie `+`/`-`/`*`/`/`, daher vom Transzendenten-Nicht-Ziel
+ausgenommen; F1-Schließung (Teilkette + volle L2-Normalisierung) byte-identisch gegen die
+alte Hand-Loop-Formulierung aus examples/rag-demo/main.ts bewiesen; stress/browser-Pins
+unverändert, kein Klassen-Surface-Ripple diesmal).
 FOLLOWUPS-Minis nebenher; Trusted Publishing optional (Fakten in FOLLOWUPS).
 Repo-Härtung aktiv seit 2026-07-20: Rulesets `protect-main` (kein Force-Push/Delete auf main —
 gilt auch für den Owner; bewusste Ausnahme nur via Ruleset-Deaktivierung) +
@@ -69,12 +74,12 @@ Session-Zustand).
 - **Artefakt-Hash** (Clean-Rebuild, SHA256 von `spike/src/wasm/numtype_core.wasm`):
   `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` (seit Kern 11; CI-Gate
   `check:freeze` mit plattform-gelabelter Pin-Menge).
-- **check:diag** Haupt-Pin **188,563 @ 137 Files** (nur Root-Korpus; seit W2 inkl. F1-Fix, von 184,330 —
-  Aufschlüsselung in docs/op-w2-scalar-mean-ergebnisse.md) · **check:diag:stress 104,900 @ 82**
-  (Δ+1,181 zu 103,719 seit W2, gleicher Klassen-Surface-Mechanismus wie W1s +842) ·
+- **check:diag** Haupt-Pin **190,640 @ 137 Files** (nur Root-Korpus; seit W3, von 188,563 —
+  Δ+2,073, Aufschlüsselung in docs/op-w3-sqrt-ergebnisse.md) · **check:diag:stress 104,900 @ 82**
+  (unverändert seit W2 — W3 löst keinen Klassen-Surface-Ripple aus) ·
   **check:diag:browser 2,142 @ 75** (unverändert seit W1, stress/browser ungated by design,
   `pnpm check` compoundet alle drei).
-- **Testzahlen:** test:core 1335 (852 + 483 aus W2 inkl. Diagnose-Qualitäts-Pin) · test:resident 4278+2 ·
+- **Testzahlen:** test:core 1564 (1335 + 227 aus W3) · test:resident 4278+2 ·
   test:threaded 69 · test:browser 4 · test:package 3 + Typ-Smoke · cargo 161 · test:example
   (Registry-Install + Example-Typcheck + 8 asserted Queries).
 - **Editor-Gate:** `bench:editor` W1–W7 — Instantiation-Pins exact-match hart, Latenz am

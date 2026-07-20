@@ -771,3 +771,30 @@ type MEAN_AXIS_OOB_MSG = Expect<
 // WNDArray twin note (D7 v2, structural — not a pin): `WNDArray` has NEITHER
 // add/sub/mul/div NOR mean today, so there is no WUA-style mirror section to
 // write here — a documented absence, not an oversight (see spec D7 v2).
+
+// =============================================================================
+// Op-Scheibe W3 (docs/op-w3-sqrt-spec.md, D3): `sqrt()` — shape-PRESERVING at
+// every rank (5 Equal pins: literal, rank 0, wide, readonly-S, dynamic rank),
+// plus a non-vacuous niladic-arity pin (sqrt takes no argument).
+// =============================================================================
+
+const sqrtLiteral = NDArray.zeros([2, 3]).sqrt();
+type SQRT_LITERAL = Expect<Equal<(typeof sqrtLiteral)["shape"], readonly [2, 3]>>;
+
+const sqrtRank0 = NDArray.zeros([]).sqrt();
+type SQRT_RANK0 = Expect<Equal<(typeof sqrtRank0)["shape"], readonly []>>;
+
+declare const sqrtWide: NDArray<readonly number[]>;
+const sqrtWideResult = sqrtWide.sqrt();
+type SQRT_WIDE = Expect<Equal<(typeof sqrtWideResult)["shape"], readonly number[]>>;
+
+declare const sqrtReadonlyS: NDArray<readonly [4, 5]>;
+const sqrtReadonlySResult = sqrtReadonlyS.sqrt();
+type SQRT_READONLY_S = Expect<Equal<(typeof sqrtReadonlySResult)["shape"], readonly [4, 5]>>;
+
+declare const sqrtDynRank: NDArray<Shape>;
+const sqrtDynRankResult = sqrtDynRank.sqrt();
+type SQRT_DYN_RANK = Expect<Equal<(typeof sqrtDynRankResult)["shape"], Readonly<Shape>>>;
+
+// @ts-expect-error - sqrt() is niladic: it takes no argument, unlike add/sub/mul/div's scalar overload
+sqrtLiteral.sqrt(1);

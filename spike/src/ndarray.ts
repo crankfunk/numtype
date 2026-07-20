@@ -40,6 +40,7 @@ import {
   scalarElementwiseRuntime,
   sliceRuntime,
   type SliceSpec,
+  sqrtRuntime,
   sumRuntime,
   topkRuntime,
   transposeRuntime,
@@ -749,5 +750,39 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
       outShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
       data,
     );
+  }
+
+  /** Elementwise square root (Op-Scheibe W3, docs/op-w3-sqrt-spec.md, D1/D2):
+   * shape-PRESERVING at every rank, including rank 0 (`[]` stays `[]`) — the
+   * missing last step of the `mul -> sum(axis) -> sqrt -> reshape -> div` L2-
+   * normalization chain (`corpusSumSquares.sqrt()` instead of the old
+   * hand-loop over `.data`, see `norm()`'s own doc comment and
+   * examples/rag-demo/main.ts's FRICTION F1). No guard: `sqrt` is niladic —
+   * same reasoning `norm()`/`flatten()` above already give (no argument to
+   * hang a compile-time claim on, every shape is valid by this op's own
+   * semantics).
+   *
+   * IEEE-754 exactness (the basis for excluding `sqrt` from the
+   * transcendental non-goal, docs/op-w3-sqrt-spec.md): ECMA-262
+   * `sec-math.sqrt` defines `Math.sqrt` via the exact correctly-rounded real
+   * square root — the SAME correctly-rounded contract `+`/`-`/`*`/`/` carry,
+   * unlike every transcendental `Math.*` method (`exp`/`log`/`sin`/...),
+   * which the spec explicitly marks "implementation-approximated". `sqrt` is
+   * therefore bit-deterministic, not merely "close enough" — the same
+   * guarantee `norm()` already relies on above.
+   *
+   * NaN/sign disclosure (D2, pinned by tests): negative finite inputs yield
+   * `NaN` (IEEE `sqrt` is undefined for negatives — no throw, gradual/
+   * runtime propagation only, same house style as `div`'s zero handling);
+   * `sqrt(-0) === -0` is a genuine IEEE edge case (`Object.is`-distinguished
+   * from `+0`), not a bug.
+   *
+   * Surface asymmetry (D1, disclosed, same shape as `argmax`/`topk`/the W2
+   * scalar overloads and `mean`): `sqrt` exists ONLY on this naive `NDArray`
+   * — no WASM kernel, no `WNDArray` parity yet (FOLLOWUPS.md tracks the
+   * follow-up). */
+  sqrt(): NDArray<S> {
+    const data = sqrtRuntime(this.data);
+    return new NDArray<S>(this.shape as unknown as S, data);
   }
 }

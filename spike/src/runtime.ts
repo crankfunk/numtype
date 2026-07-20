@@ -781,3 +781,40 @@ export function meanRuntime(
   }
   return { shape: summed.shape, data: out };
 }
+
+// ---------------------------------------------------------------------------
+// Op-Scheibe W3 (docs/op-w3-sqrt-spec.md): appended strictly after all
+// pre-existing content — nothing above this comment is touched.
+// ---------------------------------------------------------------------------
+
+/**
+ * Elementwise `Math.sqrt(data[i])`, in strictly ascending index order, into a
+ * fresh `Float64Array` (D2, docs/op-w3-sqrt-spec.md): the runtime backing for
+ * `NDArray.sqrt()`. Shape is untouched by this function — `sqrt` is
+ * shape-preserving at every rank, so the caller (`NDArray.sqrt`) passes
+ * `this.shape` straight through unchanged, exactly like the scalar-op
+ * closures above.
+ *
+ * IEEE-754 exactness (the Baustein-0-verified basis for `sqrt`'s exemption
+ * from the transcendental non-goal, docs/op-w3-sqrt-spec.md "Berührte
+ * Covenant-Invarianten"): ECMA-262 `sec-math.sqrt` defines `Math.sqrt`'s
+ * result via the exact correctly-rounded real square root (the same
+ * correctly-rounded contract `+`/`-`/`*`/`/` carry) — UNLIKE every
+ * transcendental `Math.*` method (`exp`/`log`/`sin`/...), which the spec
+ * explicitly marks "implementation-approximated". `Math.sqrt` is therefore
+ * bit-deterministic across conforming engines, same as the four arithmetic
+ * ops this file already treats as exact.
+ *
+ * Pinned IEEE edges (tests, D2): `sqrt(-0) === -0` (a genuine IEEE edge —
+ * `Object.is`-distinguished from `+0`), `sqrt(-x) -> NaN` for finite `x > 0`,
+ * `sqrt(NaN) -> NaN`, `sqrt(Infinity) -> Infinity`, subnormal inputs pass
+ * through exactly (bit-compared against a direct `Math.sqrt` reference — the
+ * op's OWN definition IS `Math.sqrt`, so the test proves faithful
+ * pass-through, not independent mathematics). size-0 input -> an empty
+ * output array, no special-casing needed (the loop body never runs).
+ */
+export function sqrtRuntime(data: Float64Array): Float64Array {
+  const out = new Float64Array(data.length);
+  for (let i = 0; i < data.length; i++) out[i] = Math.sqrt(data[i] ?? 0);
+  return out;
+}

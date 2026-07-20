@@ -263,3 +263,45 @@ aus dessen Kontext, erneut am Diff verifiziert. Finale Zahlen: Haupt-Pin 188,563
 bench:editor PASS (w4 26453), Hash byte-identisch. Damit sind die Wunschlisten-Plätze
 1 UND 2 geschlossen: `x.div(2)` liest sich als durch-2-teilen, `mean` existiert in
 allen drei Formen — der F2-Workaround der RAG-Demo ist obsolet (Rückprobe bit-identisch).
+
+### W3: `sqrt` — dritte Op-Scheibe der Dogfooding-Wunschliste (2026-07-21)
+
+Wunschlisten-Platz 3 (docs/dogfooding-rag-ergebnisse.md W3/F1 — zweifacher Bruch der
+natürlichen L2-Normalisierungs-Kette `mul→sum(axis)→sqrt→reshape→div` in der RAG-Demo, weil
+kein `.sqrt()` existierte) ist geschlossen: `NDArray.sqrt(): NDArray<S>`, shape-erhaltend
+bei jedem Rang inkl. Rang 0, niladisch (kein Guard, wie `norm()`/`flatten()`). Baustein-0
+(brainroute:deep, kompakt) fand keinen Blocker — primärquellen-verankerte IEEE-Begründung
+(ECMA-262 `sec-math.sqrt`: exakte 𝔽-Rundung, im Gegensatz zu jeder transzendenten
+`Math.*`-Methode, die die Spec wörtlich „implementation-approximated" nennt), gemessener
+Typ-Anteil +24 (Probe-Worktree), keine Symbolkollisionen. Umsetzung: `sqrtRuntime` als
+reiner Append in runtime.ts (elementweise `Math.sqrt`, frisches Array), `sqrt()` als reine
+Klassenkörper-Insertion in ndarray.ts nach `mean` (kein Bestandsmember editiert — anders als
+W2s D6-v2-Overload-Umbau, hier reicht eine reine Append, da `sqrt` kein Overload-Partner-
+Problem hat), W3-Testblock (227 Tests) an das bestehende `scalar-mean.test.ts` angehängt
+(kein neues File), 6 neue Typ-Pins (5 `Equal` + 1 `@ts-expect-error`) an `ndarray.test-d.ts`.
+D1 bewusst NDArray-only, kein WASM-Kernel (dieselbe COVENANT-v5-gedeckte Surface-Asymmetrie
+wie W1/W2) — FOLLOWUPS-Paritätsitem um einen W3-Nachtrag erweitert. Die F1-Schließung ist
+ZWEIFACH bewiesen, byte-identisch gegen die alte Hand-Loop-Formulierung aus
+`examples/rag-demo/main.ts`: die Teilkette `m.mul(m).sum(1).sqrt()` UND die volle
+L2-Normalisierung `m.div(m.mul(m).sum(1).sqrt().reshape([N,1]))`. Finale Zahlen: Haupt-Pin
+190,636 @ 137 (+2,073 zur W2-Baseline, Absolut-Gate ≤ +3,000 eingehalten), stress 104,900 @
+82 (Δ 0 — anders als W1/W2 diesmal KEIN Klassen-Surface-Ripple), browser 2,142 (Δ 0),
+test:core 1,562 (+227), test:resident 4,278+2 unverändert, cargo 161 unverändert (kein Rust
+berührt), `check:freeze`-Hash byte-identisch, `bench:editor` Hard-Gate PASS ohne
+Pin-Abweichung, `graph-a-lama query lint` 0/0, `pnpm test:example` weiterhin auf
+numtype@0.1.1. README: die W1/W2-Op-Notiz im „What's implemented"-Abschnitt um `sqrt`
+ergänzt (bit-for-bit-Zeile bleibt wahr). Vollständige Zahlen und der F1-Schließungs-Beweis:
+docs/op-w3-sqrt-ergebnisse.md. Post-Verification-Addendum (Verify-Runde, Stufe 3) steht noch
+aus.
+
+### W3-Nachtrag: Verify-Runde (2026-07-21)
+
+A CONFIRMED (Mutant 219/227 rot — die 8 grünen sind exakt die abs≡sqrt-Fälle) ·
+B HÄLT-mit-Befunden (zwei kleine Coverage-Lücken in-slice geschlossen:
+Aliasing-Isolations-Test + größter-Subnormal-Pin; NaN-Payload-Kanonisierungs-Detail
+dokumentiert) · C NULL Befunde mit eigenständigem Doppel-Urteil (sqrt ist algebraisch,
+nicht transzendent; IEEE-Pflichtrundung — ECMA-262-Primärquelle seit Baustein 0).
+Final: 190,640 @ 137 (+2,077), stress Δ0 (niladischer Member rippelt nicht — Kontrast
+zu W1/W2 dokumentiert den Mechanismus weiter), test:core 1,564. Damit ist auch
+Wunschlisten-Platz 3 geschlossen: die L2-Normalisierung der RAG-Demo läuft komplett
+in numtype, byte-identisch zur alten Hand-Loop-Formulierung bewiesen.

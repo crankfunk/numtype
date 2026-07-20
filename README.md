@@ -282,12 +282,14 @@ indices of a 1-D vector) are also available on `NDArray`, but — unlike every o
 **TypeScript-runtime surface only, no WASM kernel yet**: a deliberate, disclosed surface
 asymmetry, not an oversight.
 
-**Scalar overloads for `add`/`sub`/`mul`/`div`, and a new `mean` reduction** are also available:
-`x.div(2)` reads as "divide by 2" (shape-preserving, no `[1]`-wrap needed, even at rank 0), and
-`mean` composes `sum` with one division per output element. Like `argmax`/`topk` above, the new
-surface is **TypeScript-runtime only, no WASM kernel yet** — the existing `NDArray`-argument forms
-of `add`/`sub`/`mul`/`div` keep their full WASM-backed bit-for-bit guarantee unchanged; only the
-new scalar overload and the new `mean` method are the disclosed asymmetry.
+**Scalar overloads for `add`/`sub`/`mul`/`div`, a new `mean` reduction, and a new `sqrt` op** are
+also available: `x.div(2)` reads as "divide by 2" (shape-preserving, no `[1]`-wrap needed, even at
+rank 0), `mean` composes `sum` with one division per output element, and `sqrt` is elementwise
+`Math.sqrt` (shape-preserving at every rank — IEEE 754 requires correct rounding for square root,
+same as `+`/`-`/`*`/`/`, so this stays exact, unlike a true transcendental op). Like `argmax`/`topk`
+above, the new surface is **TypeScript-runtime only, no WASM kernel yet** — the existing
+`NDArray`-argument forms of `add`/`sub`/`mul`/`div` keep their full WASM-backed bit-for-bit
+guarantee unchanged; only the new scalar overload, `mean`, and `sqrt` are the disclosed asymmetry.
 
 For the full per-phase specifications, results, and the competitive analysis, start at the
 [research-notes reading guide](docs/README.md) (curated entry points by interest) or the

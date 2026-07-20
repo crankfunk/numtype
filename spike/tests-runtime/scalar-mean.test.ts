@@ -29,13 +29,23 @@
  *  - a self-verifying word-for-word stem-equality probe against
  *    `sumRuntime`'s own out-of-range-axis throw (same technique as W1's
  *    `argmaxRuntime` cross-check).
+ *
+ * Op-Scheibe W3 (docs/op-w3-sqrt-spec.md): a clearly-marked block APPENDED at
+ * the end of this file (D4) covers `NDArray.sqrt()`/`sqrtRuntime` — same
+ * house convention as the scalar/mean sections above (no new file; this file
+ * is already registered in test:core). Coverage: the D2 IEEE-edge matrix
+ * (-0/NaN/negative/Infinity/subnormal-bits/size-0), rank 0/1/2 + shape
+ * preservation, transposed/sliced receivers, a randomized bit-differential
+ * against a direct `Math.sqrt` loop, and the F1-closure retro-proof (the
+ * `mul -> sum(1) -> sqrt -> reshape -> div` chain byte-identical to the old
+ * hand-loop formulation from examples/rag-demo/main.ts).
  */
 import assert from "node:assert";
 import { test } from "node:test";
 import { NDArray } from "../src/ndarray.ts";
 import { elementwiseBinary, meanRuntime, sumRuntime } from "../src/runtime.ts";
 import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
-import { genDataSpecial, makeRng, nextF64Special, SPECIAL_VALUES, type Rng } from "./prng.ts";
+import { genData, genDataSpecial, makeRng, nextF64Special, SPECIAL_VALUES, type Rng } from "./prng.ts";
 
 type ScalarOp = "add" | "sub" | "mul" | "div";
 const OPS: readonly ScalarOp[] = ["add", "sub", "mul", "div"];
@@ -508,4 +518,198 @@ test("diagnostic quality (F1 pin): broadcast mismatch surfaces the shape-naming 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// =============================================================================
+// Op-Scheibe W3 (docs/op-w3-sqrt-spec.md): NDArray.sqrt() / sqrtRuntime.
+// APPENDED block (D4) — see the file-header comment above for the coverage
+// summary. Imports needed only by this block are added right here, not
+// hoisted to the top, to keep the append visually self-contained.
+// =============================================================================
+
+import { sqrtRuntime } from "../src/runtime.ts";
+
+// --- Section W3.1: explicit D2 IEEE-edge matrix -----------------------------
+
+test("sqrt(): D2 IEEE-edge matrix — -0, NaN, negative->NaN, +/-Infinity, size-0", () => {
+  // sqrt(-0) === -0 (Object.is-distinguished IEEE edge, not +0).
+  const negZero = NDArray.fromArray([1], [-0]);
+  assert.ok(Object.is(negZero.sqrt().data[0], -0), `sqrt(-0) must be -0, got ${negZero.sqrt().data[0]}`);
+
+  // sqrt(NaN) -> NaN.
+  const nanArr = NDArray.fromArray([1], [Number.NaN]);
+  assert.ok(Number.isNaN(nanArr.sqrt().data[0]), "sqrt(NaN) must be NaN");
+
+  // sqrt(-x) -> NaN for finite x > 0.
+  const negatives = NDArray.fromArray([4], [-1, -2.5, -Number.MAX_VALUE, -Number.MIN_VALUE]);
+  for (const v of Array.from(negatives.sqrt().data)) {
+    assert.ok(Number.isNaN(v), `sqrt of a negative finite must be NaN, got ${v}`);
+  }
+
+  // sqrt(+Infinity) -> +Infinity; sqrt(-Infinity) -> NaN (IEEE: no real root).
+  const infs = NDArray.fromArray([2], [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]);
+  const infResult = infs.sqrt();
+  assert.strictEqual(infResult.data[0], Number.POSITIVE_INFINITY, "sqrt(+Infinity) must be +Infinity");
+  assert.ok(Number.isNaN(infResult.data[1]), "sqrt(-Infinity) must be NaN");
+
+  // size-0 -> empty output, no throw.
+  const empty = NDArray.fromArray([0], []);
+  const emptySqrt = empty.sqrt();
+  assertShapeEqual([0], emptySqrt.shape, "sqrt() of a size-0 receiver: shape");
+  assert.strictEqual(emptySqrt.data.length, 0, "sqrt() of a size-0 receiver: data length");
+
+  // Direct runtime-function-level pin too (not just through the class).
+  assert.strictEqual(sqrtRuntime(new Float64Array(0)).length, 0);
+  assert.ok(Object.is(sqrtRuntime(Float64Array.from([-0]))[0], -0));
+});
+
+test("sqrt(): subnormal inputs pass through Math.sqrt exactly — bit-compared (Object.is + explicit bit pattern) against a direct Math.sqrt reference", () => {
+  const subnormals = [Number.MIN_VALUE, Number.MIN_VALUE * 4, -Number.MIN_VALUE, -Number.MIN_VALUE * 4];
+  const nd = NDArray.fromArray([subnormals.length], subnormals);
+  const actual = nd.sqrt();
+  for (let i = 0; i < subnormals.length; i++) {
+    const expected = Math.sqrt(subnormals[i] ?? 0);
+    assert.ok(Object.is(expected, actual.data[i]), `subnormal ${subnormals[i]}: expected ${expected}, got ${actual.data[i]}`);
+    // Explicit bit-pattern comparison via DataView (D2's own wording):
+    // the op's definition IS Math.sqrt, so this proves faithful pass-through
+    // of the exact IEEE-754 bit pattern, not independent mathematics.
+    const expectedBuf = new DataView(new ArrayBuffer(8));
+    expectedBuf.setFloat64(0, expected);
+    const actualBuf = new DataView(new ArrayBuffer(8));
+    actualBuf.setFloat64(0, actual.data[i] ?? Number.NaN);
+    assert.strictEqual(actualBuf.getBigUint64(0), expectedBuf.getBigUint64(0), `subnormal ${subnormals[i]}: bit pattern mismatch`);
+  }
+});
+
+// --- Section W3.2: rank 0/1/2 + shape preservation, transposed/sliced receivers ---
+
+test("sqrt(): shape preservation at rank 0/1/2, exact values", () => {
+  const r0 = NDArray.fromArray([], [16]);
+  assertShapeEqual([], r0.sqrt().shape, "sqrt() rank-0 shape");
+  assert.strictEqual(r0.sqrt().data[0], 4);
+
+  const r1 = NDArray.fromArray([4], [0, 1, 4, 9]);
+  assertShapeEqual([4], r1.sqrt().shape, "sqrt() rank-1 shape");
+  assert.deepStrictEqual(Array.from(r1.sqrt().data), [0, 1, 2, 3]);
+
+  const r2 = NDArray.fromArray([2, 2], [1, 4, 9, 16]);
+  assertShapeEqual([2, 2], r2.sqrt().shape, "sqrt() rank-2 shape");
+  assert.deepStrictEqual(Array.from(r2.sqrt().data), [1, 2, 3, 4]);
+});
+
+test("sqrt(): transposed and sliced receivers stay correct (non-contiguous-in-origin data, contiguous NDArray.data by construction)", () => {
+  const base = NDArray.fromArray([2, 3], [1, 4, 9, 16, 25, 36]);
+  const transposed = base.transpose(); // NDArray<[3, 2]>, fresh copy per transposeRuntime
+  assertShapeEqual([3, 2], transposed.shape, "transpose() shape");
+  assert.deepStrictEqual(Array.from(transposed.sqrt().data), Array.from(transposed.data).map((v) => Math.sqrt(v)));
+
+  const sliced = base.slice(1); // NDArray<[3]>, row 1: [16, 25, 36]
+  assertShapeEqual([3], sliced.shape, "slice(1) shape");
+  assert.deepStrictEqual(Array.from(sliced.sqrt().data), [4, 5, 6]);
+});
+
+// --- Section W3.3: randomized bit-differential against a direct Math.sqrt loop ---
+
+{
+  const rng = makeRng(0x53515254205733n); // "SQRT W3"
+  const CASE_COUNT = 220; // >= 200 per spec D4
+  for (let c = 0; c < CASE_COUNT; c++) {
+    const shape = genShape(rng, 0, 4);
+    const data = genDataSpecial(rng, shape, 0.3);
+
+    test(`sqrt() case ${c}: bit-differential against a direct Math.sqrt loop, shape=[${shape.join(",")}]`, () => {
+      const nd = NDArray.fromArray(shape, data);
+      const actual = nd.sqrt();
+      const expected = Float64Array.from(data, (v) => Math.sqrt(v));
+      assertShapeEqual(shape, actual.shape, `case ${c}: shape must be preserved exactly`);
+      assertDataBitIdentical(expected, actual.data, `case ${c} sqrt`);
+    });
+  }
+}
+
+// --- Section W3.4: F1-closure retro-proof — the chain
+// `mul -> sum(1) -> sqrt -> reshape -> div` byte-identical to the OLD
+// hand-loop formulation from examples/rag-demo/main.ts (Friction F1). ------
+
+test("sqrt(): F1 closure — m.mul(m).sum(1).sqrt() byte-identical to the old hand-loop (Math.sqrt over .data + fromArray)", () => {
+  const rng = makeRng(0x46315f434c4f5345n); // "F1_CLOSE"
+  const N = 6;
+  const D = 5;
+  const data = genDataSpecial(rng, [N, D], 0.1).map((v) => (Number.isNaN(v) || !Number.isFinite(v) ? rng.nextF64() : v));
+  const m = NDArray.fromArray([N, D], data);
+
+  // New chain (W3): fully inside NDArray.
+  const viaChain = m.mul(m).sum(1).sqrt();
+  assertShapeEqual([N], viaChain.shape, "chain shape");
+
+  // OLD hand-loop, verbatim shape (examples/rag-demo/main.ts lines ~46-61,
+  // pre-W3): mul -> sum(1) -> drop to .data -> Math.sqrt by hand -> fromArray.
+  const squared = m.mul(m);
+  const sumSquares = squared.sum(1);
+  const rowNormsData = new Float64Array(sumSquares.data.length);
+  for (let i = 0; i < rowNormsData.length; i++) rowNormsData[i] = Math.sqrt(sumSquares.data[i] ?? 0);
+  const viaHandLoop = NDArray.fromArray([N], rowNormsData);
+
+  assertShapeEqual(viaHandLoop.shape, viaChain.shape, "F1 closure: chain vs hand-loop shape");
+  assertDataBitIdentical(viaHandLoop.data, viaChain.data, "F1 closure: chain vs hand-loop data");
+});
+
+test("sqrt(): F1 closure, full L2 normalization — m.div(m.mul(m).sum(1).sqrt().reshape([N,1])) byte-identical to the rag-demo hand-loop formulation", () => {
+  const rng = makeRng(0x4c324e4f524d0000n); // "L2NORM"
+  const N = 5;
+  const D = 4;
+  // Keep values away from 0 to avoid a genuinely-zero row norm (which would
+  // make BOTH formulations agree on NaN anyway, but strictly positive rows
+  // are the representative, non-degenerate case this closure proof targets).
+  const data = genData(rng, [N, D]).map((v) => Math.abs(v) + 0.1);
+  const m = NDArray.fromArray([N, D], data);
+
+  // New chain (W3): the exact rag-demo-intended NumPy idiom, fully in NDArray.
+  const viaChain = m.div(m.mul(m).sum(1).sqrt().reshape([N, 1]));
+  assertShapeEqual([N, D], viaChain.shape, "L2-normalize chain shape");
+
+  // OLD hand-loop formulation (examples/rag-demo/main.ts lines ~46-65,
+  // pre-W3, verbatim structure): mul -> sum(1) -> hand Math.sqrt loop ->
+  // fromArray -> reshape([N,1]) -> div.
+  const squared = m.mul(m);
+  const sumSquares = squared.sum(1);
+  const rowNormsData = new Float64Array(sumSquares.data.length);
+  for (let i = 0; i < rowNormsData.length; i++) rowNormsData[i] = Math.sqrt(sumSquares.data[i] ?? 0);
+  const rowNorms = NDArray.fromArray([N], rowNormsData);
+  const rowNormsCol = rowNorms.reshape([N, 1]);
+  const viaHandLoop = m.div(rowNormsCol);
+
+  assertShapeEqual(viaHandLoop.shape, viaChain.shape, "L2-normalize closure: chain vs hand-loop shape");
+  assertDataBitIdentical(viaHandLoop.data, viaChain.data, "L2-normalize closure: chain vs hand-loop data");
+});
+
+// --- Section W3.5: non-vacuity smoke -----------------------------------
+
+test("sqrt(): plain smoke case, sqrt(2) at rank 0", () => {
+  const nd = NDArray.fromArray([], [2]);
+  assert.strictEqual(nd.sqrt().data[0], Math.SQRT2);
+});
+
+// --- W3 verify-round closures (Verify-B findings F1 + F2) ------------------
+
+test("sqrt: returns a FRESH buffer and never mutates the receiver (aliasing isolation, Verify-B F1)", () => {
+  const receiver = NDArray.fromArray([2, 2], [4, 9, 16, 25]);
+  const before = Float64Array.from(receiver.data);
+  const result = receiver.sqrt();
+  assert.notStrictEqual(result.data, receiver.data, "sqrt must allocate a new buffer, never alias the receiver's");
+  assertDataBitIdentical(receiver.data, before, "receiver data must be untouched by sqrt");
+  assertDataBitIdentical(result.data, Float64Array.from([2, 3, 4, 5]), "result carries the roots");
+});
+
+test("sqrt: LARGEST subnormal passes through bit-exactly (Verify-B F2)", () => {
+  // 0x000fffffffffffff — the largest subnormal, directly below the normal
+  // boundary; the smallest ones are already pinned above, this closes the
+  // other end of the subnormal range.
+  const buf = new ArrayBuffer(8);
+  const dv = new DataView(buf);
+  dv.setBigUint64(0, 0x000fffffffffffffn, false);
+  const largestSubnormal = dv.getFloat64(0, false);
+  const arr = NDArray.fromArray([1], [largestSubnormal]).sqrt();
+  const expected = Math.sqrt(largestSubnormal);
+  assertDataBitIdentical(arr.data, Float64Array.from([expected]), "largest subnormal must round-trip through sqrtRuntime bit-exactly");
 });
