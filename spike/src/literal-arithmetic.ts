@@ -811,7 +811,7 @@ type ContainsChar<S extends string, C extends string> = S extends `${string}${C}
  * mixed dot+exponent form (`1.5e10`) that a re-derivation might introduce,
  * keeping the "never wrong" guarantee independent of exactly how TS
  * canonicalizes a given numeric literal's string form. */
-type IsDotFormStep<S extends string> = ContainsChar<S, "."> extends true ? (ContainsChar<S, "e"> extends true ? false : true) : false;
+export type IsDotFormStep<S extends string> = ContainsChar<S, "."> extends true ? (ContainsChar<S, "e"> extends true ? false : true) : false;
 
 /**
  * Classify a literal `step` for the COMPILE-TIME GUARD (`slice.ts`'s

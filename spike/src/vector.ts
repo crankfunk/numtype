@@ -28,8 +28,8 @@
  * a union dim on either side is *never* misread as a verdict, it degrades
  * to "no claim" instead, same as a dynamic (`number`) dim.
  */
-import { type Dim, type IsDynamicDim, type RankUnknowable, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
-import { type IsUnion } from "./literal-arithmetic.ts";
+import { type Dim, type IsDynamicDim, type IsDynamicRank, type RankUnknowable, type Shape, type ShapeError, type ShowShape } from "./dim.ts";
+import { type IsDotFormStep, type IsUnion, type LiteralIndexBounds } from "./literal-arithmetic.ts";
 
 /** Non-error sentinel `DotCheck`/`VectorLenCheck` resolve to on every "pass"
  * branch (dynamic rank, dynamic dim, union dim, or equal literal lengths).
@@ -494,3 +494,160 @@ export type StackCheck<Shapes extends readonly Shape[]> = number extends Shapes[
 export type StackShape<Shapes extends readonly Shape[]> = number extends Shapes["length"]
   ? StackShapeArray<Shapes>
   : readonly [Shapes["length"], Extract<StackFold<Shapes>, Dim>];
+
+// ---------------------------------------------------------------------------
+// Op-Scheibe W5 (docs/op-w5-item-spec.md, D2/D4 + the Baustein-0 addendum
+// F1-F8): `ItemGuard<S, Idx>` — the `item(...indices)` REST-PARAMETER type.
+// `item` needs full indexing (one literal/dynamic index per axis, D1), so
+// its guard differs from `slice.ts`'s `SliceSpecsGuard` in exactly the ways
+// the addendum's findings pin down:
+//
+//  - F1 (BLOCKER, fixed): a `Guard<Result, Actual>`-style rest-parameter
+//    (ndarray.ts's `Guard`, which collapses its whole error branch to a
+//    single non-array `{ __shapeError }` object) is a permanent TS2370 AT
+//    THE METHOD DECLARATION when used as a rest-parameter type — confirmed
+//    empirically by the Baustein-0 verifier, the exact reason
+//    `SliceSpecsGuard` already exists as a tuple-shaped alternative
+//    instead of reusing `Guard` directly. `ItemGuard` follows that same
+//    tuple-shaped discipline: every branch stays an array/tuple type, only
+//    individual ELEMENTS are ever retyped to the branded error object
+//    (`ItemMark` below) — never the whole rest-parameter type.
+//  - F2: the fold below is S-DRIVEN (recurses over `S`, not `Idx`) — an
+//    Idx-driven fold (`SliceSpecsGuard`'s own idiom) silently accepts
+//    under-arity, which is exactly right THERE (partial indexing is
+//    `slice`'s whole point) and exactly WRONG here (`item` requires full
+//    indexing, D1): once `Idx` is exhausted before `S` is, `ItemFoldAcc`
+//    keeps filling the remaining position(s) with a plain `number` marker
+//    instead of stopping, so the guard's own returned tuple TYPE always has
+//    exactly `S["length"]` elements, regardless of how many arguments were
+//    actually supplied.
+//  - F3: that fixed-length shape is what makes arity mismatches (too few OR
+//    too many indices) a NATIVE `tsc` diagnostic (TS2554, "Expected N
+//    arguments, but got M") at the call site — there is architecturally no
+//    argument POSITION to hang a custom `__shapeError` message on for a
+//    *missing* argument, so unlike the bounds/dot-form checks below, arity
+//    is NOT a custom stem at the type layer (`itemRuntime`, runtime.ts,
+//    still throws its OWN gepinnt arity message for gradual/dynamic-rank
+//    callers the type layer can't check statically). Verified: `item()` on
+//    a rank-0 `S = []` compiles (the fold immediately bottoms out at `Acc =
+//    []`, a zero-length declared tuple); `item(0)` on the same receiver is
+//    TS2554, not a custom message.
+//  - F4 (regression found + fixed): without an explicit dynamic-length gate,
+//    a SPREAD call (`nd.item(...someNumberArray)`, `someNumberArray: number[]`)
+//    breaks with TS2556 ("A spread argument must either have a tuple type
+//    or be passed to a rest parameter") once the rest-parameter type is
+//    forced to a fixed-length tuple — `slice.ts`'s `SliceSpecsGuard` avoids
+//    this via its own `IsDynamicLength` gate; `ItemGuard` reuses
+//    `IsDynamicRank` (dim.ts) directly instead of duplicating that helper,
+//    since `Idx` (`readonly number[]`) is structurally a `Shape`
+//    (`readonly Dim[]`) already — same "is this tuple's length statically
+//    unknown" probe, no new type needed. A dynamic-length `Idx` degrades
+//    wholly to no-claim (gradual, `itemRuntime` backstops it at runtime).
+// ---------------------------------------------------------------------------
+
+/** The "not an integer" message stem for a literal index PROVEN non-integer
+ * via `IsDotFormStep` (F5): word-for-word the same stem `itemRuntime`
+ * (runtime.ts) throws at runtime for the identical case — `M3`'s "Stems
+ * wortgleich zur Runtime" — extended with the axis position and full shape
+ * for editor context, the same convention `slice.ts`'s own
+ * `IndexOutOfBoundsMessage`/`StepInvalidMessage` already use. */
+type ItemNotIntegerMessage<I extends number, Axis extends number, S extends Shape> =
+  `item: index ${I} for axis ${Axis} is not an integer (shape ${ShowShape<S>})`;
+
+/** The "out of bounds" message stem for a literal index `LiteralIndexBounds`
+ * (literal-arithmetic.ts, Spike 03) proves `"out"` for its axis's literal
+ * dim `D` — same word-for-word stem as `itemRuntime`'s own throw, same
+ * axis/shape-extended editor-context convention as `ItemNotIntegerMessage`
+ * above. */
+type ItemOutOfBoundsMessage<I extends number, Axis extends number, D extends Dim, S extends Shape> =
+  `item: index ${I} is out of bounds for axis ${Axis} with dim ${D} (shape ${ShowShape<S>})`;
+
+/**
+ * Classify ONE index `I` against its own axis's dim `D` (Baustein-0 addendum
+ * F1-F8). Three gates, checked in this ORDER — the W4 lesson (union
+ * distribution must be pre-gated before any naked check runs, vector.ts's
+ * own `StackFold`/`ArrayRowD` doc comments trace the original bug this
+ * lesson comes from) applies to every new fold/check going forward, `item`
+ * included:
+ *  1. `IsUnion<I>` FIRST, unconditionally degrading a union index to
+ *     no-claim (`I` passed through unchanged) — a naked distributive check
+ *     below would otherwise fork a union `I` into per-member verdicts that
+ *     could disagree, exactly the class of bug the W4 finding fixed in
+ *     `StackFold`. Doubly justified here by F6 (below): `LiteralIndexBounds`
+ *     alone is already MORE conservative than a naive reading of its own
+ *     doc comment suggests (a uniformly-out-of-bounds union still resolves
+ *     to `"unknown"`, not `"out"`), so this pre-gate is not merely
+ *     defensive — it is the ONLY thing standing between a union index and a
+ *     silent pass that neither `IsDotFormStep` (its own parameter is a
+ *     TEMPLATE-LITERAL string built from `I`, which itself distributes over
+ *     a union `I` the same naked way) nor `LiteralIndexBounds` would flag.
+ *  2. `IsDotFormStep<\`${I}\`>` — a provable non-integer literal (`1.5`,
+ *     `-1.5`; F5). NOT covered by `LiteralIndexBounds` itself: that type's
+ *     own doc comment documents `1.5`-shaped inputs as `IsPlainDigits`
+ *     failures, falling through to its `"unknown"` (silent-pass) branch —
+ *     dot-form rejection needs this SEPARATE, dedicated check, reusing the
+ *     exact classifier `LiteralStepInvalid` (literal-arithmetic.ts) already
+ *     uses for the structurally identical `slice()` step case.
+ *  3. `LiteralIndexBounds<I, D>` (literal-arithmetic.ts, Spike 03) — the
+ *     NumPy-negative-aware bounds verdict (`"out"` only for a PROVABLY
+ *     out-of-range literal index against a literal dim; `"in"`/`"unknown"`
+ *     both pass through, same never-wrong-only-incomplete discipline every
+ *     other guard in this codebase follows).
+ * Anything surviving all three gates passes `I` straight through unchanged
+ * — `ItemGuard`'s own declared return type stays array-shaped either way
+ * (F1), so a rejected position is simply one `{ __shapeError }` ELEMENT
+ * among otherwise-unchanged siblings, never the whole rest-parameter type.
+ */
+type ItemMark<D extends Dim, I extends number, Axis extends number, S extends Shape> = IsUnion<I> extends true
+  ? I
+  : IsDotFormStep<`${I}`> extends true
+    ? { readonly __shapeError: ItemNotIntegerMessage<I, Axis, S> }
+    : LiteralIndexBounds<I, D> extends "out"
+      ? { readonly __shapeError: ItemOutOfBoundsMessage<I, Axis, D, S> }
+      : I;
+
+/**
+ * S-driven arity + per-position guard fold (F1/F2, see the section header
+ * above for the full "why S-driven, not Idx-driven" rationale). Tail-
+ * recursive accumulator, walking `S` and `Idx` in lockstep exactly like
+ * `slice.ts`'s `ValidateSpecsAcc` — `Acc["length"]` doubles as the current
+ * axis index (one entry accumulated per consumed position, the same
+ * rank-bounded tuple-length-arithmetic idiom `ValidateSpecsAcc` already
+ * uses for its own `Passed["length"]`). `FullS` threads the ORIGINAL shape
+ * (unconsumed) purely for messages, same as `ValidateSpecsAcc`'s `FullS`. */
+type ItemFoldAcc<
+  S extends readonly Dim[],
+  Idx extends readonly number[],
+  FullS extends Shape,
+  Acc extends readonly unknown[] = [],
+> = S extends readonly [infer SHead extends Dim, ...infer STail extends readonly Dim[]]
+  ? Idx extends readonly [infer IHead extends number, ...infer ITail extends readonly number[]]
+    ? ItemFoldAcc<STail, ITail, FullS, [...Acc, ItemMark<SHead, IHead, Acc["length"], FullS>]>
+    : ItemFoldAcc<STail, readonly [], FullS, [...Acc, number]> // Idx exhausted early: fill with a plain `number` marker so the declared tuple stays S["length"] long — TS2554 (F3) catches the actual under-arity call
+  : Acc; // S exhausted: done. Any Idx elements left unconsumed here simply never entered Acc, so a too-many-arguments call's declared rest-parameter type is still exactly S["length"] long — TS2554 (F3) catches that too, the same native mechanism, no extra machinery needed
+
+/**
+ * The `item()` method's rest-parameter type (F1: used DIRECTLY as the
+ * declared type, never wrapped in `Guard<>`). Two wide-type gates, checked
+ * BEFORE any tuple recursion — same "wide-type guard first" discipline
+ * every op in this codebase follows (`SliceShape`/`SliceSpecsGuard`'s own
+ * `RankUnknowable`/`IsDynamicLength` gates are the direct precedent):
+ *  - `RankUnknowable<S>` (dim.ts: dynamic rank OR a mixed-rank shape union)
+ *    passes `Idx` through UNCHANGED — can't validate arity or positions
+ *    statically against an unknown/ambiguous rank, gradual/runtime-checked
+ *    instead (`itemRuntime` stays authoritative).
+ *  - `IsDynamicRank<Idx>` (F4: a spread `...someNumberArray` call, dim.ts's
+ *    existing "is this tuple's length statically unknown" probe, reused
+ *    unchanged since `Idx` is structurally a `Shape`) ALSO passes `Idx`
+ *    through unchanged — required so the spread form even COMPILES at all
+ *    (TS2556 otherwise, F4's own regression finding), and the same
+ *    honest-degrade policy: a dynamic-length index list can't be arity- or
+ *    bounds-checked at compile time either.
+ * Otherwise: `ItemFoldAcc` (F2/F3) produces the fixed-length, per-position-
+ * guarded tuple.
+ */
+export type ItemGuard<S extends Shape, Idx extends readonly number[]> = RankUnknowable<S> extends true
+  ? Idx
+  : IsDynamicRank<Idx> extends true
+    ? Idx
+    : ItemFoldAcc<S, Idx, S>;

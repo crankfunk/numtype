@@ -298,6 +298,15 @@ literal `[3]` rows infers `NDArray<[2, 3]>`, a mismatched row length is a compil
 Same disclosed asymmetry as `argmax`/`topk`/the scalar overloads/`mean`/`sqrt` above:
 **TypeScript-runtime only, no WASM kernel yet**.
 
+**`x.item(...indices)`** is the direct scalar read — NumPy's own `x.item(i, j, ...)` — full
+indexing only (exactly one index per axis, rank 0 included: `x.item()` reads the sole element).
+A literal index provably out of bounds for its axis (NumPy-style negative indexing included) or
+a non-integer literal (`1.5`) is a compile error at that argument; a wrong number of indices for
+a statically-known rank is a native TypeScript arity error. No kernel at all here — `item` is a
+plain strided read, not an op with a kernel to write in the first place — so this one has no WASM
+counterpart to be asymmetric with (FOLLOWUPS tracks the eventual `WNDArray.item` for residency
+symmetry, not for correctness).
+
 For the full per-phase specifications, results, and the competitive analysis, start at the
 [research-notes reading guide](docs/README.md) (curated entry points by interest) or the
 [roadmap](docs/roadmap.md). Internal research notes are partly in German — the guide says

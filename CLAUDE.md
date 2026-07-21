@@ -61,7 +61,18 @@ verwandt); (2) während der Verify-Runde (Baustein B, BLOCKER-Klasse M2-Verstoß
 Positions-Union-Distribution in `StackFold` — `IsUnion<Head>`-Gate vor dem naked Match
 ergänzt, `ReduceAxis`-Positions-Präzedenz, Nicht-Vakuität per Mutations-Probe bewiesen;
 Klassen-Surface-Ripple wie W1/W2, `bench:editor`-Pins zweimal neu gesetzt: +845 uniform,
-dann +6 uniform aus dem Fix).
+dann +6 uniform aus dem Fix). Fünfte und letzte Op-Scheibe der Wunschliste: **W5 (`item`) —
+ERLEDIGT 2026-07-21** (docs/op-w5-item-spec.md v2 + Baustein-0-Addendum F1-F8
+/-ergebnisse.md; `NDArray.item(...indices)` — voller Skalar-Read, `ItemGuard<S, Idx>` direkt
+als Rest-Parameter-Typ (F1, Guard<>-Wrapper wäre TS2370), S-getriebener Fold (F2), Arity
+nativ über TS2554 (F3), Spread-Gate via `IsDynamicRank` (F4-Fix); M1 v5: kernel-los per
+Design (reiner strided Read, kein Kernel zu parallelisieren) — damit ist die komplette
+Dogfooding-Wunschliste W1-W5 abgearbeitet. D6-Befund: `Equal<ItemGuard<...>>`-Message-
+Pins kosteten pro Pin ≈1,700 Instantiations — die Erst-Umsetzung überschritt das
++6,000-Gate fast um das Doppelte, budgetgetriebene Pin-Konsolidierung (ein kombinierter
+Zwei-Positionen-Pin statt fünf Einzel-Pins) brachte es auf +5,873; FOLLOWUPS trackt sowohl
+den Kostenmechanismus als auch das Aufsplitten von scalar-mean.test.ts, das jetzt W2-W5
+sammelt).
 FOLLOWUPS-Minis nebenher; Trusted Publishing optional (Fakten in FOLLOWUPS).
 Repo-Härtung aktiv seit 2026-07-20: Rulesets `protect-main` (kein Force-Push/Delete auf main —
 gilt auch für den Owner; bewusste Ausnahme nur via Ruleset-Deaktivierung) +
@@ -84,18 +95,18 @@ Session-Zustand).
 - **Artefakt-Hash** (Clean-Rebuild, SHA256 von `spike/src/wasm/numtype_core.wasm`):
   `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` (seit Kern 11; CI-Gate
   `check:freeze` mit plattform-gelabelter Pin-Menge).
-- **check:diag** Haupt-Pin **195,481 @ 137 Files** (nur Root-Korpus; seit W4 inkl. Verify-Runde-
-  Fix, von 190,640 — Δ+4,841, Aufschlüsselung in docs/op-w4-stack-ergebnisse.md F-ADV-1) ·
-  **check:diag:stress 105,758 @ 82** (seit W4 inkl. Fix, von 104,900 — Δ+858, Klassen-Surface-
-  Ripple wie W1/W2) · **check:diag:browser 2,142 @ 75** (unverändert seit W1, stress/browser
-  ungated by design, `pnpm check` compoundet alle drei).
-- **Testzahlen:** test:core 1572 (1564 + 8 aus W4; der Verify-Fix ist rein typseitig, keine
-  neuen Runtime-Tests) · test:resident 4278+2 · test:threaded 69 · test:browser 4 ·
-  test:package 3 + Typ-Smoke · cargo 161 · test:example (Registry-Install + Example-Typcheck +
-  8 asserted Queries).
-- **Editor-Gate:** `bench:editor` W1–W7 — Instantiation-Pins exact-match hart (seit W4 zweimal
-  neu gesetzt: +845 uniform aus der Erst-Umsetzung, +6 uniform aus dem Verify-Runde-Fix),
-  Latenz am 2x-Ceiling, Correctness wirft.
+- **check:diag** Haupt-Pin **201,455 @ 137 Files** (nur Root-Korpus; seit W5, von 195,481 —
+  Δ+5,873, Aufschlüsselung in docs/op-w5-item-ergebnisse.md — davon nur +623 Quellcode, der Rest
+  Test-/Typ-Pin-Kosten; enthält den D6-Befund „`Equal<ItemGuard<...>>`-Message-Pins sind pro
+  Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 106,398 @ 82**
+  (seit W5, von 105,758 — Δ+640, ausschließlich aus den geteilten spike/src-Änderungen, kein
+  stress-eigenes File berührt) · **check:diag:browser 2,142 @ 75** (unverändert seit W1,
+  stress/browser ungated by design, `pnpm check` compoundet alle drei).
+- **Testzahlen:** test:core 1588 (1572 + 16 aus W5) · test:resident 4278+2 · test:threaded 69 ·
+  test:browser 4 · test:package 3 + Typ-Smoke · cargo 161 · test:example (Registry-Install +
+  Example-Typcheck + 8 asserted Queries).
+- **Editor-Gate:** `bench:editor` W1–W7 — Instantiation-Pins exact-match hart (seit W5 neu
+  gesetzt: uniform +628 über alle 7 Workloads), Latenz am 2x-Ceiling, Correctness wirft.
 - **Mess-Regeln (tragend):** Der Instantiation-Counter ist CHECK-ORDER-abhängig — Pins sind nur
   für ein FIXES File-Set exakt. Datei hinzufügen/umbenennen (selbst ein leeres `export {}`)
   verschiebt den Wert um bis zu ±≈2,000 (Order-Noise, keine Typkosten) → per empty-then-fill

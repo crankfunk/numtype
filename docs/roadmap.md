@@ -257,4 +257,8 @@ byte-identisch bewiesen). **W4 (stack): implementiert 2026-07-21** (docs/op-w4-s
 Baustein-0-Addendum F1-F8/-ergebnisse.md, statische `NDArray.stack(rows)`-Methode nach
 `fromArray`, `StackCheck`/`StackShape` in vector.ts, `RowShapesOf` in ndarray.ts, NDArray-only,
 kein WASM-Kernel — F5-Schließung der `embedMatrix`-Zeilen-Flatten-Friction byte-identisch
-bewiesen). W5 (item/at) bleibt offen.
+bewiesen). **W5 (item): implementiert 2026-07-21** (docs/op-w5-item-spec.md v2 +
+Baustein-0-Addendum F1-F8/-ergebnisse.md, `NDArray.item(...indices)` — voller Skalar-Read,
+`ItemGuard`/`ItemMark`/`ItemFoldAcc` in vector.ts, `itemRuntime` in runtime.ts, NDArray-only,
+M1 v5: kernel-los per Design (reiner strided Read, kein Kernel zu parallelisieren). **Damit ist
+die komplette Op-Wunschliste W1–W5 abgearbeitet.**

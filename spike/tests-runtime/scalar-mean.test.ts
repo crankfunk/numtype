@@ -58,11 +58,27 @@
  * `NDArray.stack`'s own output); a large-N smoke case; and an aliasing-
  * isolation/buffer-freshness pin (the W3-lesson: the result is a fresh
  * buffer, rows stay unmutated).
+ *
+ * Op-Scheibe W5 (docs/op-w5-item-spec.md): another clearly-marked block
+ * APPENDED at the end of this file (D5) covers `NDArray.item(...indices)`/
+ * `itemRuntime` — same no-new-file house convention (FOLLOWUPS now tracks
+ * splitting this file, which has grown into the W2-W5 collection point, as
+ * its own mini-slice with an empty-then-fill protocol). Coverage: rank
+ * 0/1/2/3 full-indexing reads; NumPy-parity negative indices; all three
+ * throw stems (arity/not-integer/out-of-bounds) word-for-word, reached both
+ * via `itemRuntime` directly and through the public `NDArray.item` API;
+ * size-0-dim OOB (every index is out of bounds, no special case needed);
+ * NaN/-0 byte-exact pass-through (`bitsOf`, same fixture style as
+ * special-values.test.ts/W4's stack fixture); a 200+-case randomized
+ * flat-index differential against independently-computed row-major offset
+ * arithmetic over `.data`; and transposed/sliced receivers (real strided,
+ * a distinct materialized data layout; itemRuntime has a single
+ * unconditional computeStrides+offset path, no fast-path split).
  */
 import assert from "node:assert";
 import { test } from "node:test";
 import { NDArray } from "../src/ndarray.ts";
-import { elementwiseBinary, meanRuntime, sumRuntime } from "../src/runtime.ts";
+import { computeStrides, elementwiseBinary, itemRuntime, meanRuntime, sumRuntime } from "../src/runtime.ts";
 import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
 import { genData, genDataSpecial, makeRng, nextF64Special, SPECIAL_VALUES, type Rng } from "./prng.ts";
 
@@ -933,4 +949,198 @@ test("stack: result.data is a FRESH buffer, never aliasing any row's own data �
 
   stacked.data[0] = 999;
   assert.notStrictEqual(a.data[0], 999, "mutating the stack result must not affect row a's data (no shared buffer)");
+});
+
+// =============================================================================
+// Op-Scheibe W5 (docs/op-w5-item-spec.md): NDArray.item(...indices) /
+// itemRuntime. See this file's own header comment for the coverage summary.
+// =============================================================================
+
+// --- Section W5.1: rank 0/1/2/3 valid full-indexing reads -------------------
+
+test("item(): rank 0 — item() (zero arguments) reads the sole element", () => {
+  const scalar = NDArray.fromArray([], [7]);
+  assert.strictEqual(scalar.item(), 7, "rank-0 item() must read the sole element");
+});
+
+test("item(): rank 1 — item(i) matches .data[i]", () => {
+  const v = NDArray.fromArray([4], [10, 20, 30, 40]);
+  for (let i = 0; i < 4; i++) {
+    assert.strictEqual(v.item(i), v.data[i], `rank-1 item(${i}) must equal .data[${i}]`);
+  }
+});
+
+test("item(): rank 2 — item(i, j) matches row-major flat offset", () => {
+  const m = NDArray.fromArray([2, 3], [1, 2, 3, 4, 5, 6]);
+  for (let i = 0; i < 2; i++) {
+    for (let j = 0; j < 3; j++) {
+      assert.strictEqual(m.item(i, j), m.data[i * 3 + j], `item(${i},${j}) must equal .data[${i * 3 + j}]`);
+    }
+  }
+});
+
+test("item(): rank 3 — item(i, j, k) matches row-major flat offset", () => {
+  const rng = makeRng(0x4954454d5f523300n); // "ITEM_R3"
+  const shape = [2, 3, 4];
+  const data = genData(rng, shape);
+  const t = NDArray.fromArray(shape, data);
+  const strides = computeStrides(shape);
+  for (let i = 0; i < 2; i++) {
+    for (let j = 0; j < 3; j++) {
+      for (let k = 0; k < 4; k++) {
+        const flat = i * (strides[0] ?? 0) + j * (strides[1] ?? 0) + k * (strides[2] ?? 0);
+        assert.strictEqual(t.item(i, j, k), t.data[flat], `item(${i},${j},${k}) must equal .data[${flat}]`);
+      }
+    }
+  }
+});
+
+// --- Section W5.2: negative indices (NumPy parity) ---------------------------
+
+test("item(): negative indices normalize NumPy-style (i < 0 -> i + d)", () => {
+  const m = NDArray.fromArray([2, 3], [1, 2, 3, 4, 5, 6]);
+  assert.strictEqual(m.item(-1, -1), m.item(1, 2), "item(-1,-1) must equal item(1,2)");
+  assert.strictEqual(m.item(-2, -3), m.item(0, 0), "item(-2,-3) must equal item(0,0)");
+  assert.strictEqual(m.item(-1, 0), m.item(1, 0), "item(-1,0) must equal item(1,0)");
+  assert.strictEqual(m.item(0, -1), m.item(0, 2), "item(0,-1) must equal item(0,2)");
+});
+
+// --- Section W5.3: throw stems, word-for-word, direct + public API ----------
+
+test("itemRuntime(): arity stem — expected N indices (got M)", () => {
+  const shape = [2, 3];
+  const data = Float64Array.from([1, 2, 3, 4, 5, 6]);
+  assert.throws(() => itemRuntime(shape, data, [0]), /^Error: item: expected 2 indices \(got 1\)$/, "under-arity stem");
+  assert.throws(() => itemRuntime(shape, data, [0, 0, 0]), /^Error: item: expected 2 indices \(got 3\)$/, "over-arity stem");
+  assert.throws(() => itemRuntime([], data, [0]), /^Error: item: expected 0 indices \(got 1\)$/, "rank-0 over-arity stem");
+});
+
+test("item(): public API arity throws reach itemRuntime's own stem (dynamic-rank widened receiver)", () => {
+  // Widen past the compile-time guard: a plain (non-const, non-literal-typed)
+  // variable receiver has a dynamic `number[]` shape at the type layer, the
+  // same "widen past the guard" technique mean(5)'s own out-of-range-axis
+  // pin (W2 section above) already uses.
+  const shape: number[] = [2, 3];
+  const m = NDArray.fromArray(shape, [1, 2, 3, 4, 5, 6]) as unknown as NDArray<number[]>;
+  assert.throws(
+    () => (m as unknown as { item: (...i: number[]) => number }).item(0),
+    /^Error: item: expected 2 indices \(got 1\)$/,
+    "public item() arity throw must reach itemRuntime's own stem",
+  );
+});
+
+test("itemRuntime(): not-an-integer stem — index X for axis A is not an integer", () => {
+  const shape = [2, 3];
+  const data = Float64Array.from([1, 2, 3, 4, 5, 6]);
+  assert.throws(() => itemRuntime(shape, data, [0.5, 0]), /^Error: item: index 0\.5 for axis 0 is not an integer$/, "axis-0 not-integer stem");
+  assert.throws(() => itemRuntime(shape, data, [0, 1.5]), /^Error: item: index 1\.5 for axis 1 is not an integer$/, "axis-1 not-integer stem");
+});
+
+test("item(): public API not-an-integer throw reaches itemRuntime's own stem (dynamic-index widened receiver)", () => {
+  const m = NDArray.fromArray([2, 3], [1, 2, 3, 4, 5, 6]);
+  const badIndex: number = 0.5; // widened past the literal-index compile-time guard
+  assert.throws(
+    () => m.item(badIndex, 0),
+    /^Error: item: index 0\.5 for axis 0 is not an integer$/,
+    "public item() not-integer throw must reach itemRuntime's own stem",
+  );
+});
+
+test("itemRuntime(): out-of-bounds stem — index X out of bounds for axis A with dim D", () => {
+  const shape = [2, 3];
+  const data = Float64Array.from([1, 2, 3, 4, 5, 6]);
+  assert.throws(() => itemRuntime(shape, data, [2, 0]), /^Error: item: index 2 is out of bounds for axis 0 with dim 2$/, "axis-0 positive OOB stem");
+  assert.throws(() => itemRuntime(shape, data, [0, 3]), /^Error: item: index 3 is out of bounds for axis 1 with dim 3$/, "axis-1 positive OOB stem");
+  assert.throws(() => itemRuntime(shape, data, [-3, 0]), /^Error: item: index -3 is out of bounds for axis 0 with dim 2$/, "axis-0 negative OOB stem");
+  assert.throws(() => itemRuntime(shape, data, [0, -4]), /^Error: item: index -4 is out of bounds for axis 1 with dim 3$/, "axis-1 negative OOB stem");
+});
+
+test("item(): public API out-of-bounds throw reaches itemRuntime's own stem (dynamic-index widened receiver)", () => {
+  const m = NDArray.fromArray([2, 3], [1, 2, 3, 4, 5, 6]);
+  const badIndex: number = 2; // widened past the literal-index compile-time guard
+  assert.throws(
+    () => m.item(badIndex, 0),
+    /^Error: item: index 2 is out of bounds for axis 0 with dim 2$/,
+    "public item() out-of-bounds throw must reach itemRuntime's own stem",
+  );
+});
+
+// --- Section W5.4: size-0-dim OOB — every index is unreachable ---------------
+
+test("itemRuntime(): size-0 dim — EVERY index is out of bounds, no special case needed", () => {
+  const shape = [2, 0, 3];
+  const data = new Float64Array(0);
+  for (const idx of [-1, 0, 1]) {
+    assert.throws(
+      () => itemRuntime(shape, data, [0, idx, 0]),
+      /^Error: item: index -?\d+ is out of bounds for axis 1 with dim 0$/,
+      `size-0 axis must reject index ${idx}`,
+    );
+  }
+});
+
+// --- Section W5.5: NaN / -0 byte-exact pass-through --------------------------
+
+test("item(): NaN payload bits and -0 pass through exactly (direct read, no arithmetic)", () => {
+  const nan = Float64Array.from([Number.NaN])[0] ?? Number.NaN;
+  const nanBits = bitsOf(nan);
+  const negZero = -0;
+  const m = NDArray.fromArray([3], [nan, negZero, 1]);
+  assert.strictEqual(bitsOf(m.item(0)), nanBits, "item(0) must preserve the exact NaN payload bits");
+  assert.strictEqual(Object.is(m.item(1), -0), true, "item(1) must be Object.is-distinguished -0, not +0");
+  assert.strictEqual(m.item(2), 1, "item(2) sanity check");
+});
+
+// --- Section W5.6: 200+-case randomized flat-index differential -------------
+
+test("item(): 200+ randomized cases match independently-computed row-major flat-offset arithmetic", () => {
+  const rng = makeRng(0x4954454d5f444946n); // "ITEM_DIF"
+  let cases = 0;
+  const shapes: readonly (readonly number[])[] = [[], [5], [2, 3], [4, 2, 3], [2, 2, 2, 2]];
+  for (const shape of shapes) {
+    const data = genData(rng, shape);
+    const nd = NDArray.fromArray(shape, data);
+    const strides = computeStrides(shape);
+    if (shape.some((d) => d === 0)) continue; // size-0 axis: always OOB, covered separately above
+    for (let trial = 0; trial < 50; trial++) {
+      const useNegative = rng.nextBool();
+      const idxNums = shape.map((d) => {
+        const positive = rng.nextInt(0, d - 1);
+        return useNegative && rng.nextBool() ? positive - d : positive;
+      });
+      let expectedFlat = 0;
+      for (let axis = 0; axis < shape.length; axis++) {
+        const raw = idxNums[axis] ?? 0;
+        const d = shape[axis] ?? 0;
+        const normalized = raw < 0 ? raw + d : raw;
+        expectedFlat += normalized * (strides[axis] ?? 0);
+      }
+      const expected = data[expectedFlat] ?? Number.NaN;
+      const actual = nd.item(...idxNums);
+      assert.strictEqual(actual, expected, `case ${cases} shape=[${shape.join(",")}] idx=[${idxNums.join(",")}]`);
+      cases++;
+    }
+  }
+  assert.ok(cases >= 200, `must run at least 200 differential cases (ran ${cases})`);
+});
+
+// --- Section W5.7: transposed / sliced receivers (real strided reads) -------
+
+test("item(): transposed receiver — reads agree across a distinct materialized layout", () => {
+  const m = NDArray.fromArray([2, 3], [1, 2, 3, 4, 5, 6]);
+  const t = m.transpose(); // shape [3, 2]
+  for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 2; j++) {
+      assert.strictEqual(t.item(i, j), m.item(j, i), `transposed item(${i},${j}) must equal original item(${j},${i})`);
+    }
+  }
+});
+
+test("item(): sliced receiver — item reads into the freshly-copied slice buffer, not the parent's", () => {
+  const m = NDArray.fromArray([3, 3], [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const row = m.slice(1); // shape [3]: [4, 5, 6]
+  assert.strictEqual(row.item(0), 4, "sliced row item(0)");
+  assert.strictEqual(row.item(1), 5, "sliced row item(1)");
+  assert.strictEqual(row.item(2), 6, "sliced row item(2)");
+  assert.strictEqual(row.item(-1), 6, "sliced row item(-1)");
 });

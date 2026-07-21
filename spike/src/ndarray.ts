@@ -31,6 +31,7 @@ import {
   computeStrides,
   dotRuntime,
   elementwiseBinary,
+  itemRuntime,
   keepDimsShape,
   matmulRuntime,
   meanRuntime,
@@ -48,7 +49,7 @@ import {
 } from "./runtime.ts";
 import type { LiteralShapeProduct } from "./literal-arithmetic.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "./slice.ts";
-import type { DotCheck, StackCheck, StackShape, TopkCheck, TopkShape } from "./vector.ts";
+import type { DotCheck, ItemGuard, StackCheck, StackShape, TopkCheck, TopkShape } from "./vector.ts";
 import { checkThreadedEnv, WasmBackend, type BackendKind, type ThreadedBackendOptions } from "./wasm/backend-api.ts";
 import { initCore } from "./wasm/loader.ts";
 import type { ThreadedBackend } from "./wasm/threaded.ts";
@@ -895,5 +896,51 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
   sqrt(): NDArray<S> {
     const data = sqrtRuntime(this.data);
     return new NDArray<S>(this.shape as unknown as S, data);
+  }
+
+  /** Op-Scheibe W5 (docs/op-w5-item-spec.md): the direct scalar read, NumPy's
+   * own `x.item(i, j, ...)` — the friction-log's last remaining Wunschlisten-
+   * Platz (docs/dogfooding-rag-ergebnisse.md W5/F3: a scalar read out of a
+   * score matrix, e.g. `similarities.item(qi, docIdx)`, previously needed
+   * either `slice(qi).slice(docIdx)` — two fresh-copy allocations for one
+   * number — or hand-rolled flat-index arithmetic over `.data` directly,
+   * bypassing this class's own strided-read logic entirely). FULL indexing
+   * only (D1): exactly one index per axis, rank 0 included (`item()`, zero
+   * arguments, reads the sole element). No partial indexing (that's
+   * `slice()`), no setter, no `at` alias (D1: a single name — `at` invites
+   * confusion with `Array.prototype.at`'s single-axis semantics).
+   *
+   * `ItemGuard<S, Idx>` (vector.ts, Baustein-0 addendum F1-F8) is used
+   * DIRECTLY as the rest-parameter's declared type (F1: wrapping it in the
+   * `Guard<>` helper above is a permanent TS2370 at this very declaration —
+   * confirmed empirically, the reason `slice()`'s own `SliceSpecsGuard`
+   * already exists as a parallel, non-`Guard`-based mechanism). Two
+   * DIFFERENT compile-time mechanisms cover the two provable-mistake
+   * classes (F3, disclosed asymmetry, not an oversight):
+   *  - arity (wrong number of indices for a statically-known rank) is a
+   *    NATIVE `tsc` diagnostic, TS2554 ("Expected N arguments, but got M")
+   *    — `ItemGuard`'s own fold pins the declared rest-parameter type to
+   *    exactly `S["length"]` elements, so TS's own arity check does the
+   *    work; there is no argument position to hang a custom message on for
+   *    a MISSING argument;
+   *  - a literal index PROVABLY invalid for its own axis (out of bounds
+   *    per `LiteralIndexBounds`'s NumPy-negative-aware Spike-03 semantics,
+   *    or a dot-form non-integer like `1.5` per `IsDotFormStep`) is a
+   *    custom `{ __shapeError }` message AT that exact argument, stems
+   *    word-for-word identical to `itemRuntime`'s own runtime throws (M3).
+   * Wide rank/dim/index, union index, and dynamic-length spread calls
+   * (`item(...someNumberArray)`, F4) all degrade to no-claim, gradual,
+   * runtime-checked (`itemRuntime` stays authoritative for everything the
+   * static guard can't prove).
+   *
+   * Surface asymmetry (same disclosed shape as `argmax`/`topk`/the W2
+   * scalar overloads/`mean`/`sqrt`/`stack`): `item` exists ONLY on this
+   * naive `NDArray` — no WASM kernel, no `WNDArray` parity yet (M1 v5:
+   * kernel-less by design, a plain strided read; FOLLOWUPS.md tracks the
+   * parity follow-up). Reuses Spike 03's own negative-index-normalization +
+   * bounds-check semantics (`docs/spike-03-index-bounds-ergebnisse.md`),
+   * `computeStrides` for the flat offset — no new arithmetic invented. */
+  item<const Idx extends readonly number[]>(...indices: ItemGuard<S, Idx>): number {
+    return itemRuntime(this.shape, this.data, indices as unknown as readonly number[]);
   }
 }

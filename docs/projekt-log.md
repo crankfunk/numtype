@@ -410,3 +410,95 @@ natürlich" ist nie eine sichere Scope-Annahme — Misch-Verdikt-Unions müssen 
 Destrukturierung gegated werden. Final: 195,481 @ 137 (+4,841), stress 105,758,
 test:core 1,572, 22 Typ-Pins. Wunschlisten-Platz 4 geschlossen: embedMatrix ist
 durch NDArray.stack ersetzt (byte-identische Rückprobe).
+
+## Op-Scheibe W5: `item` (2026-07-21)
+
+Fünfte und letzte Op-Scheibe der Dogfooding-Wunschliste (docs/dogfooding-rag-ergebnisse.md
+W5/F3 — ein Skalar-Read aus der Score-Matrix): `NDArray.item(...indices)`, NumPys direkter
+Skalar-Accessor. Spec docs/op-w5-item-spec.md Version 2 nach Baustein-0-Addendum (brainroute:deep,
+Scratch-Worktree, kompilierte Form GELIEFERT UND GEMESSEN vor der Umsetzung — F1-F8):
+
+- **F1 (BLOCKER, vorab gefangen):** `Guard<>` auf dem Rest-Parameter kollabiert zu TS2370 an der
+  Deklaration — Rest-Parameter müssen array-artig bleiben. `ItemGuard<S, Idx>` folgt stattdessen
+  der `SliceSpecsGuard`-Präzedenz: Tupel-geformt in jeder Verzweigung, nur einzelne Positionen
+  werden zu `{__shapeError}`-Objekten retypisiert.
+- **F2:** Der Fold ist S-GETRIEBEN (nicht Idx-getrieben wie `SliceSpecsGuard` — dort ist
+  Under-Arity gewollt/Partial-Indexing, hier verboten/volle Indizierung).
+- **F3 (Spec-Korrektur, erzwungene Mechanik):** Arity-Verstöße sind natives TS2554, nicht eine
+  Custom-Message — für ein FEHLENDES Argument existiert architektonisch keine Position, an die
+  eine Message gehängt werden könnte. `itemRuntime` trägt einen eigenen, runtime-only
+  Arity-Stem.
+- **F4 (Regression gefunden + gefixt):** Ohne `IsDynamicRank<Idx>`-Gate bricht ein Spread-Aufruf
+  (`item(...arr)`) mit TS2556 — dasselbe Gate wie `SliceSpecsGuard`s `IsDynamicLength`, hier
+  direkt aus dim.ts wiederverwendet (`Idx` ist strukturell ein `Shape`).
+- **F5:** Dot-Form-Ablehnung ist NICHT in `LiteralIndexBounds` (dort silent-pass zu "unknown")
+  — braucht `IsDotFormStep`s Export (ein `export`-Präfix, dieselbe Owner-gedeckte Edit-Klasse
+  wie frühere Ein-Wort-Exports).
+- **F6:** `LiteralIndexBounds`s Union-Verhalten ist konservativer als sein eigener
+  Doc-Kommentar — der `IsUnion`-Pre-Gate in `ItemMark` ist doppelt begründet.
+- **F7/F8:** TS7s Ein-Diagnose-pro-Call-Regel reproduziert; Stil `I extends number` statt
+  `I & (string|number)`.
+
+Umsetzung folgte der verifizierten Skizze 1:1 (kein zweiter Design-Fund während der eigenen
+Implementierung). D1: VOLLE Indizierung (ein Index je Achse), Rang 0 = `item()` ohne Argumente,
+kein Setter/Partial-Indexing/`at`-Alias. D3 (Runtime, `itemRuntime` APPENDED in runtime.ts):
+Arity-Check, NumPy-Negativ-Normalisierung + Bounds-Check pro Achse (Stems wortgleich zu den
+Typ-Stems, siehe unten), Offset-Summe über `computeStrides` — ein reiner strided Read, KEIN
+Kernel (M1 v5: kernel-lose Referenz-Ops zulässig, solange die Paritätslücke in FOLLOWUPS
+getrackt wird). D4: `item` als Klassenkörper-Append nach `sqrt`.
+
+**D6-Kosten-Befund (der eigentliche Fund dieser Scheibe):** Die Erst-Umsetzung folgte der
+Addendum-Skizze wörtlich — 5 separate `Expect<Equal<ItemGuard<...>, HandType>>`-Message-
+Equality-Pins in ndarray.test-d.ts — und maß ein Gesamt-Delta von **+11.563**, fast das
+Doppelte des ≤ +6.000-Gates. Bisektion (additive Entfernung via Backup-Kopie, keine
+Mutanten-Notwendigkeit) zerlegte das: Quellcode allein +623 (nahe an der Baustein-0-Messung
++712), die restlichen +10.940 fast vollständig aus den Testdateien — davon +9.066 allein aus
+`ndarray.test-d.ts`, und davon wiederum **~5.020 aus den 5 `ItemGuard`-Message-Pins**. Isolierte
+Messung: EIN einzelner `Equal<ItemGuard<...>, T>`-Vergleich gegen einen strukturell ähnlichen
+Handtyp kostet ≈1.700-1.750 Instantiations — eine Größenordnung über einer bloßen
+`ItemGuard`-Referenz (≈80), einem Self-Compare (≈100-110) oder einem Vergleich gegen `unknown`
+(≈100, da `tsc`s Assignability-Check dort die Quelle nicht voll normalisieren muss). Reaktion:
+Pin-Konsolidierung — EIN kombinierter Zwei-Fehlerpositionen-Pin (`ItemGuard<[2,3], [0.5, 3]>`,
+beweist Dot-Form UND Out-of-Bounds gleichzeitig, TS7s Ein-Diagnose-pro-Call-Fakt F7 ausnutzend)
+statt fünf Einzel-Pins, Mixed-Rank-S über die bloße `ItemGuard`-Typebene statt eine
+Klasseninstanzen-Union getestet, das `@ts-expect-error`-Real-Call-Trio auf drei statt vier
+Fälle reduziert. Finale Zahlen (2× je Messpunkt, deterministisch): Haupt-Pin **201.354 @ 137**
+(+5.873 zur W4-Baseline, Gate ≤ +6.000 eingehalten mit 127 Spielraum), stress **106.398 @ 82**
+(+640, ausschließlich aus dem geteilten Quellcode — kein stress-eigenes File berührt), browser
+2.142 @ 75 unverändert, test:core **1.588** (+16), `bench:editor` einmalig neu gesetzt
+(uniform +628 über alle 7 Workloads, zwei Durchläufe grün), Hash weiterhin byte-identisch (keine
+Rust-Änderung), `graph-a-lama query lint` weiterhin 0/0. Coverage-Auswirkung der Konsolidierung:
+KEIN D2-Kanten-Verlust — jede Kante (Arity beide Richtungen, OOB positiv/negativ, Dot-Form,
+gültiges negatives Literal, wide Rang, Union-Index, Mixed-Rank-S, dynamischer Spread) trägt
+weiterhin mindestens einen Pin, nur die redundanten Mehrfach-Belege pro Kante wurden dedupliziert.
+
+FOLLOWUPS trägt zwei neue Einträge: den D6-Kostenmechanismus selbst (offene Frage, ob
+`SliceSpecsGuard` und andere bestehende Message-Pins denselben Kostenfaktor tragen — eine
+Stichprobe deutete auf ≈1.049 für ein vergleichbares `SliceSpecsGuard`-Pin, günstiger als
+`ItemGuard`s ≈1.700, aber noch immer weit über einem bloßen Referenzzugriff) und das
+Aufsplitten von scalar-mean.test.ts (jetzt W2-W5-Sammelbecken, D6-Mandat der Spec). Mit W5 ist
+die komplette Dogfooding-Wunschliste (W1-W5) abgearbeitet. Vollständiger Befund:
+docs/op-w5-item-ergebnisse.md.
+
+## Op-Scheibe W5 (item) + Wunschlisten-Abschluss (2026-07-21)
+
+`item(...indices): number` — voller Skalar-Read mit NumPy-Negativ-Normalisierung,
+Spike-03-Bounds-Reuse (LiteralIndexBounds ist hier die RICHTIGE Semantik — der
+W1-Warnhinweis betraf topks andere Index-Semantik). Baustein 0 fing den fünften
+Vor-Bau-Blocker der Serie (Guard<> auf Rest-Params = TS2370; slice()s Fold-Form ist
+das Muster) und lieferte die verbindliche ItemGuard-Form gemessen (+712-Skizze).
+Implementierung mit offengelegter Budget-Konsolidierung der Pins (Messbefund: ein
+ItemGuard-Equal-Pin ≈1,700 Instantiations). Verify: A CONFIRMED (Kanten selbst
+enumeriert — Konsolidierung verlustfrei), B widerlegte zwei META-Behauptungen
+(IsUnion-Pre-Gate coverage-tot; F6-Prämisse falsch — LiteralIndexBounds' Union-
+Disziplin trägt wie in Spike 03 dokumentiert) → Pre-Gate als reduce.ts-Policy-
+Angleichung dokumentiert und per neuem Policy-Pin load-bearing gemacht (Mutant:
+exakt 1 Zeile rot), C fand das M3-Wiederholungsmuster (native Diagnosen) → v6-
+Kandidat in FOLLOWUPS. Final: 201,455 @ 137 (+5,974, Gate ≤ +6,000 — knappster
+Lauf der Serie), stress 106,398, test:core 1,588.
+
+**Damit ist die komplette Dogfooding-Wunschliste W1–W5 geschlossen** — jede Op
+evidenzbasiert, jede mit Baustein-0-Fang vor dem Bau (5/5!), dreifach verifiziert,
+zwei echte Verify-B-Blocker (W2-Diagnose-Verlust, W4-M2-Loch) in-Slice gefixt.
+Nächster Schritt: 0.2.0-Bündel-Release (Owner-Publish), Example-Umstellung auf die
+neuen Ops als Vorher/Nachher-Showcase, dann Scale-Probe.

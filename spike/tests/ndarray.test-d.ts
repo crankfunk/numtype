@@ -2,7 +2,7 @@ import type { Broadcast } from "../src/broadcast.ts";
 import type { Shape } from "../src/dim.ts";
 import { type AnyNDArray, type Guard, NDArray, type NDArrayView } from "../src/ndarray.ts";
 import type { ReduceAxis } from "../src/reduce.ts";
-import type { StackCheck, TopkCheck } from "../src/vector.ts";
+import type { ItemGuard, StackCheck, TopkCheck } from "../src/vector.ts";
 import type { WNDArray } from "../src/wasm/resident.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
@@ -1004,3 +1004,107 @@ type STACK_DIM_MERGE_WIDE_REV = Expect<Equal<(typeof stackDynDimResultRev)["shap
 declare const stackArrMixedRankUnion: readonly (NDArray<[3]> | NDArray<[2, 3]>)[];
 const stackMixedRankArrResult = NDArray.stack(stackArrMixedRankUnion);
 type STACK_ARRAY_MIXED_RANK_UNION = Expect<Equal<(typeof stackMixedRankArrResult)["shape"], readonly [number, number]>>;
+
+// =============================================================================
+// Op-Scheibe W5 (docs/op-w5-item-spec.md): NDArray.item(...indices) type
+// pins. `ItemGuard<S, Idx>` (vector.ts, Baustein-0 addendum F1-F8) is used
+// DIRECTLY as item's rest-parameter type (F1 — a `Guard<>`-wrapped
+// rest-parameter is a permanent TS2370 at the declaration), so its own
+// message-equality pin below checks `ItemGuard` directly (the
+// `SliceSpecsGuard` precedent in slice.test-d.ts), not the `Guard<>` wrapper
+// other ops use. D6 cost note: a single `Equal<ItemGuard<...>, ...>`
+// comparison against a hand-written expected tuple measured EXPENSIVE in
+// isolation (~1,700 instantiations, an order of magnitude above a bare
+// reference or an identity self-compare — `tsc`'s assignability check
+// forces full structural normalization of the computed side, unlike a
+// trivial `extends unknown` check) — so ONE combined case below proves BOTH
+// custom stems (dot-form AND out-of-bounds) simultaneously via a single
+// two-error-position tuple, rather than one comparison per edge.
+// =============================================================================
+
+// --- D5: valid full-indexing calls compile, return type is `number` --------
+
+const itemM = NDArray.zeros([2, 3]);
+const itemResult = itemM.item(0, 0);
+type ITEM_RETURNS_NUMBER = Expect<Equal<typeof itemResult, number>>;
+
+// A valid NEGATIVE literal index compiles too (NumPy-parity, Spike 03).
+const itemNegResult = itemM.item(-1, -1);
+type ITEM_NEGATIVE_LITERAL_OK = Expect<Equal<typeof itemNegResult, number>>;
+
+// Rank 0: item() (zero arguments) compiles, returns `number`.
+const itemR0 = NDArray.zeros([]);
+const itemR0Result = itemR0.item();
+type ITEM_RANK0_OK = Expect<Equal<typeof itemR0Result, number>>;
+
+// --- D5: arity errors, BOTH directions — native TS2554 (F3), not a custom
+// message (there is no argument position for a MISSING argument) ------------
+
+// @ts-expect-error - too few indices for rank-2 shape [2,3]: native TS2554
+itemM.item(0);
+
+// @ts-expect-error - too many indices for rank-2 shape [2,3]: native TS2554
+itemM.item(0, 0, 0);
+
+// @ts-expect-error - rank-0 receiver called with an index: native TS2554
+itemR0.item(0);
+
+// --- D5: `ItemGuard` message-equality pin — BOTH custom stems, one shot ----
+// index 0.5 (axis 0, dot-form, F5) AND index 3 (axis 1, out-of-bounds) in the
+// SAME call: TS7's own "one diagnostic per call for multiple invalid
+// positions" limit (F7, M3) means the underlying *guard type* still flags
+// EVERY offending position — this single comparison proves both stems'
+// exact wording at once (word-for-word M3, mirrored by itemRuntime's own
+// throws, see runtime.ts).
+type ItemDotFormMsg = `item: index 0.5 for axis 0 is not an integer (shape [2,3])`;
+type ItemOobAxis1Msg = `item: index 3 is out of bounds for axis 1 with dim 3 (shape [2,3])`;
+type IG1 = Expect<
+  Equal<ItemGuard<[2, 3], [0.5, 3]>, [{ readonly __shapeError: ItemDotFormMsg }, { readonly __shapeError: ItemOobAxis1Msg }]>
+>;
+
+// The @ts-expect-error compile-reject counterparts (the method call itself,
+// not just the bare `ItemGuard` type) — positive OOB, negative OOB
+// (NumPy-parity sign handling), and dot-form, each at the offending
+// argument:
+
+// @ts-expect-error - index 2 out of bounds for axis 0 with dim 2 (positive)
+itemM.item(2, 0);
+
+// @ts-expect-error - index -3 out of bounds for axis 0 with dim 2 (negative, past the front)
+itemM.item(-3, 0);
+
+// @ts-expect-error - index 0.5 for axis 0 is not an integer (dot-form)
+itemM.item(0.5, 0);
+
+// --- D5: no-claim degrades — wide rank, union index, mixed-rank S, dynamic
+// spread all compile (never wrongly rejected) --------------------------------
+
+declare const itemWideRankNd: NDArray<number[]>;
+const itemWideRankResult = itemWideRankNd.item(0, 1, 2); // wide rank: IsDynamicRank<S> -> RankUnknowable -> Idx passed through unchanged
+type ITEM_WIDE_RANK_OK = Expect<Equal<typeof itemWideRankResult, number>>;
+
+declare const itemUnionIdx: 1 | 5;
+itemM.item(itemUnionIdx, 0); // union index: IsUnion pre-gate in ItemMark -> no-claim, compiles
+
+// POLICY pin (W5 verify round, Verify-B finding 1): even a UNIFORMLY-INVALID
+// union index (5 | 9 on dim 3 — every member is a guaranteed throw) compiles
+// as no-claim. This mirrors reduce.ts's union-AXIS policy verbatim ("literal,
+// negative, even ALL-invalid members degrade like the dynamic axis") and is
+// what makes ItemMark's IsUnion pre-gate LOAD-BEARING: without the gate,
+// LiteralIndexBounds' own tuple-wrapped subset check would classify 5|9 as a
+// uniform "out" verdict and REJECT — sound, but a deliberate completeness
+// trade against house-policy uniformity (Spec v3 addendum documents the
+// choice). Removing the pre-gate turns exactly this line red.
+declare const itemUnionIdxUniformInvalid: 5 | 9;
+itemM.item(itemUnionIdxUniformInvalid, 0);
+
+// Mixed-rank S (RankUnknowable's OWN union-of-ranks branch, dim.ts): a
+// shape union `[2,3] | [2,3,4]` passed through `ItemGuard` directly (not
+// via a class instance — cheaper than exercising full method-call
+// resolution on a union RECEIVER, and this is the exact `S` union
+// `ItemGuard`'s own `RankUnknowable<S>` gate is built to catch) degrades
+// wholly to no-claim, `Idx` unchanged.
+type ITEM_MIXED_RANK_S = Expect<Equal<ItemGuard<[2, 3] | [2, 3, 4], [0, 0]>, [0, 0]>>;
+
+declare const itemDynIndices: number[];
+itemM.item(...itemDynIndices); // F4: dynamic-length spread on a FIXED-rank receiver compiles (IsDynamicRank<Idx> gate, not just RankUnknowable<S>)

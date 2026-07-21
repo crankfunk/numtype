@@ -890,3 +890,54 @@ export function stackRuntime(
   }
   return { shape: [n, dim], data: out };
 }
+
+/**
+ * Op-Scheibe W5 (docs/op-w5-item-spec.md, D3): `item(...indices)`'s runtime
+ * backstop — the direct scalar read `NDArray.item` exists for (`x.item(i,
+ * j, ...)`, NumPy's own full-indexing accessor). Three checks, in order,
+ * mirroring `normalizeAxisSpec`'s own per-axis checks above but generalized
+ * to ALL axes at once (full indexing, never partial, D1):
+ *  - Arity: `indices.length` must equal `shape.length` exactly — a
+ *    RUNTIME-ONLY stem (F3, vector.ts's `ItemGuard` doc comment: missing/
+ *    excess arguments are already a native TS2554 at compile time for any
+ *    call whose rank the type layer can see statically, so this throw is
+ *    reached only by gradual/dynamic-rank callers, or a rank-0 receiver
+ *    called via a wide `number[]` spread).
+ *  - Per axis: NumPy negative-index normalization (`i < 0 -> i + d`, the
+ *    SAME rule `normalizeAxisSpec` already applies for `slice`), then a
+ *    bounds check — word-for-word the same STEM `ItemMark`'s
+ *    `ItemNotIntegerMessage`/`ItemOutOfBoundsMessage` (vector.ts) build at
+ *    the type layer (M3: "Stems wortgleich zur Runtime"), minus the
+ *    axis-count/shape suffix those type-level messages append purely for
+ *    editor context — the same stem-vs-editor-context split
+ *    `normalizeAxisSpec`'s own slice throws already carry relative to
+ *    `slice.ts`'s `IndexOutOfBoundsMessage`/`StepInvalidMessage`. A size-0
+ *    dim needs no special case: EVERY normalized index for `d = 0` fails
+ *    `0 <= i < 0`, so it is caught unconditionally by the ordinary bounds
+ *    check (pinned by test, per D3's own note).
+ *  - Offset: the normalized per-axis indices dotted with `computeStrides`
+ *    — a direct strided read, never a kernel (M1 v5: kernel-less; FOLLOWUPS
+ *    tracks parity as a deferred item). NaN/±0 pass through byte-exact — a
+ *    plain `Float64Array` indexed read never routes through arithmetic that
+ *    could touch the value's bits.
+ */
+export function itemRuntime(shape: readonly number[], data: Float64Array, indices: readonly number[]): number {
+  if (indices.length !== shape.length) {
+    throw new Error(`item: expected ${shape.length} indices (got ${indices.length})`);
+  }
+  const strides = computeStrides(shape);
+  let offset = 0;
+  for (let axis = 0; axis < shape.length; axis++) {
+    const raw = indices[axis] ?? 0;
+    if (!Number.isInteger(raw)) {
+      throw new Error(`item: index ${raw} for axis ${axis} is not an integer`);
+    }
+    const d = shape[axis] ?? 0;
+    const i = raw < 0 ? raw + d : raw;
+    if (i < 0 || i >= d) {
+      throw new Error(`item: index ${raw} is out of bounds for axis ${axis} with dim ${d}`);
+    }
+    offset += i * (strides[axis] ?? 0);
+  }
+  return data[offset] ?? NaN;
+}

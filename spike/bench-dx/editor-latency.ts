@@ -763,14 +763,23 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // one extra conditional branch, not a new overload/generic surface).
 // Correctness gate and latency medians unaffected (still PASS, still under
 // the 2x ceiling).
+// Re-measured again 2026-07-21 (Op-Scheibe W5, docs/op-w5-item-spec.md):
+// `NDArray.item(...indices)` + `ItemGuard`/`ItemMark`/`ItemFoldAcc`
+// (vector.ts) — new type machinery each workload's own import of
+// spike/src pulls in regardless of whether the workload calls `item`
+// itself (same "fixed overhead from the shared src graph" shape every
+// prior Op-Scheibe re-measurement here has shown). Measured TWICE,
+// byte-identical both times: a UNIFORM **+628** shift across all seven
+// workloads. Correctness gate and latency medians unaffected (still PASS,
+// still under the 2x ceiling).
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 27141,
-  w2: 28950,
-  w3: 60090,
-  w4: 27304,
-  w5: 32595,
-  w6: 33765,
-  w7: 26313,
+  w1: 27769,
+  w2: 29578,
+  w3: 60718,
+  w4: 27932,
+  w5: 33223,
+  w6: 34393,
+  w7: 26941,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {
