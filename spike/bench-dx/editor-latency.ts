@@ -772,14 +772,40 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // byte-identical both times: a UNIFORM **+628** shift across all seven
 // workloads. Correctness gate and latency medians unaffected (still PASS,
 // still under the 2x ceiling).
+//
+// Re-measured again 2026-07-21 (V0: ambient.d.ts measurement-base fix,
+// docs/scale-probe-spec.md prep): `gen-workloads.ts`'s per-workload
+// isolated tsconfigs (the shared `workloads/tsconfig.json` and the
+// per-workload `tsconfig.<id>.json`) did not list `spike/src/ambient.d.ts`
+// in their file set, even though the repo deliberately carries no
+// `@types/node` — so every generated workload program failed with 7x
+// TS2591 ("Cannot find name 'process'" / `node:fs/promises` / `node:os` /
+// `node:worker_threads`) pulled in transitively through the wasm-loader
+// chain in `spike/src/ndarray.ts`. Fixed by adding
+// `"../../src/ambient.d.ts"` to both tsconfig shapes (mirroring the
+// working `spike/tests-stress/tsconfig.json` precedent). This is a
+// MEASUREMENT-INFRASTRUCTURE fix, not a class-surface change: it does not
+// touch `spike/src/*` at all, so unlike every prior re-measurement above
+// it is not attributable to new NDArray machinery — it is the workload
+// programs now compiling with the correct ambient declarations available.
+// Measured once (this fix has no plausible source of run-to-run variance,
+// since it changes neither timing-sensitive code nor randomized input;
+// confirmed byte-identical against a third bench:editor run taken purely
+// to validate the newly-pinned values): a UNIFORM **+135** shift across
+// all seven workloads. Side effect also observed: w1/w2/w3/w5/w7 no
+// longer carry the "(has type errors by design)" note (their TS2591
+// errors are gone) — only w4 (deliberate errors) and w6 (its toggle
+// transiently introduces a reshape-mismatch error) still show it.
+// Correctness gate and latency medians unaffected (still PASS, still
+// under the 2x ceiling).
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 27769,
-  w2: 29578,
-  w3: 60718,
-  w4: 27932,
-  w5: 33223,
-  w6: 34393,
-  w7: 26941,
+  w1: 27904,
+  w2: 29713,
+  w3: 60853,
+  w4: 28067,
+  w5: 33358,
+  w6: 34528,
+  w7: 27076,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

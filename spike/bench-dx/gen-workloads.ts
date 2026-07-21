@@ -629,7 +629,7 @@ function main(): void {
   // project for any workload file is EXACTLY this directory's .ts files plus
   // their real spike/src/*.ts imports — nothing more. See the note at
   // WORKLOAD_COMPILER_OPTIONS above for why "extends" was dropped.
-  writeFileSync(join(workloadsDir, "tsconfig.json"), JSON.stringify({ compilerOptions: WORKLOAD_COMPILER_OPTIONS, include: ["*.ts"] }, null, 2) + "\n");
+  writeFileSync(join(workloadsDir, "tsconfig.json"), JSON.stringify({ compilerOptions: WORKLOAD_COMPILER_OPTIONS, include: ["*.ts", "../../src/ambient.d.ts"] }, null, 2) + "\n");
 
   const manifestEntries: unknown[] = [];
   let totalLines = 0;
@@ -645,7 +645,7 @@ function main(): void {
     // self-contained + "files" (not "include") for true single-file
     // isolation, since siblings exist in this directory.
     const perFileTsconfigName = `tsconfig.${w.id}.json`;
-    writeFileSync(join(workloadsDir, perFileTsconfigName), JSON.stringify({ compilerOptions: WORKLOAD_COMPILER_OPTIONS, files: [w.fileName] }, null, 2) + "\n");
+    writeFileSync(join(workloadsDir, perFileTsconfigName), JSON.stringify({ compilerOptions: WORKLOAD_COMPILER_OPTIONS, files: [w.fileName, "../../src/ambient.d.ts"] }, null, 2) + "\n");
 
     manifestEntries.push({
       id: w.id,

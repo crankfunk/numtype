@@ -109,8 +109,15 @@ Session-Zustand).
 - **Testzahlen:** test:core 1588 (1572 + 16 aus W5) · test:resident 4278+2 · test:threaded 69 ·
   test:browser 4 · test:package 3 + Typ-Smoke · cargo 161 · test:example (Registry-Install +
   Example-Typcheck + 8 asserted Queries).
-- **Editor-Gate:** `bench:editor` W1–W7 — Instantiation-Pins exact-match hart (seit W5 neu
-  gesetzt: uniform +628 über alle 7 Workloads), Latenz am 2x-Ceiling, Correctness wirft.
+- **Editor-Gate:** `bench:editor` W1–W7 — Instantiation-Pins exact-match hart (seit **V0** neu
+  gesetzt: uniform **+135** über alle 7 Workloads = `{w1 27.904, w2 29.713, w3 60.853,
+  w4 28.067, w5 33.358, w6 34.528, w7 27.076}`; davor uniform +628 aus W5), Latenz am
+  2x-Ceiling, Correctness wirft. **V0 (2026-07-21)** war eine Mess-BASIS-Reparatur, keine
+  Klassen-Surface-Änderung: `gen-workloads.ts` erzeugte tsconfigs ohne
+  `spike/src/ambient.d.ts`, weshalb jedes Workload-Programm mit 7x TS2591 lief (das Repo hat
+  bewusst kein `@types/node`); `enforceHardGate` liest `hadTypeErrors` nirgends, darum fiel es
+  nie auf. Latenz-Mediane und `check:diag` (201.455 @ 137, Δ0) blieben unberührt, die im
+  README publizierte Hover-Aussage 0,04–0,08 ms hält auf der sauberen Basis.
 - **Mess-Regeln (tragend):** Der Instantiation-Counter ist CHECK-ORDER-abhängig — Pins sind nur
   für ein FIXES File-Set exakt. Datei hinzufügen/umbenennen (selbst ein leeres `export {}`)
   verschiebt den Wert um bis zu ±≈2,000 (Order-Noise, keine Typkosten) → per empty-then-fill
