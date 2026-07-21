@@ -262,3 +262,14 @@ Baustein-0-Addendum F1-F8/-ergebnisse.md, `NDArray.item(...indices)` — voller 
 `ItemGuard`/`ItemMark`/`ItemFoldAcc` in vector.ts, `itemRuntime` in runtime.ts, NDArray-only,
 M1 v5: kernel-los per Design (reiner strided Read, kein Kernel zu parallelisieren). **Damit ist
 die komplette Op-Wunschliste W1–W5 abgearbeitet.**
+
+## Post-Roadmap: Scale-Probe (ERLEDIGT 2026-07-21)
+
+Der letzte Punkt der Owner-Reihenfolge vom 2026-07-20 („unproven at scale" in gemessenes
+Terrain überführen) ist abgeschlossen — bindende Spec docs/scale-probe-spec.md v2, Ergebnisse
+docs/scale-probe-ergebnisse.md, Vorab-Scheibe V0 (Mess-Basis-Reparatur), voller Verify-Katalog
+A+B+C plus Baustein 0 und eine Frontier-Zweitmeinung. README und USP-Doc tragen jetzt die
+gemessene Aussage statt des Vorbehalts, ausdrücklich auf die Konsumenten-Skala gescoped; die
+API-Flächen-Skala bleibt als benannte offene Frage (FOLLOWUPS). Neuer Dauer-Wächter: Workload
+`w8` im harten `bench:editor`-Gate. Damit sind alle drei Punkte der Owner-Reihenfolge erledigt
+(Launch-Post streuen bleibt Owner-Aktion, Dogfooding-Scheibe und Scale-Probe sind durch).

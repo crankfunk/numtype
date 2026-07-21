@@ -77,7 +77,21 @@ Pins kosteten pro Pin ≈1,700 Instantiations — die Erst-Umsetzung überschrit
 Zwei-Positionen-Pin statt fünf Einzel-Pins) brachte es auf +5,873; FOLLOWUPS trackt sowohl
 den Kostenmechanismus als auch das Aufsplitten von scalar-mean.test.ts, das jetzt W2-W5
 sammelt).
-FOLLOWUPS-Minis nebenher; Trusted Publishing optional (Fakten in FOLLOWUPS).
+**Scale-Probe ERLEDIGT 2026-07-21** (docs/scale-probe-spec.md v2 /-ergebnisse.md): Der dritte und
+letzte Punkt der Owner-Reihenfolge ist damit abgearbeitet — „unproven at scale" ist aus README
+und USP-Doc verschwunden und durch gemessene Zahlen ersetzt (Konsumenten-Skala explizit gescoped,
+API-Flächen-Skala ausdrücklich als offen benannt, Owner-Entscheidung). Kernbefund: warmer Hover
+0,04–0,11 ms über ALLE 34 messbaren Punkte, die Skalenkosten landen auf dem Kaltstart (1,5 ms bei
+250 Dateien, 10,2 s bei einer 10.000-Glieder-Kette); linear in Dateizahl und Kettenlänge,
+überproportional im Rang, harter Cliff bei Rang 1024 (TS2589 auf gültigem Code). Vorab-Scheibe
+**V0** (c18aa7f) reparierte die Mess-Basis (generierte tsconfigs ohne ambient.d.ts → 7x TS2591 in
+allen Workloads; `enforceHardGate` liest `hadTypeErrors` nie). Prozess-Bilanz: Baustein 0 + eine
+Frontier-Zweitmeinung änderten das Design VOR dem Bau an fünf Stellen (ohne sie hätte Achse (a)
+Cache-Treffer statt Skalierung gemessen — Faktor 19); Verify-B fand ein VAKUÖSES Hover-Gate auf
+der Rang-Achse (behoben, 8 Mutationen belegen die Wirksamkeit); zwei Verifier widerlegten
+unabhängig die „überproportional"-Charakterisierung der Datei-Achse, bevor sie publiziert wurde.
+FOLLOWUPS-Minis nebenher; Trusted Publishing optional (Fakten in FOLLOWUPS). **COVENANT-v6-Bündel
+steht bei vier Kandidaten** — reif für eine eigene kleine Vertrags-Scheibe.
 Repo-Härtung aktiv seit 2026-07-20: Rulesets `protect-main` (kein Force-Push/Delete auf main —
 gilt auch für den Owner; bewusste Ausnahme nur via Ruleset-Deaktivierung) +
 `protect-release-tags` (`v*` unverrückbar). README trägt seit 2026-07-20 eine
@@ -99,7 +113,13 @@ Session-Zustand).
 - **Artefakt-Hash** (Clean-Rebuild, SHA256 von `spike/src/wasm/numtype_core.wasm`):
   `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` (seit Kern 11; CI-Gate
   `check:freeze` mit plattform-gelabelter Pin-Menge).
-- **check:diag** Haupt-Pin **201,455 @ 137 Files** (nur Root-Korpus; seit W5, von 195,481 —
+- **check:diag** Haupt-Pin **199,877 @ 139 Files** (nur Root-Korpus; seit der Scale-Probe, von
+  201,455 @ 137 — die Dateizahl steigt um die zwei neuen bench-dx-Skripte, der WERT sinkt: per
+  empty-then-fill zerlegt in −2,410 Order-Noise (zwei zusätzliche Dateien verschieben die
+  Prüfreihenfolge) und +775 echte Typkosten, plus +57 aus der Hover-Gate-Reparatur; Baustein A
+  hat die Zerlegung unabhängig aus einem frischen Worktree reproduziert und nebenbei belegt,
+  dass der w8-Sentinel zu diesem Korpus exakt 0 beiträgt. Details in
+  docs/scale-probe-ergebnisse.md). Historie: **201,455 @ 137** war der W5-Stand, von 195,481 —
   Δ+5,873, Aufschlüsselung in docs/op-w5-item-ergebnisse.md — davon nur +623 Quellcode, der Rest
   Test-/Typ-Pin-Kosten; enthält den D6-Befund „`Equal<ItemGuard<...>>`-Message-Pins sind pro
   Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 106,398 @ 82**
@@ -109,9 +129,11 @@ Session-Zustand).
 - **Testzahlen:** test:core 1588 (1572 + 16 aus W5) · test:resident 4278+2 · test:threaded 69 ·
   test:browser 4 · test:package 3 + Typ-Smoke · cargo 161 · test:example (Registry-Install +
   Example-Typcheck + 8 asserted Queries).
-- **Editor-Gate:** `bench:editor` W1–W7 — Instantiation-Pins exact-match hart (seit **V0** neu
-  gesetzt: uniform **+135** über alle 7 Workloads = `{w1 27.904, w2 29.713, w3 60.853,
-  w4 28.067, w5 33.358, w6 34.528, w7 27.076}`; davor uniform +628 aus W5), Latenz am
+- **Editor-Gate:** `bench:editor` W1–**W8** — Instantiation-Pins exact-match hart (seit **V0** neu
+  gesetzt: uniform **+135** über alle 7 Altworkloads = `{w1 27.904, w2 29.713, w3 60.853,
+  w4 28.067, w5 33.358, w6 34.528, w7 27.076}`; davor uniform +628 aus W5), dazu **w8 = 34.943**
+  als Scale-Sentinel (Rang 24 + item/slice/topk, mit Toggle-Ziel — er schützt die publizierte
+  Skalen-Aussage im Dauerbetrieb, weil der volle Sweep nur on-demand läuft), Latenz am
   2x-Ceiling, Correctness wirft. **V0 (2026-07-21)** war eine Mess-BASIS-Reparatur, keine
   Klassen-Surface-Änderung: `gen-workloads.ts` erzeugte tsconfigs ohne
   `spike/src/ambient.d.ts`, weshalb jedes Workload-Programm mit 7x TS2591 lief (das Repo hat

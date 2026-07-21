@@ -517,3 +517,57 @@ in-place + F→W-Tabelle in der Example-README, dritter @ts-expect-error-Pin (it
 Tag v0.2.0 gepusht (Ruleset-geschützt). Damit ist der Bogen geschlossen: Demo →
 Friction-Log → Wunschliste → fünf verifizierte Op-Scheiben → Release → dieselbe Demo
 auf den eigenen Ops. Nächster Owner-Reihenfolge-Punkt: Scale-Probe.
+
+## Scale-Probe — „unproven at scale" fällt (2026-07-21)
+
+Der dritte und letzte Punkt der Owner-Reihenfolge vom 2026-07-20. Ergebnis in einem Satz:
+Die interaktive Latenz hält über alle 34 messbaren Sweep-Punkte (warmer Hover-Median
+0,04–0,11 ms), die Kosten der Skala landen ausschließlich auf dem Kaltstart, und die einzige
+harte Wand sitzt bei Rang 1024 — praktisch unerreichbar, aber real. Vollständige Zahlen und
+Methodik: docs/scale-probe-ergebnisse.md.
+
+**Der Prozess war hier wertvoller als das Ergebnis.** Vier Befunde, die ohne die vorgelagerte
+Prüfung publiziert worden wären:
+
+1. **Die Frontier-Zweitmeinung fing einen Blocker in der SPEC**, den der adversariale
+   Spec-Verifier übersehen hatte: Achse (a) hätte ohne bindende Shape-Diversitäts-Vorgabe
+   Cache-Treffer statt Skalierung gemessen. Gemessen liegt zwischen wiederholten und
+   verschiedenen Shapes ein Faktor 19 — die bequeme Konstruktion hätte eine flache Kurve und
+   den Satz „skaliert mühelos" produziert, ohne dass jemand falsch gemessen hätte. Dieselbe
+   Falle steckte in Achse (b), wo die naheliegende Konstruktion „konstant" ergibt und die
+   ehrliche „linear, 265 Instantiations pro Kettenglied".
+2. **Beide Spec-Prüfer fanden gemeinsam einen Defekt in der bestehenden Mess-BASIS**: die
+   generierten Workload-tsconfigs führten `spike/src/ambient.d.ts` nicht, weshalb ALLE sieben
+   Editor-Workloads (nicht nur das absichtlich kaputte w4) mit sieben TS2591-Diagnosen liefen —
+   unsichtbar, weil `enforceHardGate` das `hadTypeErrors`-Flag nirgends liest. Owner entschied
+   „vorher reparieren" statt „erben": Vorab-Scheibe **V0** (c18aa7f), uniform +135 auf allen
+   sieben Pins, Latenzwerte und `check:diag` unberührt, die publizierte Hover-Aussage hält auf
+   der sauberen Basis.
+3. **Verify-B fand ein VAKUÖSES Korrektheits-Gate** in der frischen Implementierung: Weil `tsc`
+   lange Tupel in der Hover-Anzeige kürzt, war der Vergleich auf sechs Dimensionen verkürzt
+   worden — bedingungslos für JEDEN Rang, auch die ungekürzten. Der Verifier extrahierte die
+   echte Prüffunktion und bewies mechanisch, dass eine ab Position 6 durchgehend falsche
+   Anzeige durchrutscht. Behoben durch eine elisions-bewusste Prüfung (Präfix + Suffix +
+   Rekonstruktion der Gesamtlänge aus dem „N more"-Vermerk, Kürzungsfenster aus dem Text gelesen
+   statt hartkodiert); acht Mutationen belegen die Wirksamkeit, zwei Kontrollläufe die
+   Symmetrie.
+4. **Zwei Verifier widerlegten unabhängig die Charakterisierung des Implementierers**, die
+   Datei-Achse wachse „deutlich überproportional". Die Marginalkosten je Datei sind flach bis
+   leicht fallend (4.868 → 3.798) — linear mit fester Grundlast. Echt überproportional ist nur
+   die Rang-Achse (144 → 2.608 je Rang). Die falsche Beschreibung war nie committet, wäre aber
+   in die publizierte Aussage gewandert.
+
+Dazu ein Angriff, den Verify-B sich selbst stellte und ausräumte: In der distinct-Konstruktion
+wachsen mit dem Dateiindex auch die Zahlenwerte, die Kurve könnte also Magnituden statt Vielfalt
+messen. Eine Gegen-Konstruktion mit fest begrenzten Größen ergab 3.812/3.711 je Datei gegen
+3.798–3.961 — der Confound existiert, verfälscht aber nichts.
+
+**Owner-Entscheidungen dieser Scheibe:** alle vier Achsen (statt einer Teilmenge) · Sweep
+on-demand plus EIN gepinnter Sentinel (statt gar keiner oder voller CI) · synthetisch mit
+rag-demo-Eichung · Claim-Scope = Konsumenten-Skala mit ausdrücklich offener API-Flächen-Frage
+(statt einer Extrapolation aus den W-Serien-Ripple-Zahlen) · ambient-Fix als Vorab-Scheibe ·
+Z2-Abweichung durch Vertragspräzisierung in v6 auflösen statt dauerhaft dulden.
+
+Covenant: keine Verletzung; zwei Textlücken (Z2 on-demand-Korpora, M2 Rang-Cliff als
+Falsch-Ablehnungs-Grenze) als v6-Kandidaten dokumentiert. Das v6-Bündel steht damit bei vier
+und ist reif für eine eigene kleine Vertrags-Scheibe.

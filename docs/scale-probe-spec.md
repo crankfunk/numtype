@@ -642,8 +642,10 @@ zwei Zahlen (Order-Noise-Anteil, echter Typkosten-Anteil) berichtet — kein ein
 Vorher/Nachher-Delta-Wert ohne diese Aufschlüsselung.
 
 **T5 — Beweis für D14 (w8 bewegt w1-w7 nicht):** w1-w7s Instantiation-Pins werden NACH der
-w8-Ergänzung 2× gemessen und MÜSSEN exakt `{27769, 29578, 60718, 27932, 33223, 34393, 26941}`
-bleiben — jede Abweichung ist ein BLOCKER (nicht nur ein Befund), weil sie D14s mechanisches
+w8-Ergänzung 2× gemessen und MÜSSEN exakt `{27904, 29713, 60853, 28067, 33358, 34528, 27076}`
+bleiben (die POST-V0-Werte; die Erstfassung dieser Zeile zitierte noch die Pre-V0-Pins
+`{27769, 29578, 60718, 27932, 33223, 34393, 26941}` — V0 wurde erst nach dieser Textstelle
+beschlossen, siehe §1. Baustein-A-Nit, korrigiert v2.1) — jede Abweichung ist ein BLOCKER (nicht nur ein Befund), weil sie D14s mechanisches
 Argument widerlegen würde.
 
 **T6 — Mutanten-Revert-Disziplin (harte Arbeitsregel, CLAUDE.md):** JEDER Mutant für T1/T2 wird

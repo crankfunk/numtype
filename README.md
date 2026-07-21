@@ -256,10 +256,21 @@ Credibility is an asset for a research project, so the scope of the guarantee is
 1. **"Python can't do this" is verified, not asserted.** NumPy's own maintainers advise against
    relying on shape typing, and PyTorch's static-shapes request has sat open for years — the
    general problem resists Python's type system structurally.
-2. **"TypeScript can do this" means: newly tractable, unproven at scale.** No existing TS library
-   has delivered general compile-time shape checking with broadcasting and reductions; the prior
-   art stops at literal-dimension matmul. NumType is not validating a *proven* technique — it is
-   probing the limit. That is the point of the research.
+2. **"TypeScript can do this" means: newly tractable, and now measured — at consumer scale.** No
+   existing TS library has delivered general compile-time shape checking with broadcasting and
+   reductions; the prior art stops at literal-dimension matmul. A 35-point sweep
+   (`pnpm bench:scale`) replaces the old "unproven" with numbers. Interaction holds everywhere:
+   the warm hover median stayed between 0.04 and 0.11 ms across a 250-file project, a
+   10,000-operation chain, and rank 896 alike. Scale costs land on cold start instead — 1.5 ms at
+   250 files, but 10 s for one 10,000-link chain. Instantiations grow linearly in files (about
+   3,800 per file with distinct shapes; repeated shapes are deduplicated project-wide and plateau
+   flat) and linearly in chain length (265 per link), but superlinearly in rank, until at rank
+   1024 the checker aborts on valid code with "Type instantiation is excessively deep". Real
+   arrays have single-digit rank, so that wall says more about the machine than about the use
+   case — but it is a wall, and this is where it stands. What this does *not* cover is
+   API-surface scale: whether the machinery still holds at a NumPy-sized set of operations is a
+   separate, still-unmeasured question. Full numbers:
+   [docs/scale-probe-ergebnisse.md](docs/scale-probe-ergebnisse.md).
 3. **Scope of the guarantee: realistic ranks and op chains, not "every conceivable shape."** The
    plausible failure modes for a type-level shape system in TypeScript are high-rank tensors,
    very large broadcast dimensions, and long chains of composed operations. The gradual design
@@ -267,7 +278,8 @@ Credibility is an asset for a research project, so the scope of the guarantee is
 
 The type-checker cost is measured, not hoped: the slice arithmetic costs ~1.59× instantiations,
 the bounds checks ~1.036×, and hover latency measured against the native TS 7 language server is
-0.04–0.08 ms median — about three orders of magnitude under a 100 ms editor gate.
+0.04–0.08 ms median — about three orders of magnitude under a 100 ms editor gate. That median
+holds at scale too: 0.04–0.11 ms at 250 files, at 10,000-operation chains, and at rank 896.
 
 ## Versioning: what to expect before 1.0
 
