@@ -177,9 +177,31 @@ a.add(NDArray.zeros([4]));       // ❌ compile error: shapes [2,3] and [4] are 
 a.slice(9);                      // ❌ compile error: index 9 out of bounds for axis 0 (dim 2)
 ```
 
+### New in 0.2.0: the ops the demo asked for
+
+The five ops added in 0.2.0 all came from one place: the friction log of the RAG example below,
+built against 0.1.1. These are TypeScript-runtime surface only for now (no WASM kernel yet — see
+[What's implemented](#whats-implemented)), so they are shown here rather than in the
+bit-for-bit block above:
+
+```ts
+const scores = NDArray.fromArray([4], [0.2, 0.9, 0.1, 0.7]);
+
+scores.topk(2);                  // { values: NDArray<[2]>, indices: NDArray<[2]> } — 0.9/0.7 at 1/3
+scores.argmax();                 // 1 — a plain number
+scores.div(2).mean();            // scalar overloads + mean — still an NDArray, still chainable
+scores.sqrt();                   // elementwise, IEEE-exact (not a transcendental)
+NDArray.stack([scores, scores]); // NDArray<[2, 4]> — literal tuple in, literal shape out
+scores.item(1);                  // 0.9 — direct scalar read
+scores.item(9);                  // ❌ compile error: index 9 is out of bounds for axis 0 with dim 4
+```
+
 A larger, real consumer application — a from-scratch RAG (retrieval) demo that embeds documents,
 scores queries against them with a single `matmul`, and ranks the results — lives in
 [`examples/rag-demo`](examples/rag-demo) and installs `numtype` from npm like any other project.
+Since 0.2.0 it doubles as a before/after showcase: every workaround from its original friction
+log is rewritten in place to the op that replaced it, with the pinned retrieval scores unchanged
+(the example's README carries the friction-to-op table).
 
 ## Gradual typing
 
