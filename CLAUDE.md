@@ -128,8 +128,12 @@ Session-Zustand).
   (3) Neue Typ-Folds: IsUnion-Gate VOR jeder naked Destrukturierung (Misch-Verdikt-Unions
   rutschen durch uniform-only-Guards; W4-M2-Blocker). (4) Markdown: auch ABSICHTLICHE
   `~~…~~`-Strikethroughs reißen das 0-`<del>`-GFM-Gate — ganz vermeiden. (5) Shell: der
-  nvm-chpwd-Hook wirft bei `cd` ins Repo Exit 3 — `cd <root> 2>/dev/null; …` (Semikolon)
-  oder `git -C`; `&&` direkt nach cd bricht die Kette ab.
+  nvm-chpwd-Hook (`nvm use` bei .nvmrc-Fund, ~/.zshrc) wirft in der AGENTEN-Shell bei
+  `cd` ins Repo Exit 3 — Ursache ist dort uninitialisiertes nvm (findet sein
+  Versions-Lager nicht; die Meldung „not yet installed" ist irreführend, v24 IST
+  installiert; im interaktiven Owner-Terminal läuft der Hook normal). Darum:
+  `cd <root> 2>/dev/null; …` (Semikolon) oder `git -C`; `&&` direkt nach cd bricht
+  die Kette ab. Kein `nvm install` als „Fix" — löst es nicht (2026-07-21 verifiziert).
 
 ## Commands
 
