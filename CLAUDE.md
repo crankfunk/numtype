@@ -115,8 +115,21 @@ Session-Zustand).
   für ein FIXES File-Set exakt. Datei hinzufügen/umbenennen (selbst ein leeres `export {}`)
   verschiebt den Wert um bis zu ±≈2,000 (Order-Noise, keine Typkosten) → per empty-then-fill
   dekomponieren; Datei-EDITS können echte Typkosten sein → bisektieren mit gleichlanger
-  Kommentar-Kontrollprobe. Nie über den Root/Stress-Split hinweg vergleichen. Baselines nur im
-  frischen `git worktree` messen; immer Exit-Code + Fehlerausgabe prüfen.
+  Kommentar-Kontrollprobe. Dritter Mechanismus (W1/W2): geteilte KLASSEN-SURFACE rippelt auch
+  in Korpora mit unberührtem File-Set (generische Member/Overloads; niladische Member nicht).
+  Nie über den Root/Stress-Split hinweg vergleichen. Baselines nur im frischen `git worktree`
+  messen; immer Exit-Code + Fehlerausgabe prüfen.
+- **Harte Arbeitsregeln (aus der W-Serie, 2026-07-21):** (1) Mutanten-Revert im Haupt-Tree NUR
+  als inverser Edit oder Backup-Kopie-Restore (`cp` nach /tmp, zurück, `diff`-Beweis) — NIE
+  `git checkout`/`git restore` auf Dateien mit uncommitteter Arbeit (zerstört die Scheibe;
+  Recovery-Pfad: Implementierer-Agent per SendMessage re-applizieren lassen). (2) Bei
+  Overload-Sets trägt der ZULETZT deklarierte Kandidat die Fehlerdiagnose — Guard-Träger immer
+  zuletzt; Diagnose-INHALTE pinnen (tsc auf Außer-Repo-Fixture), nicht nur Fehler-Existenz.
+  (3) Neue Typ-Folds: IsUnion-Gate VOR jeder naked Destrukturierung (Misch-Verdikt-Unions
+  rutschen durch uniform-only-Guards; W4-M2-Blocker). (4) Markdown: auch ABSICHTLICHE
+  `~~…~~`-Strikethroughs reißen das 0-`<del>`-GFM-Gate — ganz vermeiden. (5) Shell: der
+  nvm-chpwd-Hook wirft bei `cd` ins Repo Exit 3 — `cd <root> 2>/dev/null; …` (Semikolon)
+  oder `git -C`; `&&` direkt nach cd bricht die Kette ab.
 
 ## Commands
 
