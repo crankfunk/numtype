@@ -19,6 +19,12 @@ crates/**/target-threads/
 # source of truth; `pnpm bench:editor` regenerates on every run).
 spike/bench-dx/workloads/
 
+# Scale-Probe (docs/scale-probe-spec.md, D1): generated sweep-corpus files
+# (gen-scale-workloads.ts is the source of truth; `pnpm bench:scale`
+# regenerates on every run) — same precedent as spike/bench-dx/workloads/
+# above.
+spike/bench-dx/scale-workloads/
+
 # Item 11 / S2: dist-Build-Output (regeneriert von `pnpm build:dist`, kommt in
 # den npm-Tarball via package.json "files":["dist"], NICHT committet). Die
 # numtype_core.wasm darin ist schon durch die *.wasm-Regel oben erfasst.

@@ -798,6 +798,18 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // transiently introduces a reshape-mismatch error) still show it.
 // Correctness gate and latency medians unaffected (still PASS, still
 // under the 2x ceiling).
+//
+// New entry 2026-07-21 (docs/scale-probe-spec.md, D11-D15/D22): `w8`, the
+// Scale-Probe sentinel — a rank-24 broadcast add + item/slice/topk/
+// cosineSimilarity/dot/mean/stack sequence + its own M3 toggle target (D22).
+// This is a NEW WORKLOAD, not a re-measurement of w1-w7 (unlike every
+// comment block above) — its own isolated `tsconfig.w8.json` (D14) means it
+// cannot move w1-w7's pins, proven by measuring them again immediately
+// after this addition (T5): unchanged. Measured once (this is a fresh
+// workload's first-ever pin, not a re-measurement of an existing one, so
+// there is no "before" value to diff against for a byte-identical-twice
+// check the way every re-measurement above did — the doubled-measurement
+// discipline instead applies to the T5 proof that w1-w7 stayed put).
 const INSTANTIATION_PINS: Record<string, number> = {
   w1: 27904,
   w2: 29713,
@@ -806,6 +818,7 @@ const INSTANTIATION_PINS: Record<string, number> = {
   w5: 33358,
   w6: 34528,
   w7: 27076,
+  w8: 34943,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

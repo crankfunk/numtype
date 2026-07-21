@@ -616,6 +616,127 @@ function buildW7(): WorkloadSpec {
 }
 
 // ---------------------------------------------------------------------------
+// W8 — Scale-Probe sentinel (docs/scale-probe-spec.md, D11-D15/D22): a
+// STABLE, continuously-gated (bench:editor / CI editor-gate) workload that
+// stands in for the scale-probe's "measured at scale, not just hoped" claim
+// between full, on-demand `bench:scale` sweeps (which are NOT part of CI —
+// spec D4-Konsequenz). Rank-24 broadcast add (doubled from W2's max rank 16,
+// still well under the WASM-ABI MAX_RANK=32 and the type-layer's own
+// documented cliff region around rank ~1000) followed by a short,
+// eich-anker-oriented item/slice/topk sequence on an [8,24]-ish score-matrix
+// pattern (mirrors examples/rag-demo/main.ts's per-row ranking loop) plus a
+// cosineSimilarity/dot cross-check and a mean/stack chunk-pooling tail — the
+// same op shapes W1-W7 already exercise individually, combined once at a
+// realistically "next size up" rank. Carries its own M3 toggle target
+// (D22), same matmul inner-dim-mismatch mechanism as W4/W6.
+// ---------------------------------------------------------------------------
+
+const W8_RANK = 24;
+const W8_ROWS = 6;
+
+function buildW8(): WorkloadSpec {
+  function render(toggleDim: 3 | 5): { text: string; bcastLine: number; bcastResultName: string; bcastResult: number[]; toggleLine: number } {
+    const b = makeBuilder();
+    b.push(
+      GENERATED_HEADER(
+        "W8 scale-probe sentinel",
+        "Rank-24 broadcast add() (doubled from W2's max rank 16) + a short\nitem/slice/topk sequence on an [8,24]-ish score-matrix pattern (mirrors\nexamples/rag-demo/main.ts's per-row ranking loop) + a cosineSimilarity/dot\ncross-check + a mean/stack chunk-pooling tail, plus the M3 toggle target\n(matmul inner-dim mismatch 3<->5, same mechanism as W4/W6).",
+      ),
+    );
+    b.push(`import { NDArray } from "../../src/ndarray.ts";`);
+    b.push(``);
+
+    const dimA: number[] = [];
+    const dimB: number[] = [];
+    const bcastResult: number[] = [];
+    for (let k = 0; k < W8_RANK; k++) {
+      const dimValue = 2 + (k % 5);
+      if (k % 2 === 0) {
+        dimA.push(dimValue);
+        dimB.push(1);
+      } else {
+        dimA.push(1);
+        dimB.push(dimValue);
+      }
+      bcastResult.push(dimValue);
+    }
+    b.push(`// --- rank-${W8_RANK} broadcast add (doubled from W2's max rank 16) ---`);
+    b.push(`const w8_bcast_a = NDArray.zeros([${dimA.join(", ")}]);`);
+    b.push(`const w8_bcast_b = NDArray.zeros([${dimB.join(", ")}]);`);
+    const bcastResultName = "w8_bcast_result";
+    b.push(`const ${bcastResultName} = w8_bcast_a.add(w8_bcast_b);`);
+    const bcastLine = b.lastIdx();
+    b.push(``);
+
+    b.push(`// --- [8, ${W8_RANK}] score-matrix pattern (mirrors examples/rag-demo/main.ts's ranking loop) ---`);
+    b.push(`const w8_scores = NDArray.zeros([8, ${W8_RANK}]);`);
+    b.push(`const w8_raw = NDArray.zeros([8, ${W8_RANK}]);`);
+    b.push(``);
+    for (let qi = 0; qi < W8_ROWS; qi++) {
+      b.push(`// --- row ${qi} ---`);
+      b.push(`const w8_row${qi} = w8_scores.slice(${qi});`);
+      b.push(`const w8_ranked${qi} = w8_row${qi}.topk(2);`);
+      b.push(`const w8_top1_${qi} = w8_ranked${qi}.indices.item(0);`);
+      b.push(`const w8_top1Score_${qi} = w8_ranked${qi}.values.item(0);`);
+      b.push(`const w8_top2Score_${qi} = w8_ranked${qi}.values.item(1);`);
+      b.push(`const w8_direct_${qi} = w8_scores.item(${qi}, 0);`);
+      b.push(``);
+    }
+    b.push(`// --- cosineSimilarity/dot cross-check on raw (non-normalized) rows ---`);
+    for (let qi = 0; qi < W8_ROWS; qi++) {
+      const otherQi = (qi + 1) % 8;
+      b.push(`const w8_rawA_${qi} = w8_raw.slice(${qi});`);
+      b.push(`const w8_rawB_${qi} = w8_raw.slice(${otherQi});`);
+      b.push(`const w8_cos_${qi} = w8_rawA_${qi}.cosineSimilarity(w8_rawB_${qi});`);
+      b.push(`const w8_dot_${qi} = w8_rawA_${qi}.dot(w8_rawB_${qi});`);
+    }
+    b.push(``);
+
+    b.push(`// --- chunk pooling (mean + stack) ---`);
+    b.push(`const w8_chunkA = NDArray.zeros([${W8_RANK}]);`);
+    b.push(`const w8_chunkB = NDArray.zeros([${W8_RANK}]);`);
+    b.push(`const w8_chunkMatrix = NDArray.stack([w8_chunkA, w8_chunkB]);`);
+    b.push(`const w8_pooled = w8_chunkMatrix.mean(0);`);
+    b.push(``);
+
+    b.push(`// --- M3 toggle target: matmul inner-dim mismatch (3<->5), W4's mechanism ---`);
+    b.push(`const w8_toggle_a = NDArray.zeros([2, 3]);`);
+    b.push(`const w8_toggle_b = NDArray.zeros([${toggleDim}, 4]);`);
+    b.push(`const w8_toggle_result = w8_toggle_a.matmul(w8_toggle_b);`);
+    const toggleLine = b.lastIdx();
+    b.push(``);
+
+    return { text: b.lines.join("\n") + "\n", bcastLine, bcastResultName, bcastResult, toggleLine };
+  }
+
+  const rBroken = render(5);
+  const rFixed = render(3);
+
+  const brokenState: ToggleStateSpec = { label: "broken (2 errors)", text: rBroken.text, diagnosticLine: rBroken.toggleLine, expectDiagnosticPresent: true, expectedCode: 2741 };
+  const fixedState: ToggleStateSpec = { label: "fixed (1 error)", text: rFixed.text, diagnosticLine: rFixed.toggleLine, expectDiagnosticPresent: false, expectedCode: 2741 };
+
+  const brokenLines = rBroken.text.split("\n");
+  const hovers: HoverSpec[] = [
+    { label: "W8 rank-24 broadcast result", line: rBroken.bcastLine, character: charIn(brokenLines[rBroken.bcastLine]!, rBroken.bcastResultName), expected: fmtShape(rBroken.bcastResult) },
+  ];
+  const completion: CompletionSpec = { label: "W8 member access", line: rBroken.bcastLine, character: charAfterDot(brokenLines[rBroken.bcastLine]!, "add") };
+
+  const lineCount = rBroken.text.split("\n").length - 1;
+  if (lineCount < 80 || lineCount > 150) {
+    console.warn(`WARNING: W8 line count ${lineCount} is outside the spec's 80-150 LOC target (D12) — adjust W8_ROWS.`);
+  }
+
+  return {
+    id: "w8",
+    fileName: "w8-scale-sentinel.ts",
+    text: brokenState.text,
+    hovers,
+    completion,
+    toggle: { label: "W8 matmul inner-dim toggle (3<->5)", initialState: brokenState, otherState: fixedState },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Main: build all workloads, write .ts files + tsconfigs + manifest.json.
 // ---------------------------------------------------------------------------
 
@@ -623,7 +744,7 @@ function main(): void {
   rmSync(workloadsDir, { recursive: true, force: true });
   mkdirSync(workloadsDir, { recursive: true });
 
-  const workloads = [buildW1(), buildW2(), buildW3(), buildW4(), buildW5(), buildW6(), buildW7()];
+  const workloads = [buildW1(), buildW2(), buildW3(), buildW4(), buildW5(), buildW6(), buildW7(), buildW8()];
 
   // Self-contained (no "extends") so the language server's auto-discovered
   // project for any workload file is EXACTLY this directory's .ts files plus
