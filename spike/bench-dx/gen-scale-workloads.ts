@@ -90,6 +90,11 @@ interface HoverSpec {
   line: number;
   character: number;
   expected: string;
+  // Axis (c) only — the FULL expected shape, checked elision-aware by
+  // scale-latency.ts's `assertHoverCorrect`/`assertHoverShapeCorrect`
+  // instead of a plain substring match on `expected` (see genAxisC below
+  // for why `expected` alone is insufficient at this axis's large ranks).
+  expectedDims?: number[];
 }
 interface CompletionSpec {
   label: string;
@@ -514,22 +519,30 @@ function genAxisC(manifest: ScalePointManifestEntry[], selfReport: Record<string
     const lines = rendered.text.split("\n");
     // Finding (post-real-run, axis c): tsc's own hover output ELIDES long
     // tuple types in the middle ("2, 3, ... 88 more ..., 2]>") once the
-    // rank gets large (observed starting around rank=256 in this sweep,
-    // rank=128 still rendered in full) — a genuine TS hover-display
-    // behavior, not a bug in the type computation itself. A full-array
-    // `expected` substring (correct at low ranks) therefore stops being a
-    // SUBSTRING of the real hover text at high ranks even though the type
-    // is exactly right. The correctness proof must use a short, always-
-    // present PREFIX of the shape instead of the full array — safe at
-    // every rank in the sweep (TS always shows well over a hundred leading
-    // elements before eliding, so 6 is comfortably inside the safe zone).
-    const HOVER_PREFIX_DIMS = 6;
-    const prefixShape = rendered.expectedShape.slice(0, Math.min(HOVER_PREFIX_DIMS, rendered.expectedShape.length));
+    // rank gets large — a genuine TS hover-display behavior, not a bug in
+    // the type computation itself. Verified empirically against this
+    // sweep's real `tsc --lsp --stdio` hover responses: rank 16/64/128
+    // always render in full; rank 256/512/896/1024 are always elided.
+    //
+    // Post-verify fix (docs/scale-probe-spec.md T3): a short, always-present
+    // PREFIX-only substring check (the original approach here) is correct
+    // but VACUOUS past the prefix at every elided rank — it can never catch
+    // a wrong dimension at the END, or a wrong overall RANK, no matter how
+    // wrong the real hover text is past position `HOVER_PREFIX_DIMS`. Fixed
+    // by carrying the FULL expected shape (`expectedDims`) so the runner
+    // (scale-latency.ts's `assertHoverShapeCorrect`) can check the visible
+    // prefix AND the visible suffix AND the reconstructed total length
+    // whenever tsc elides, and the full array whenever it doesn't.
     const hover: HoverSpec = {
       label: `${pointId} broadcast result`,
       line: rendered.resultLine,
       character: charIn(lines[rendered.resultLine]!, rendered.resultName),
-      expected: `NDArray<[${prefixShape.join(", ")}`, // deliberately open-ended (no closing "]>") — a prefix-only check, safe against hover elision at high rank (see comment above)
+      // Weak, always-true fallback only — never load-bearing for this axis
+      // (expectedDims below supersedes it). Kept populated because
+      // HoverSpec.expected is a required field shared with axis (a)/(b),
+      // whose shapes never elide and use it as their real check.
+      expected: `NDArray<[${rendered.expectedShape[0]}`,
+      expectedDims: [...rendered.expectedShape],
     };
     const completion: CompletionSpec = { label: `${pointId} member access`, line: rendered.completionLine, character: rendered.completionChar };
 

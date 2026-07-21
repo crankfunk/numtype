@@ -52,6 +52,12 @@ interface HoverSpec {
   line: number;
   character: number;
   expected: string;
+  // Axis (c) only (see genAxisC in gen-scale-workloads.ts): the FULL
+  // expected shape, checked elision-aware by `assertHoverCorrect` below
+  // instead of the plain substring check. `undefined` for axis (a)/(b),
+  // whose shapes are always short enough that tsc's hover never elides
+  // them — those keep the plain substring check via `expected`.
+  expectedDims?: number[];
 }
 interface CompletionSpec {
   label: string;
@@ -295,8 +301,111 @@ function hostLoadLine(): string {
   }
 }
 
-function assertHoverCorrect(pointId: string, label: string, position: { line: number; character: number }, result: unknown, expected: string): void {
+// ---------------------------------------------------------------------------
+// Elision-aware NDArray<[...]> hover shape check (post-verify fix, see
+// docs/scale-probe-spec.md T3 and this file's `assertHoverCorrect` header).
+//
+// tsc's own hover output ELIDES long tuple types in the middle once the rank
+// gets large — verified empirically against this sweep's real
+// `tsc --lsp --stdio` hover responses (all 9 axis-(c) points, ranks
+// 16..1024): rank 16/64/128 always render the FULL array; rank 256 and above
+// are always elided in the exact form
+//   NDArray<[<prefix dims, comma-separated>, ... <N> more ..., <suffix dims>]>
+// For this TS version (7.0.2 native) the prefix is 167 dims and the suffix is
+// 1 dim at every observed elided rank (256/512/896, and prefixCount + N +
+// suffixCount reconstructs the true rank exactly: 167+88+1=256, 167+344+1=512,
+// 167+728+1=896) — but the parser below does NOT hardcode 167/1, it reads
+// both counts off the actual text, so a future TS version's different
+// truncation window still parses correctly.
+// ---------------------------------------------------------------------------
+
+type NDArrayHoverShape = { kind: "full"; dims: number[] } | { kind: "elided"; prefix: number[]; moreCount: number; suffix: number[] };
+
+function parseNDArrayHoverDims(text: string): NDArrayHoverShape {
+  const parseDimList = (s: string): number[] =>
+    s.trim().length === 0
+      ? []
+      : s.split(",").map((d) => {
+          const n = Number(d.trim());
+          if (!Number.isFinite(n)) throw new Error(`non-numeric dim token "${d.trim()}" in "${text}"`);
+          return n;
+        });
+  // Try the elided form first — it is the more specific pattern (a plain
+  // "[^\]]*" match on the non-elided regex would also match an elided
+  // string, just with the "... N more ..." marker captured as if it were a
+  // dim token, which parseDimList would then correctly reject as
+  // non-numeric; trying elided first avoids relying on that fallback).
+  const elided = /NDArray<\[([^\]]*?), \.\.\. (\d+) more \.\.\., ([^\]]*)\]>/.exec(text);
+  if (elided) {
+    return { kind: "elided", prefix: parseDimList(elided[1] ?? ""), moreCount: parseInt(elided[2] ?? "0", 10), suffix: parseDimList(elided[3] ?? "") };
+  }
+  const full = /NDArray<\[([^\]]*)\]>/.exec(text);
+  if (full) return { kind: "full", dims: parseDimList(full[1] ?? "") };
+  throw new Error(`no NDArray<[...]> shape found in "${text}"`);
+}
+
+/** The elision-aware replacement for a plain substring check on axis (c)'s
+ * large-rank hovers. A plain substring check on a short PREFIX (the
+ * original implementation's approach) is correct but VACUOUS past the
+ * prefix for every elided point — it can never catch a wrong dimension at
+ * the end, or a wrong overall rank. This check instead:
+ *   - compares the FULL array when tsc shows it in full (never elided);
+ *   - when tsc elides, compares BOTH the visible prefix and the visible
+ *     suffix against the corresponding ends of `expectedDims`, AND checks
+ *     prefix.length + moreCount + suffix.length against expectedDims.length
+ *     (catching a wrong total rank even though most middle elements are not
+ *     individually visible).
+ * Honest limit (cannot be worked around — the data simply is not in the
+ * hover text): a wrong dimension strictly inside the elided middle region
+ * that does not change the total count is invisible to this check, exactly
+ * as it is invisible to a human reading the same hover tooltip. */
+function assertHoverShapeCorrect(pointId: string, label: string, position: { line: number; character: number }, text: string, expectedDims: readonly number[]): void {
+  const fail = (reason: string): never => {
+    throw new Error(
+      `CORRECTNESS GATE FAILED [${pointId}] hover "${label}" at line=${position.line} char=${position.character}: ${reason} — ` +
+        `got hover text "${text}" — aborting this point's measurement (never time a wrong result).`,
+    );
+  };
+  let parsed: NDArrayHoverShape;
+  try {
+    parsed = parseNDArrayHoverDims(text);
+  } catch (e) {
+    fail(`could not parse an NDArray<[...]> shape out of the hover text (${e instanceof Error ? e.message : String(e)})`);
+    return; // unreachable — fail() always throws; keeps `parsed` definitely assigned below
+  }
+  if (parsed.kind === "full") {
+    const dimsMatch = parsed.dims.length === expectedDims.length && parsed.dims.every((d, i) => d === expectedDims[i]);
+    if (!dimsMatch) fail(`full (non-elided) hover dims ${JSON.stringify(parsed.dims)} do not match expected ${JSON.stringify(expectedDims)}`);
+    return;
+  }
+  const total = parsed.prefix.length + parsed.moreCount + parsed.suffix.length;
+  if (total !== expectedDims.length) {
+    fail(
+      `elided hover's reconstructed total rank ${total} (prefix ${parsed.prefix.length} + moreCount ${parsed.moreCount} + suffix ${parsed.suffix.length}) ` +
+        `does not match expected rank ${expectedDims.length}`,
+    );
+  }
+  const expectedPrefix = expectedDims.slice(0, parsed.prefix.length);
+  const expectedSuffix = expectedDims.slice(expectedDims.length - parsed.suffix.length);
+  const prefixMatch = parsed.prefix.every((d, i) => d === expectedPrefix[i]);
+  const suffixMatch = parsed.suffix.every((d, i) => d === expectedSuffix[i]);
+  if (!prefixMatch || !suffixMatch) {
+    fail(`elided hover's visible prefix ${JSON.stringify(parsed.prefix)} / suffix ${JSON.stringify(parsed.suffix)} do not match expected prefix ${JSON.stringify(expectedPrefix)} / suffix ${JSON.stringify(expectedSuffix)}`);
+  }
+}
+
+/** Widened to take the full `HoverSpec` as `position` (all 3 call sites
+ * already pass `point.hover`, whose type IS `HoverSpec`) so this can branch
+ * on `expectedDims` without touching any call site. When `expectedDims` is
+ * present (axis (c) only), delegates to the elision-aware structural check
+ * above; otherwise keeps the original plain substring check (axis (a)/(b),
+ * whose shapes never elide). */
+function assertHoverCorrect(pointId: string, label: string, position: HoverSpec, result: unknown, expected: string): void {
   const text = hoverText(result);
+  if (position.expectedDims !== undefined) {
+    assertHoverShapeCorrect(pointId, label, position, text, position.expectedDims);
+    return;
+  }
   if (!text.includes(expected)) {
     throw new Error(
       `CORRECTNESS GATE FAILED [${pointId}] hover "${label}" at line=${position.line} char=${position.character}: ` +
