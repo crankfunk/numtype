@@ -23,8 +23,12 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 
 ## Status (v0.1.0 — released)
 
-**numtype@0.1.1 ist live auf npm (0.1.0 + Docs-Patch 0.1.1, beide 2026-07-19), das Repo ist
-public, Tags `v0.1.0`/`v0.1.1`, Apache-2.0.** Roadmap-Phasen A–D und Items 1–14 sind komplett —
+**numtype@0.2.0 ist live auf npm (2026-07-21 — „the wishlist release": alle fünf
+Dogfooding-Ops argmax/topk · Skalar-Overloads+mean · sqrt · stack · item; davor
+0.1.0/0.1.1 am 2026-07-19), das Repo ist public, Tags `v0.1.0`/`v0.1.1`/`v0.2.0`,
+Apache-2.0. Das Example läuft auf 0.2.0 als Vorher/Nachher-Showcase
+(FRICTION→RESOLVED-Kommentare, F→W-Tabelle in der Example-README);
+Drop-in-Kompatibilität 0.1.1→0.2.0 asserted bewiesen.** Roadmap-Phasen A–D und Items 1–14 sind komplett —
 **die Roadmap ist durchgespielt** (Phase-C-Items 8/9 — Browser-Threads/no_std — bewusst
 deferred). Item 14 schloss 2026-07-19: Demo-GIF, SemVer-Sektion, Reading Guide (docs/README.md),
 Launch-Blog-Post (https://marvinmuegge.com/notes/teaching-the-checker-arithmetic/).

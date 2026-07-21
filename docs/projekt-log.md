@@ -502,3 +502,18 @@ evidenzbasiert, jede mit Baustein-0-Fang vor dem Bau (5/5!), dreifach verifizier
 zwei echte Verify-B-Blocker (W2-Diagnose-Verlust, W4-M2-Loch) in-Slice gefixt.
 Nächster Schritt: 0.2.0-Bündel-Release (Owner-Publish), Example-Umstellung auf die
 neuen Ops als Vorher/Nachher-Showcase, dann Scale-Probe.
+
+## Release 0.2.0 — „the wishlist release" (2026-07-21)
+
+numtype@0.2.0 publiziert (Owner, 2FA; ein abgelaufener npm-Login als einzige Hürde —
+E404 beim Publish ist npm-Sprech für „nicht eingeloggt"). Inhalt: die komplette
+W1–W5-Serie. Release-Mechanik wie designed: Version-Bump + Example-Dep-Bump im selben
+Commit (fb28417) hielt den Registry-Tripwire grün; das UNVERÄNDERTE 0.1.1-Example lief
+vor der Umstellung grün gegen 0.2.0 (Drop-in-Kompatibilität asserted — die erste echte
+Bewährungsprobe der 0.x-SemVer-Politik). Danach die Showcase-Umstellung (dd60692):
+alle fünf Workarounds durch die Ops ersetzt, JEDER gepinnte Score byte-identisch
+(die W-Scheiben-Beweise, sichtbar im Konsumenten), FRICTION→RESOLVED-Kommentare
+in-place + F→W-Tabelle in der Example-README, dritter @ts-expect-error-Pin (item-OOB).
+Tag v0.2.0 gepusht (Ruleset-geschützt). Damit ist der Bogen geschlossen: Demo →
+Friction-Log → Wunschliste → fünf verifizierte Op-Scheiben → Release → dieselbe Demo
+auf den eigenen Ops. Nächster Owner-Reihenfolge-Punkt: Scale-Probe.
