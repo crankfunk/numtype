@@ -46,12 +46,17 @@ export function embedText(text: string, dims: number): Float64Array {
  * Embed several texts and concatenate into one flat row-major buffer, ready
  * for `NDArray.fromArray([texts.length, dims], flat)`.
  *
- * FRICTION (see docs/dogfooding-rag-ergebnisse.md): NumPy builds a matrix
- * from a list of row vectors directly (`np.array([embed(t) for t in
- * texts])`, or `np.stack`). `NDArray.fromArray` only takes one already-flat
- * buffer for the *whole* matrix, so building a matrix out of N independently
- * computed row vectors needs this small hand-rolled flattening helper —
- * `Float64Array#set` at the right row offset — instead of a one-line stack.
+ * RESOLVED-adjacent (see docs/dogfooding-rag-ergebnisse.md, F5/W4):
+ * `NDArray.stack([...])` now exists (0.2.0) and is exactly the `np.stack`
+ * numtype was missing — but `stack` only accepts NDArrays already built one
+ * by one, and its literal-tuple call form needs every row enumerated as a
+ * separate argument at the call site. Here `texts.length` (`N`/`Q` in
+ * main.ts) is a fixed literal known up front, so `fromArray` over this
+ * helper's single flat buffer stays the better fit — it keeps that literal
+ * row count as a type without listing N rows by hand. `main.ts`'s
+ * mean-pooling chunk matrix (two independently-built rows, genuinely small
+ * and fixed) is `stack`'s actual showcase; see the `NDArray.stack(...)` call
+ * there.
  */
 export function embedMatrix(texts: readonly string[], dims: number): Float64Array {
   const flat = new Float64Array(texts.length * dims);

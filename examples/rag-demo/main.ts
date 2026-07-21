@@ -7,15 +7,19 @@
  *
  * Pipeline: embed a 16-document corpus and 8 queries with from-scratch
  * hashed-trigram TF vectors (embedding.ts), build matrices with
- * `NDArray.fromArray`, L2-normalize rows, score every query against every
- * document via one `matmul`, rank in JS (no argmax/topk op exists yet —
- * logged as friction below), and cross-check the top hit with `dot`/
- * `cosineSimilarity` on the RAW (non-normalized) rows.
+ * `NDArray.fromArray`, L2-normalize rows (via `.sqrt()`), score every query
+ * against every document via one `matmul`, rank with `.topk()`, and
+ * cross-check the top hit with `.item()`/`dot`/`cosineSimilarity` on the RAW
+ * (non-normalized) rows.
  *
- * Every place the natural numtype-first formulation was tried and something
- * was missing is logged inline as FRICTION #n, with the workaround actually
- * used right below it — see docs/dogfooding-rag-ergebnisse.md for the full
- * write-up (this file is the primary evidence source for that doc).
+ * This demo was first built against numtype 0.1.1, before ops like
+ * `sqrt`/`mean`/scalar overloads/`topk`/`stack`/`item` existed — every place
+ * the natural numtype-first formulation was missing something back then was
+ * logged inline as FRICTION F1–F5 (docs/dogfooding-rag-ergebnisse.md). Those
+ * five gaps became the 0.2.0 op wishlist (W1–W5) and are now closed; this
+ * file has been updated to use the real ops, with each former workaround
+ * left in a comment marked "RESOLVED (0.2.0)" right where it used to live —
+ * the file itself is the before/after showcase.
  */
 import assert from "node:assert";
 import { NDArray } from "numtype";
@@ -46,19 +50,12 @@ console.log(`corpus matrix: shape=[${corpusMatrix.shape.join(",")}]`);
 const corpusSquared = corpusMatrix.mul(corpusMatrix); // NDArray<[16, 256]>
 const corpusSumSquares = corpusSquared.sum(1); // NDArray<[16]>
 
-// FRICTION F1 — Intent: `np.sqrt(sumSquares)`, an elementwise unary op.
-// Workaround: the next 3 lines (and the mirrored block at :103-107 for
-// queries) — no `.sqrt()`/unary-map op exists on `NDArray`, so the natural
-// chain (mul -> sum -> sqrt -> div) has to drop to the raw `Float64Array`,
-// apply `Math.sqrt` by hand, and rebuild
-// via `fromArray`. Cost: 4 extra lines, no readability loss to speak of, and
-// crucially NO type-level degradation — `N` is still a literal here, so the
-// rebuilt array is still `NDArray<[16]>`, not a widened `NDArray<[number]>`.
-// Candidate: an elementwise unary-map surface (sqrt at minimum; NumPy has a
-// whole ufunc family here).
-const corpusRowNormsData = new Float64Array(corpusSumSquares.data.length);
-for (let i = 0; i < corpusRowNormsData.length; i++) corpusRowNormsData[i] = Math.sqrt(corpusSumSquares.data[i] ?? 0);
-const corpusRowNorms = NDArray.fromArray([N], corpusRowNormsData); // NDArray<[16]>
+// RESOLVED (0.2.0) — was FRICTION F1: `np.sqrt(sumSquares)`, an elementwise
+// unary op, used to need a hand-rolled 4-line workaround (raw `Float64Array`
+// loop with `Math.sqrt`, rebuilt via `fromArray`) because no `.sqrt()` op
+// existed on `NDArray`. Now the full L2-normalization chain is natural
+// numtype end to end: mul -> sum(axis) -> sqrt -> reshape -> div.
+const corpusRowNorms = corpusSumSquares.sqrt(); // NDArray<[16]>
 
 // reshape([16] -> [16, 1]) so the norms broadcast against [16, 256] on div.
 const corpusRowNormsCol = corpusRowNorms.reshape([N, 1]); // NDArray<[16, 1]>
@@ -102,9 +99,8 @@ const queryMatrix = NDArray.fromArray([Q, D], queryFlat); // NDArray<[8, 256]>
 // COST type precision rather than save lines. Left inline, on purpose.
 const querySquared = queryMatrix.mul(queryMatrix); // NDArray<[8, 256]>
 const querySumSquares = querySquared.sum(1); // NDArray<[8]>
-const queryRowNormsData = new Float64Array(querySumSquares.data.length);
-for (let i = 0; i < queryRowNormsData.length; i++) queryRowNormsData[i] = Math.sqrt(querySumSquares.data[i] ?? 0);
-const queryRowNorms = NDArray.fromArray([Q], queryRowNormsData); // NDArray<[8]>
+// RESOLVED (0.2.0) — mirrors the corpus block above (was the second F1 site).
+const queryRowNorms = querySumSquares.sqrt(); // NDArray<[8]>
 const queryRowNormsCol = queryRowNorms.reshape([Q, 1]); // NDArray<[8, 1]>
 const queryNormalized = queryMatrix.div(queryRowNormsCol); // NDArray<[8, 256]>
 
@@ -120,27 +116,22 @@ for (let qi = 0; qi < QUERIES.length; qi++) {
   if (query === undefined) continue; // noUncheckedIndexedAccess — statically unreachable here, kept honest
   const [queryText, expectedTop1] = query;
 
-  // FRICTION F3/F4 — Intent: read row `qi` of the [8, 16] score matrix as a
-  // plain array to rank it. Workaround: `similarities.slice(qi)` — an
-  // integer spec on the leading axis drops that axis (documented behavior,
-  // spike/src/slice.ts), so this IS the natural numtype call and yields a
-  // real `NDArray<[16]>`. The friction is one step later: there is no
-  // argmax/topk op, so ranking the 16 scores against each other still has
-  // to leave NDArray and loop over `.data` by hand (see below). Candidate:
-  // `argmax`/`argsort`/`topk` — this demo's single most obvious missing op.
+  // RESOLVED (0.2.0) — was FRICTION F3/F4: reading row `qi` of the [8, 16]
+  // score matrix via `similarities.slice(qi)` was already natural numtype
+  // (an integer spec on the leading axis drops that axis, a real
+  // `NDArray<[16]>`), but ranking those 16 scores used to have no op —
+  // `Array.from(rowScores.data).map(...).sort(...)` dropped out of NDArray
+  // entirely to hand-rank a plain array. `.topk(2)` now does it in one call.
   const rowScores = similarities.slice(qi); // NDArray<[16]>
-  const ranked = Array.from(rowScores.data)
-    .map((score, docIdx) => ({ score, docIdx }))
-    .sort((a, b) => b.score - a.score);
-  const top1 = ranked[0];
-  const top2 = ranked[1];
-  assert.ok(top1 !== undefined && top2 !== undefined, `query ${qi}: expected at least 2 ranked documents`);
-  const margin = top1.score - top2.score;
+  const ranked = rowScores.topk(2); // { values: NDArray<[2]>, indices: NDArray<[2]> }
+  const top1 = { docIdx: ranked.indices.item(0), score: ranked.values.item(0) };
+  const top2Score = ranked.values.item(1);
+  const margin = top1.score - top2Score;
 
   console.log(
     `Q${qi}: "${queryText}"\n` +
       `  top1: doc${top1.docIdx} (score=${top1.score.toFixed(4)}) — "${DOCS[top1.docIdx]}"\n` +
-      `  top2: doc${top2.docIdx} (score=${top2.score.toFixed(4)}) — margin=${margin.toFixed(4)}`,
+      `  top2: doc${ranked.indices.item(1)} (score=${top2Score.toFixed(4)}) — margin=${margin.toFixed(4)}`,
   );
 
   assert.strictEqual(top1.docIdx, expectedTop1, `query ${qi} ("${queryText}"): expected top-1 doc ${expectedTop1}, got ${top1.docIdx}`);
@@ -150,6 +141,18 @@ for (let qi = 0; qi < QUERIES.length; qi++) {
   // `cosineSimilarity` on the RAW (non-pre-normalized) rows — cosine
   // similarity is scale-invariant, so this should agree with the
   // matmul-on-normalized-rows score above, up to floating-point rounding.
+  //
+  // RESOLVED (0.2.0) — was also FRICTION F3: an explicit scalar read of
+  // `similarities` itself (rather than a re-sliced row) previously needed
+  // either two nested `.slice()` copies or raw `.data` index arithmetic.
+  // `.item(qi, docIdx)` now reads the exact score directly out of the [8,
+  // 16] matrix — shown here as a second, independent check against `topk`'s
+  // own reported top-1 score.
+  const directScore = similarities.item(qi, top1.docIdx);
+  assert.ok(
+    Math.abs(directScore - top1.score) < 1e-12,
+    `query ${qi}: similarities.item(${qi}, ${top1.docIdx})=${directScore} diverges from topk's top1 score ${top1.score}`,
+  );
   const rawQueryRow = queryMatrix.slice(qi); // NDArray<[256]>
   const rawDocRow = corpusMatrix.slice(top1.docIdx); // NDArray<[256]>
   const crossCheckScore = rawQueryRow.cosineSimilarity(rawDocRow);
@@ -158,7 +161,7 @@ for (let qi = 0; qi < QUERIES.length; qi++) {
     Math.abs(crossCheckScore - top1.score) < 1e-9,
     `query ${qi}: cosineSimilarity cross-check ${crossCheckScore} diverges from matmul score ${top1.score}`,
   );
-  console.log(`  cross-check: cosineSimilarity=${crossCheckScore.toFixed(6)} raw dot=${crossCheckDot.toFixed(4)}\n`);
+  console.log(`  cross-check: cosineSimilarity=${crossCheckScore.toFixed(6)} raw dot=${crossCheckDot.toFixed(4)} item=${directScore.toFixed(6)}\n`);
 }
 
 console.log(`All ${QUERIES.length} queries retrieved their expected top-1 document (margin >= ${MARGIN_THRESHOLD}).\n`);
@@ -171,36 +174,43 @@ console.log(`All ${QUERIES.length} queries retrieved their expected top-1 docume
 console.log("=== Mean-pooling a multi-chunk document ===\n");
 const chunk1 = "NumType checks NumPy-style array shapes at compile time";
 const chunk2 = "using the TypeScript type checker.";
-const chunkFlat = embedMatrix([chunk1, chunk2], D);
-const chunkMatrix = NDArray.fromArray([2, D], chunkFlat); // NDArray<[2, 256]>
-const chunkSum = chunkMatrix.sum(0); // NDArray<[256]> — sum over the chunk axis
 
-// FRICTION F2 — Intent: `chunkSum / 2` (divide a vector by the chunk
-// count — a NumPy scalar-broadcast). Workaround: `NDArray` has no
-// number-scalar overload for `div`/`mul`/`add`/`sub` — every op takes
-// another `NDArray`. Wrap the scalar in a shape-[1] array and rely on
-// ordinary broadcasting ([256] / [1] -> [256], NumPy's own rule) instead.
-// Cost: one extra `fromArray` call per scalar op; no type-level loss (the
-// [256] shape survives). Candidate: `number` overloads for the four
-// elementwise binary ops (or a dedicated `.scale(n)` helper) — this is the
-// SECOND most obvious missing-op signal in this demo, right after argmax.
-const chunkCountArr = NDArray.fromArray([1], [2]);
-const pooledVector = chunkSum.div(chunkCountArr); // NDArray<[256]>
+// RESOLVED (0.2.0) — was FRICTION F5: `embedMatrix`'s hand-rolled
+// `Float64Array#set`-at-row-offset flatten helper (embedding.ts) used to be
+// the only way to build a matrix out of independently-computed row vectors —
+// there was no `np.stack`-equivalent. `embedMatrix` stays the best form for
+// the corpus/query matrices above (their row count `N`/`Q` is a fixed
+// literal known up front, so `fromArray` keeps that literal shape); this
+// mean-pooling chunk matrix is the case `stack` is actually for — two rows
+// that arrive as independently-built `NDArray`s, stacked into one literal
+// `NDArray<[2, 256]>` with no manual flattening:
+const chunkMatrix = NDArray.stack([NDArray.fromArray([D], embedText(chunk1, D)), NDArray.fromArray([D], embedText(chunk2, D))]); // NDArray<[2, 256]>
 
-let bestPooledIdx = -1;
-let bestPooledScore = -Infinity;
-let secondPooledScore = -Infinity;
+// RESOLVED (0.2.0) — was FRICTION F2: `chunkSum / 2` (divide a vector by the
+// chunk count — a NumPy scalar-broadcast) used to need wrapping the scalar
+// in a shape-[1] `fromArray` array and relying on ordinary broadcasting,
+// because no `NDArray`-number overload existed on `div`/`mul`/`add`/`sub`.
+// `chunkMatrix.mean(0)` folds the old sum(0)-then-divide into one call;
+// equivalently, `chunkMatrix.sum(0).div(2)` would use the same direct scalar
+// overload now available on `div`/`mul`/`add`/`sub` everywhere in this file.
+const pooledVector = chunkMatrix.mean(0); // NDArray<[256]>
+
+// RESOLVED (0.2.0) — was also FRICTION F4 (the second occurrence, alongside
+// query ranking above): finding the best/second-best matching document used
+// to be a hand-rolled linear scan with manual best/second-best tracking,
+// because there was no argmax/topk op. The per-document `cosineSimilarity`
+// loop itself is still the right shape here (each score comes from an
+// independent `corpusMatrix.slice(docIdx)` call, not a single matrix op),
+// but ranking the resulting 16 scores is now `.topk(2)` instead of manual
+// tracking.
+const pooledScores: number[] = [];
 for (let docIdx = 0; docIdx < N; docIdx++) {
-  const score = corpusMatrix.slice(docIdx).cosineSimilarity(pooledVector);
-  if (score > bestPooledScore) {
-    secondPooledScore = bestPooledScore;
-    bestPooledScore = score;
-    bestPooledIdx = docIdx;
-  } else if (score > secondPooledScore) {
-    secondPooledScore = score;
-  }
+  pooledScores.push(corpusMatrix.slice(docIdx).cosineSimilarity(pooledVector));
 }
-const pooledMargin = bestPooledScore - secondPooledScore;
+const pooledRanked = NDArray.fromArray([N], pooledScores).topk(2);
+const bestPooledIdx = pooledRanked.indices.item(0);
+const bestPooledScore = pooledRanked.values.item(0);
+const pooledMargin = bestPooledScore - pooledRanked.values.item(1);
 console.log(
   `pooled(chunk1, chunk2) top match: doc${bestPooledIdx} (score=${bestPooledScore.toFixed(4)}, ` +
     `margin=${pooledMargin.toFixed(4)}) — "${DOCS[bestPooledIdx]}"\n`,
@@ -217,23 +227,26 @@ console.log(`cosineSimilarity(whole-doc embedding, pooled chunks) = ${wholeVsPoo
 assert.ok(wholeVsPooled > 0.8, `whole-document embedding should be close to the pooled chunk vector, got ${wholeVsPooled}`);
 
 // --- Shape-error self-checks (compile-time, not runtime) --------------
-// These two lines are the demo's OWN self-check on numtype's core USP: if
+// These three lines are the demo's OWN self-check on numtype's core USP: if
 // numtype ever stopped rejecting these at the argument, `pnpm check` inside
 // this example would start failing right here (an unused `@ts-expect-error`
 // is itself a compile error), so these double as a tiny regression pin.
 // Wrapped in a never-called function: `tsc --noEmit` still type-checks a
 // function body regardless of whether it's invoked, but Node's runtime
 // (which does NOT type-check — it only strips types) would otherwise
-// actually execute these two deliberately-invalid calls and crash on their
-// runtime guards (`assertVectorPair`/`matmulRuntime`) before ever reaching
-// this point. Keeping them uncalled is what makes them a pure compile-time
-// pin, matching this section's own name.
+// actually execute these three deliberately-invalid calls and crash on their
+// runtime guards (`assertVectorPair`/`matmulRuntime`/`itemRuntime`) before
+// ever reaching this point. Keeping them uncalled is what makes them a pure
+// compile-time pin, matching this section's own name.
 function _shapeErrorSelfChecks(): void {
   // @ts-expect-error matmul: inner dimensions must match — [2, 3] has 3 columns, [5, 4] has 5 rows
   NDArray.fromArray([2, 3], [1, 2, 3, 4, 5, 6]).matmul(NDArray.fromArray([5, 4], new Array(20).fill(0)));
 
   // @ts-expect-error dot: both operands must be rank-1 — got rank 2 and rank 1
   NDArray.fromArray([2, 3], [1, 2, 3, 4, 5, 6]).dot(NDArray.fromArray([3], [1, 2, 3]));
+
+  // @ts-expect-error item (W5, new in 0.2.0): literal index 99 is out of bounds for axis 0's dim 8
+  queryMatrix.item(99, 0);
 }
 void _shapeErrorSelfChecks; // referenced (not called) so it isn't flagged as dead code by any future lint pass
 
