@@ -41,13 +41,14 @@ import {
   sliceRuntime,
   type SliceSpec,
   sqrtRuntime,
+  stackRuntime,
   sumRuntime,
   topkRuntime,
   transposeRuntime,
 } from "./runtime.ts";
 import type { LiteralShapeProduct } from "./literal-arithmetic.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "./slice.ts";
-import type { DotCheck, TopkCheck, TopkShape } from "./vector.ts";
+import type { DotCheck, StackCheck, StackShape, TopkCheck, TopkShape } from "./vector.ts";
 import { checkThreadedEnv, WasmBackend, type BackendKind, type ThreadedBackendOptions } from "./wasm/backend-api.ts";
 import { initCore } from "./wasm/loader.ts";
 import type { ThreadedBackend } from "./wasm/threaded.ts";
@@ -85,6 +86,68 @@ export type OkShape<S> = S extends ShapeError<string> ? never : S extends Shape 
  *
  * Exported (type-only, Kern 02): see `OkShape` above. */
 export type Guard<Result, Actual> = [Result] extends [ShapeError<infer Message>] ? { readonly __shapeError: Message } : Actual;
+
+/**
+ * Op-Scheibe W4 (docs/op-w4-stack-spec.md, D2/F1/F2): the `NDArray` ->
+ * `Shape` unwrap `StackCheck`/`StackShape` (vector.ts) need, kept OUT of
+ * vector.ts itself (F1 — vector.ts never imports `NDArray`, to avoid an
+ * import cycle: dim.ts's own file-header precedent already documents why
+ * that import direction is one-way). A HOMOMORPHIC mapped type (`{ [I in
+ * keyof Rows]: ... }`, the same `[K in keyof S]` idiom `reduce.ts`'s
+ * `AllOnes`/`slice.ts`'s `ErrorTuple` already use) — deliberately NOT a
+ * `Rows[number] extends NDArray<infer S> ? S : never` extraction (F2, a
+ * BLOCKER-class finding): that non-homomorphic form collapses to `never` on
+ * a HETEROGENEOUS tuple, because `NDArray`'s own `__variance` marker makes
+ * it INVARIANT (see the class doc comment below) — an invariant generic
+ * indexed by `number` over a tuple of DIFFERENT `NDArray<S>` instantiations
+ * has no single common `S` for `infer` to land on, so the conditional's
+ * `NDArray<infer S>` branch never matches and the whole expression widens
+ * to `never`. The homomorphic form sidesteps this entirely: it maps EACH
+ * position independently (`Rows[I] extends NDArray<infer S> ? S : never`
+ * per-index, never over the collapsed `Rows[number]` union), so a
+ * heterogeneous tuple like `[NDArray<[3]>, NDArray<[4]>]` maps to
+ * `[readonly [3], readonly [4]]` — the exact per-position information
+ * `StackFold` (vector.ts) needs to catch a length mismatch, not `never`.
+ *
+ * Also homomorphic over an ARRAY `Rows` (F5): `{ [I in keyof Rows]: ... }`
+ * applied to `readonly NDArray<[3]>[]` preserves the array shape, yielding
+ * `readonly (readonly [3])[]` — never collapsing to a tuple — exactly what
+ * `StackCheckArray`/`StackShapeArray` (vector.ts) expect on that path.
+ *
+ * Factored into this ONE named type (Baustein-0 measurement, verified
+ * sketch): inlining the mapped type separately at both the
+ * `StackCheck`/`StackShape` call sites in the `stack` method signature
+ * below roughly DOUBLED the measured instantiation cost (≈1,428 vs ≈801) —
+ * TS does not automatically dedupe two textually-identical-but-separately-
+ * written mapped-type expressions the way it dedupes two references to the
+ * SAME named type alias. Not exported — only `stack`'s own signature below
+ * needs it.
+ *
+ * SECOND manifestation of F2's own root cause, caught empirically verifying
+ * this exact type (probe: an ARRAY whose ELEMENT type is itself a union,
+ * e.g. `readonly (NDArray<[3]>|NDArray<[4]>)[]`, the F8 test case):
+ * inlining `Rows[I] extends NDArray<infer S> ? S : never` directly in the
+ * mapped type's body does NOT distribute over that per-element union the
+ * way it distributes per-POSITION over a heterogeneous TUPLE — for an
+ * ARRAY, the homomorphic mapped type evaluates the element-type expression
+ * ONCE against the array's single (here: union) element type, and `Rows[I]`
+ * at that evaluation is an indexed-access expression, not a naked type
+ * parameter reference — so `(NDArray<[3]>|NDArray<[4]>) extends
+ * NDArray<infer S>` runs NON-distributively, and (`NDArray`'s own
+ * invariance, same as F2) no single `S` satisfies both members at once ->
+ * collapses to `never`, silently. `UnwrapRow` below reintroduces a FRESH
+ * generic with its own naked parameter purely to force distribution again
+ * at that call site (the identical "extra generic" idiom vector.ts's own
+ * `ArrayRowD` already uses for the same reason) — this restores the
+ * per-tuple-position behavior the doc comment above describes UNCHANGED
+ * (each position's own type is still passed through `UnwrapRow` one at a
+ * time) while fixing the array-union-element case to distribute to
+ * `readonly [3]|readonly [4]`, letting `StackShapeArray`'s own `IsUnion`
+ * filter (vector.ts, F8) degrade it to wide `number` deliberately, rather
+ * than silently miscomputing `never`.
+ */
+type UnwrapRow<R> = R extends NDArray<infer S> ? S : never;
+type RowShapesOf<Rows extends readonly NDArray<any>[]> = { [I in keyof Rows]: UnwrapRow<Rows[I]> };
 
 /**
  * A minimal, checker-ENFORCED covariant read view (Spike 05,
@@ -311,6 +374,54 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
     }
     const data = values instanceof Float64Array ? new Float64Array(values) : Float64Array.from(values);
     return new NDArray<Mutable<S>>([...shape] as Mutable<S>, data);
+  }
+
+  /** Stack N independently-built rank-1 rows into a rank-2 `[N, D]` matrix
+   * (Op-Scheibe W4, docs/op-w4-stack-spec.md; wishlist evidence F5,
+   * docs/dogfooding-rag-ergebnisse.md — `embedMatrix`'s hand-rolled
+   * `Float64Array#set`-at-row-offset flatten helper in
+   * examples/rag-demo/embedding.ts is the exact algorithm `stackRuntime`
+   * below reuses). NumPy's `np.stack([...])`/`np.array([row for row in
+   * ...])` reflex — "fromRows" would be an equally fitting name (mentioned
+   * here as a doc-only alias, not a second export): D1 scopes this method
+   * to NO general axis/higher-rank stack, no `concat`/`vstack`/`hstack` —
+   * see the spec's Nicht-Ziele. Inserted here, right after `fromArray`
+   * (Baustein-0 recommendation): `stack` is conceptually a constructor too
+   * — it never reads `this`, only builds a fresh `NDArray` from its rows.
+   *
+   * Two call shapes (D2, `StackCheck`/`StackShape`, vector.ts):
+   *  - a literal TUPLE of rows (`NDArray.stack([a, b])` — `const Rows`
+   *    keeps it a tuple rather than widening to a plain array, same
+   *    rationale `zeros`/`ones`/`fromArray`'s own `const S` already
+   *    documents) -> `N` = `Rows["length"]` (a literal), `D` = every row's
+   *    dim, checked pairwise equal; a proven length mismatch, a proven
+   *    non-rank-1 row, or an empty tuple literal (F3) is a compile error AT
+   *    THE `rows` ARGUMENT (`Guard`);
+   *  - a `readonly NDArray<[3]>[]` ARRAY of unknown length -> `N` degrades
+   *    honestly to `number`; `D` stays the shared literal unless a row's
+   *    own dim is dynamic, or the array's element type is itself a union of
+   *    shapes (F8) — both degrade `D` to `number` too.
+   *
+   * `RowShapesOf<Rows>` (above) is the `NDArray` -> `Shape` unwrap
+   * `StackCheck`/`StackShape` need — vector.ts never imports `NDArray` (F1,
+   * cycle-risk precedent documented on `RowShapesOf` itself).
+   *
+   * Runtime (D3, `stackRuntime`): validates (>= 1 row; every row rank-1;
+   * every row the same length) with the exact three stems `StackCheck`
+   * mirrors, then a row-major `Float64Array#set` copy per row into a fresh
+   * buffer — never aliasing any row's own `data` (D=0 rows are valid:
+   * `[[], []]` stacks to `[2, 0]`).
+   *
+   * Surface asymmetry (D1, disclosed, same shape as `argmax`/`topk`/the W2
+   * scalar overloads/`mean`/`sqrt`): `stack` exists ONLY on this naive
+   * `NDArray` — no WASM kernel, no `WNDArray` parity yet (FOLLOWUPS.md
+   * tracks the follow-up). */
+  static stack<const Rows extends readonly NDArray<any>[]>(
+    rows: Guard<StackCheck<RowShapesOf<Rows>>, Rows>,
+  ): NDArray<OkShape<StackShape<RowShapesOf<Rows>>>> {
+    const rs = rows as unknown as readonly NDArray<any>[];
+    const { shape, data } = stackRuntime(rs.map((r) => ({ shape: r.shape as readonly number[], data: r.data })));
+    return new NDArray<OkShape<StackShape<RowShapesOf<Rows>>>>(shape as unknown as OkShape<StackShape<RowShapesOf<Rows>>>, data);
   }
 
   /** Explicit, opt-in performance backends (Item 10 — Backend-Wahl-API,

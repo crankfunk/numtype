@@ -291,6 +291,13 @@ above, the new surface is **TypeScript-runtime only, no WASM kernel yet** — th
 `NDArray`-argument forms of `add`/`sub`/`mul`/`div` keep their full WASM-backed bit-for-bit
 guarantee unchanged; only the new scalar overload, `mean`, and `sqrt` are the disclosed asymmetry.
 
+**`NDArray.stack(rows)`** builds a `[N, D]` matrix from N independently-computed 1-D row
+vectors — the `np.stack`/`np.array([...])` reflex, and a statically-shaped one: stacking two
+literal `[3]` rows infers `NDArray<[2, 3]>`, a mismatched row length is a compile error at the
+`rows` argument, and an array of unknown length degrades honestly to `NDArray<[number, D]>`.
+Same disclosed asymmetry as `argmax`/`topk`/the scalar overloads/`mean`/`sqrt` above:
+**TypeScript-runtime only, no WASM kernel yet**.
+
 For the full per-phase specifications, results, and the competitive analysis, start at the
 [research-notes reading guide](docs/README.md) (curated entry points by interest) or the
 [roadmap](docs/roadmap.md). Internal research notes are partly in German — the guide says

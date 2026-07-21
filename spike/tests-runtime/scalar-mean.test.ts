@@ -39,6 +39,25 @@
  * against a direct `Math.sqrt` loop, and the F1-closure retro-proof (the
  * `mul -> sum(1) -> sqrt -> reshape -> div` chain byte-identical to the old
  * hand-loop formulation from examples/rag-demo/main.ts).
+ *
+ * Op-Scheibe W4 (docs/op-w4-stack-spec.md): another clearly-marked block
+ * APPENDED at the end of this file (D5) covers `NDArray.stack(rows)`/
+ * `stackRuntime` — same no-new-file house convention. Coverage: word-for-
+ * word stem pins for all three throws (empty/rank!=1/length-mismatch),
+ * reached BOTH via `stackRuntime` directly and through the public
+ * `NDArray.stack` API (dynamic-rank rows built via plain, non-`const`
+ * shape variables — the same "widen past the compile-time guard" technique
+ * `mean(5)`'s own out-of-range-axis pin above already uses); 1/2/3-row
+ * successful cases; D=0 rows; a non-canonical-NaN-payload byte-exactness
+ * fixture (`bitsOf`, mirroring special-values.test.ts's own transpose
+ * fixture — stack is a pure movement op too); the F5 closure retro-proof
+ * (examples/rag-demo/embedding.ts's `embedMatrix` row-major
+ * `Float64Array#set`-at-offset algorithm REBUILT locally, not imported —
+ * that package is a separate npm-registry-consuming example, deliberately
+ * outside the spike/ compilation graph — proven byte-identical to
+ * `NDArray.stack`'s own output); a large-N smoke case; and an aliasing-
+ * isolation/buffer-freshness pin (the W3-lesson: the result is a fresh
+ * buffer, rows stay unmutated).
  */
 import assert from "node:assert";
 import { test } from "node:test";
@@ -712,4 +731,206 @@ test("sqrt: LARGEST subnormal passes through bit-exactly (Verify-B F2)", () => {
   const arr = NDArray.fromArray([1], [largestSubnormal]).sqrt();
   const expected = Math.sqrt(largestSubnormal);
   assertDataBitIdentical(arr.data, Float64Array.from([expected]), "largest subnormal must round-trip through sqrtRuntime bit-exactly");
+});
+
+// =============================================================================
+// Op-Scheibe W4 (docs/op-w4-stack-spec.md): NDArray.stack(rows) / stackRuntime.
+// APPENDED block (D5) — see the file-header comment above for the coverage
+// summary. Imports needed only by this block are added right here, not
+// hoisted to the top, to keep the append visually self-contained (W3's own
+// convention).
+// =============================================================================
+
+import { bitsOf } from "./assert-helpers.ts";
+import { stackRuntime } from "../src/runtime.ts";
+
+// --- Section W4.1: stem-equality pins (real throws vs. expected strings, D3) ---
+
+test("stack(): all three stems are word-for-word pinned via stackRuntime directly", () => {
+  assert.throws(() => stackRuntime([]), /^Error: stack: expected at least one row$/);
+
+  assert.throws(
+    () =>
+      stackRuntime([
+        { shape: [2, 3], data: new Float64Array(6) },
+        { shape: [3], data: new Float64Array(3) },
+      ]),
+    /^Error: stack: expected 1-D rows \(got shape \[2,3\] at index 0\)$/,
+  );
+
+  assert.throws(
+    () =>
+      stackRuntime([
+        { shape: [3], data: new Float64Array(3) },
+        { shape: [4], data: new Float64Array(4) },
+      ]),
+    /^Error: stack: row length mismatch \(expected 3, got 4 at index 1\)$/,
+  );
+});
+
+test("stack(): the same three stems are reachable through the public NDArray.stack API via dynamic-rank rows (the mean(5)-style widen-past-the-guard technique — no unsafe cast needed)", () => {
+  // Empty: a genuinely dynamic-length runtime ARRAY (never a `[]` TUPLE
+  // LITERAL, which is a compile-time rejection, F3 — proven separately by
+  // the @ts-expect-error pin in ndarray.test-d.ts). Built via an explicitly
+  // annotated `NDArray<number[]>[]` variable so `NDArray.stack` sees a real
+  // (non-tuple) array type and the D2 runtime backstop is reachable through
+  // the actual class method.
+  const emptyRows: NDArray<number[]>[] = [];
+  assert.throws(() => NDArray.stack(emptyRows), /^Error: stack: expected at least one row$/);
+
+  // Rank != 1: two DYNAMIC-RANK rows (built from plain, non-`const` shape
+  // variables — `mean(5)`'s own out-of-range-axis pin above uses the exact
+  // same trick), one of them actually rank 2 at runtime.
+  const rank2Shape = [2, 3];
+  const rank1Shape = [3];
+  const badRank0 = NDArray.fromArray(rank2Shape, [1, 2, 3, 4, 5, 6]);
+  const badRank1 = NDArray.fromArray(rank1Shape, [1, 2, 3]);
+  assert.throws(() => NDArray.stack([badRank0, badRank1]), /^Error: stack: expected 1-D rows \(got shape \[2,3\] at index 0\)$/);
+
+  // Length mismatch: two dynamic-rank rows with genuinely different lengths.
+  const lenAShape = [3];
+  const lenBShape = [4];
+  const goodA = NDArray.fromArray(lenAShape, [1, 2, 3]);
+  const goodB = NDArray.fromArray(lenBShape, [1, 2, 3, 4]);
+  assert.throws(() => NDArray.stack([goodA, goodB]), /^Error: stack: row length mismatch \(expected 3, got 4 at index 1\)$/);
+});
+
+// --- Section W4.2: successful 1/2/3-row cases + D=0 -------------------------
+
+test("stack(): 1/2/3-row successful cases — shape + values, row-major order preserved", () => {
+  const r1 = NDArray.fromArray([3], [1, 2, 3]);
+  const single = NDArray.stack([r1]);
+  assertShapeEqual([1, 3], single.shape, "1-row stack shape");
+  assert.deepStrictEqual(Array.from(single.data), [1, 2, 3]);
+
+  const a = NDArray.fromArray([3], [1, 2, 3]);
+  const b = NDArray.fromArray([3], [4, 5, 6]);
+  const two = NDArray.stack([a, b]);
+  assertShapeEqual([2, 3], two.shape, "2-row stack shape");
+  assert.deepStrictEqual(Array.from(two.data), [1, 2, 3, 4, 5, 6]);
+
+  const c = NDArray.fromArray([3], [7, 8, 9]);
+  const three = NDArray.stack([a, b, c]);
+  assertShapeEqual([3, 3], three.shape, "3-row stack shape");
+  assert.deepStrictEqual(Array.from(three.data), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+});
+
+test("stack(): D=0 rows are valid — [[],[]] stacks to shape [2, 0], empty data", () => {
+  const z1 = NDArray.fromArray([0], []);
+  const z2 = NDArray.fromArray([0], []);
+  const stacked = NDArray.stack([z1, z2]);
+  assertShapeEqual([2, 0], stacked.shape, "D=0 stack shape");
+  assert.strictEqual(stacked.data.length, 0);
+
+  const direct = stackRuntime([
+    { shape: [0], data: new Float64Array(0) },
+    { shape: [0], data: new Float64Array(0) },
+  ]);
+  assertShapeEqual([2, 0], direct.shape, "stackRuntime D=0 shape");
+  assert.strictEqual(direct.data.length, 0);
+});
+
+// --- Section W4.3: NaN-payload byte-exactness (movement op) -----------------
+//
+// Mirrors special-values.test.ts's own transpose fixture: a NaN with a
+// NON-canonical payload must survive stack's pure row-major copy BYTE-EXACT,
+// not merely "still NaN" — checked via `bitsOf`, not `Object.is`/`isNaN`
+// (which treat every NaN as equal regardless of payload).
+
+function nonCanonicalNaNW4(): number {
+  const bits = new BigUint64Array([0x7ff8_0000_cafe_baben]);
+  return new Float64Array(bits.buffer)[0] ?? Number.NaN;
+}
+
+test("stack(): a non-canonical NaN payload survives the row-major copy byte-exact (bitsOf, not Object.is)", () => {
+  const nan = nonCanonicalNaNW4();
+  assert.ok(Number.isNaN(nan), "sanity: constructed value must actually be NaN");
+  const nanBits = bitsOf(nan);
+  assert.strictEqual(nanBits, 0x7ff8_0000_cafe_baben, "sanity: constructed NaN must carry the intended non-canonical payload bits");
+
+  const row0 = NDArray.fromArray([3], [nan, 1, 2]);
+  const row1 = NDArray.fromArray([3], [3, 4, 5]);
+  const stacked = NDArray.stack([row0, row1]);
+  assert.strictEqual(bitsOf(stacked.data[0] ?? 0), nanBits, "stack must preserve the exact NaN payload at flat index 0");
+
+  const direct = stackRuntime([
+    { shape: [3], data: Float64Array.from([nan, 1, 2]) },
+    { shape: [3], data: Float64Array.from([3, 4, 5]) },
+  ]);
+  assert.strictEqual(bitsOf(direct.data[0] ?? 0), nanBits, "stackRuntime must preserve the exact NaN payload at flat index 0");
+});
+
+// --- Section W4.4: F5 closure retro-proof ------------------------------------
+//
+// examples/rag-demo/embedding.ts's `embedMatrix` (the F5 friction,
+// docs/dogfooding-rag-ergebnisse.md) is REBUILT locally, not imported — that
+// package is a separate npm-registry-consuming example with its own
+// package.json/tsconfig, deliberately outside the spike/ compilation graph
+// (importing it would pull an extra file into `check:diag`'s corpus, adding
+// order-noise the D6 measurement discipline forbids). The rebuild is
+// `embedMatrix`'s own algorithm verbatim: `Float64Array#set` at each row's
+// offset.
+
+function rebuiltEmbedMatrix(rows: readonly Float64Array[], dims: number): Float64Array {
+  const flat = new Float64Array(rows.length * dims);
+  rows.forEach((row, i) => {
+    flat.set(row, i * dims);
+  });
+  return flat;
+}
+
+test("stack(): F5 closure — byte-identical to embedMatrix's own row-major Float64Array#set-at-offset algorithm, rebuilt locally", () => {
+  const rng = makeRng(0x53544143_4b5f4635n); // "STACK_F5"
+  const dims = 12;
+  const rowCount = 7;
+  const rowsData: Float64Array[] = [];
+  for (let i = 0; i < rowCount; i++) rowsData.push(genData(rng, [dims]));
+
+  const viaRebuiltHelper = rebuiltEmbedMatrix(rowsData, dims);
+  const ndRows = rowsData.map((d) => NDArray.fromArray([dims], d));
+  const viaStack = NDArray.stack(ndRows);
+
+  assertShapeEqual([rowCount, dims], viaStack.shape, "F5 closure: stack shape must be [rowCount, dims]");
+  assertDataBitIdentical(viaRebuiltHelper, viaStack.data, "F5 closure: stack data must be byte-identical to the rebuilt embedMatrix algorithm");
+});
+
+// --- Section W4.5: large-N smoke ---------------------------------------------
+
+test("stack(): large-N smoke — 5000 rows of dimension 8, shape + spot-checked values", () => {
+  const rowCount = 5000;
+  const dims = 8;
+  const rng = makeRng(0x4c415247455f4e0an); // "LARGE_N"
+  const ndRows: NDArray<[8]>[] = [];
+  const expectedRows: Float64Array[] = [];
+  for (let i = 0; i < rowCount; i++) {
+    const d = genData(rng, [dims]);
+    expectedRows.push(d);
+    ndRows.push(NDArray.fromArray([dims], d));
+  }
+  const stacked = NDArray.stack(ndRows);
+  assertShapeEqual([rowCount, dims], stacked.shape, "large-N stack shape");
+  for (const idx of [0, Math.floor(rowCount / 2), rowCount - 1]) {
+    const expectedRow = expectedRows[idx] ?? new Float64Array(dims);
+    for (let j = 0; j < dims; j++) {
+      assert.strictEqual(stacked.data[idx * dims + j], expectedRow[j], `row ${idx}, col ${j} mismatch`);
+    }
+  }
+});
+
+// --- Section W4.6: aliasing isolation / buffer freshness (W3 lesson) --------
+
+test("stack: result.data is a FRESH buffer, never aliasing any row's own data — rows stay unmutated (aliasing isolation, W3 lesson)", () => {
+  const a = NDArray.fromArray([3], [1, 2, 3]);
+  const b = NDArray.fromArray([3], [4, 5, 6]);
+  const beforeA = Float64Array.from(a.data);
+  const beforeB = Float64Array.from(b.data);
+  const stacked = NDArray.stack([a, b]);
+
+  assert.notStrictEqual(stacked.data, a.data, "stacked.data must not alias row a's data");
+  assert.notStrictEqual(stacked.data, b.data, "stacked.data must not alias row b's data");
+  assertDataBitIdentical(a.data, beforeA, "row a's data must be untouched by stack");
+  assertDataBitIdentical(b.data, beforeB, "row b's data must be untouched by stack");
+
+  stacked.data[0] = 999;
+  assert.notStrictEqual(a.data[0], 999, "mutating the stack result must not affect row a's data (no shared buffer)");
 });

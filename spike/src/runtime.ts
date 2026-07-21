@@ -818,3 +818,75 @@ export function sqrtRuntime(data: Float64Array): Float64Array {
   for (let i = 0; i < data.length; i++) out[i] = Math.sqrt(data[i] ?? 0);
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Op-Scheibe W4 (docs/op-w4-stack-spec.md, D3): `stackRuntime`, the runtime
+// backing for `NDArray.stack(rows)`. Appended strictly after all pre-
+// existing content in this file (freeze discipline — nothing above this
+// comment is touched).
+// ---------------------------------------------------------------------------
+
+/**
+ * Runtime validation + data movement for `NDArray.stack(rows)` (D3): the
+ * SAME per-row, LEFT-TO-RIGHT order the compile-time fold uses (`StackFold`,
+ * vector.ts) — rank checked before length for each row in turn, erroring at
+ * the FIRST offending row rather than collecting every problem, so which
+ * error fires for a given malformed input matches the type-level story
+ * exactly (not required for soundness — the type layer only ever needs to
+ * be "never wrong, only incomplete" — but keeping the two READING as the
+ * same algorithm is worth the discipline). Three gepinnte stems, mirrored
+ * verbatim by `StackEmptyMessage`/`StackRankMessage`/
+ * `StackLengthMismatchMessage` (vector.ts):
+ *  - `stack: expected at least one row` — an empty `rows` array (checked
+ *    first, same precedence as the type-level `Shapes["length"] extends 0`
+ *    gate, F3);
+ *  - `stack: expected 1-D rows (got shape [...] at index i)` — the first
+ *    row whose OWN shape isn't rank 1;
+ *  - `stack: row length mismatch (expected D, got X at index i)` — the
+ *    first row whose length disagrees with the FIRST row's length (`D`,
+ *    fixed once seen — same "wide-Sentinel" merge policy the type-level
+ *    `StackDimMerge` documents, F6, though at runtime every dim is always
+ *    a concrete number, so there is no separate "wide" case to represent —
+ *    only the ordinary equality check).
+ *
+ * D=0 rows are VALID (`[[],[]]` -> shape `[2, 0]`, D2/D3) — the length
+ * `0 === 0` comparison falls out of the ordinary equality check above with
+ * no special-casing needed.
+ *
+ * Data movement (D3): row-major `Float64Array#set` at each row's offset —
+ * the EXACT algorithm `examples/rag-demo/embedding.ts`'s `embedMatrix`
+ * hand-rolled before this op existed (`flat.set(embedText(text, dims), row
+ * * dims)`), the very friction (F5, docs/dogfooding-rag-ergebnisse.md) that
+ * motivated this op-slice. `Float64Array#set` is a raw bit-for-bit typed-
+ * array copy (never routes through `Number`/arithmetic), so a NaN's exact
+ * payload bits survive unchanged (D3: "NaN-Payloads byte-erhalten
+ * (Movement-Op)") — the same guarantee `transposeRuntime`'s own plain-copy
+ * inner loop already carries (special-values.test.ts's transpose fixture).
+ */
+export function stackRuntime(
+  rows: ReadonlyArray<{ shape: readonly number[]; data: Float64Array }>,
+): { shape: number[]; data: Float64Array } {
+  if (rows.length === 0) {
+    throw new Error("stack: expected at least one row");
+  }
+  let d: number | undefined;
+  for (let i = 0; i < rows.length; i++) {
+    const shape = rows[i]?.shape ?? [];
+    if (shape.length !== 1) {
+      throw new Error(`stack: expected 1-D rows (got shape [${shape.join(",")}] at index ${i})`);
+    }
+    const di = shape[0] ?? 0;
+    if (d === undefined) {
+      d = di;
+    } else if (di !== d) {
+      throw new Error(`stack: row length mismatch (expected ${d}, got ${di} at index ${i})`);
+    }
+  }
+  const n = rows.length;
+  const dim = d ?? 0;
+  const out = new Float64Array(n * dim);
+  for (let i = 0; i < n; i++) {
+    out.set(rows[i]?.data ?? new Float64Array(0), i * dim);
+  }
+  return { shape: [n, dim], data: out };
+}

@@ -2,7 +2,7 @@ import type { Broadcast } from "../src/broadcast.ts";
 import type { Shape } from "../src/dim.ts";
 import { type AnyNDArray, type Guard, NDArray, type NDArrayView } from "../src/ndarray.ts";
 import type { ReduceAxis } from "../src/reduce.ts";
-import type { TopkCheck } from "../src/vector.ts";
+import type { StackCheck, TopkCheck } from "../src/vector.ts";
 import type { WNDArray } from "../src/wasm/resident.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
@@ -798,3 +798,209 @@ type SQRT_DYN_RANK = Expect<Equal<(typeof sqrtDynRankResult)["shape"], Readonly<
 
 // @ts-expect-error - sqrt() is niladic: it takes no argument, unlike add/sub/mul/div's scalar overload
 sqrtLiteral.sqrt(1);
+
+// =============================================================================
+// Op-Scheibe W4 (docs/op-w4-stack-spec.md, D5; Baustein-0-Addendum F1-F8):
+// `NDArray.stack(rows)` — exact tuple shapes, heterogeneous-tuple/rank/empty
+// rejections with message-equality pins (`StackCheck` operates directly on
+// `readonly Shape[]` — no `NDArray` wrapper needed for these pins, the same
+// precedent `TopkCheck`'s own message pins above already use), array-input
+// degradations (F5/F6/F7/F8), `RankUnknowable` no-claim (both a tuple
+// member and an array element), and a `const`-tuple-inference positive pin
+// (no `as const` needed).
+// =============================================================================
+
+// --- exact tuple shapes: [2,3] (two [3] rows) and [3,4] (three [4] rows) ---
+
+const stackA = NDArray.zeros([3]);
+const stackB = NDArray.zeros([3]);
+const stacked23 = NDArray.stack([stackA, stackB]);
+type STACK_23 = Expect<Equal<(typeof stacked23)["shape"], readonly [2, 3]>>;
+
+const stackC = NDArray.zeros([4]);
+const stackD = NDArray.zeros([4]);
+const stackE = NDArray.zeros([4]);
+const stacked34 = NDArray.stack([stackC, stackD, stackE]);
+type STACK_34 = Expect<Equal<(typeof stacked34)["shape"], readonly [3, 4]>>;
+
+// --- heterogeneous tuple: mismatched literal D -> rejected AT the argument ---
+
+const stackMismatchA = NDArray.zeros([3]);
+const stackMismatchB = NDArray.zeros([4]);
+// @ts-expect-error - [3] vs [4] row length mismatch: error stays at the rows argument
+NDArray.stack([stackMismatchA, stackMismatchB]);
+
+// Message-equality pin (D5): the compile-time ShapeError mirrors
+// `stackRuntime`'s own throw verbatim (runtime.ts) — pinned directly by a
+// unit test in scalar-mean.test.ts too, not just here.
+type STACK_MISMATCH_MSG = Expect<
+  Equal<
+    Guard<StackCheck<readonly [readonly [3], readonly [4]]>, readonly [readonly [3], readonly [4]]>,
+    { readonly __shapeError: "stack: row length mismatch (expected 3, got 4 at index 1)" }
+  >
+>;
+
+// --- rank != 1 tuple member -> rejected AT the argument ---------------------
+
+const stackRank2 = NDArray.zeros([2, 3]);
+const stackRank1 = NDArray.zeros([3]);
+// @ts-expect-error - rank-2 member at index 0: error stays at the rows argument
+NDArray.stack([stackRank2, stackRank1]);
+
+type STACK_RANK_MSG = Expect<
+  Equal<
+    Guard<StackCheck<readonly [readonly [2, 3], readonly [3]]>, readonly [readonly [2, 3], readonly [3]]>,
+    { readonly __shapeError: "stack: expected 1-D rows (got shape [2,3] at index 0)" }
+  >
+>;
+
+// --- empty tuple literal -> rejected AT the argument (F3) -------------------
+
+// @ts-expect-error - empty tuple literal must be rejected (F3): a `[]` call is a guaranteed runtime throw ("expected at least one row")
+NDArray.stack([]);
+
+type STACK_EMPTY_MSG = Expect<
+  Equal<Guard<StackCheck<readonly []>, readonly []>, { readonly __shapeError: "stack: expected at least one row" }>
+>;
+
+// --- array input: honest [number, D] (F5) ------------------------------------
+
+declare const stackArr3: readonly NDArray<[3]>[];
+const stackedArr3 = NDArray.stack(stackArr3);
+type STACK_ARRAY_D = Expect<Equal<(typeof stackedArr3)["shape"], readonly [number, 3]>>;
+
+// --- array with a per-row dynamic dim -> wide [number, number] (F6) --------
+
+declare const stackArrDyn: readonly NDArray<[number]>[];
+const stackedArrDyn = NDArray.stack(stackArrDyn);
+type STACK_ARRAY_WIDE = Expect<Equal<(typeof stackedArrDyn)["shape"], readonly [number, number]>>;
+
+// --- array with a uniform, provably-wrong literal rank -> rejected (F7) -----
+
+declare const stackArrRank2: readonly NDArray<[2, 3]>[];
+// @ts-expect-error - every possible call of this array type is a guaranteed throw (F7: even the empty array throws "expected at least one row")
+NDArray.stack(stackArrRank2);
+
+// --- array with a union element type -> wide [number, number] (F8) ---------
+
+declare const stackArrUnion: readonly (NDArray<[3]> | NDArray<[4]>)[];
+const stackedArrUnion = NDArray.stack(stackArrUnion);
+type STACK_ARRAY_UNION = Expect<Equal<(typeof stackedArrUnion)["shape"], readonly [number, number]>>;
+
+// --- RankUnknowable member -> no-claim, never confidently wrong ------------
+
+declare const stackDynRankRow: NDArray<number[]>;
+declare const stackKnownRow: NDArray<[3]>;
+// Compiles (no @ts-expect-error): an unknowable-rank row can't be proven
+// wrong, so N stays the literal tuple length (2) while D widens to `number`
+// — never a confidently-wrong literal D.
+const stackedUnknowableRank = NDArray.stack([stackDynRankRow, stackKnownRow]);
+type STACK_UNKNOWABLE_RANK = Expect<Equal<(typeof stackedUnknowableRank)["shape"], readonly [2, number]>>;
+
+declare const stackArrDynRank: readonly NDArray<number[]>[];
+const stackedArrDynRank = NDArray.stack(stackArrDynRank); // compiles: array of unknowable-rank rows is no-claim, never rejected
+type STACK_ARRAY_UNKNOWABLE_RANK = Expect<Equal<(typeof stackedArrDynRank)["shape"], readonly [number, number]>>;
+
+// --- const-tuple inference: an inline literal stays a TUPLE, no `as const` ---
+// (D4: `const Rows` means callers never write `as const` — same rationale
+// `zeros`/`ones`/`fromArray`'s own `const S` already documents. The array
+// literal must be written INLINE at the call site for `const` to preserve
+// its tuple-ness — same as any other `const` type parameter, a value first
+// bound to a plain variable widens to a regular array before it ever
+// reaches `stack`.)
+
+function stackMakeRow(): NDArray<[3]> {
+  return NDArray.zeros([3]);
+}
+const stackedInferred = NDArray.stack([stackMakeRow(), stackMakeRow()]);
+type STACK_CONST_INFERENCE = Expect<Equal<(typeof stackedInferred)["shape"], readonly [2, 3]>>;
+
+// --- D=0 rows are valid --------------------------------------------------------
+
+const stackZero1 = NDArray.zeros([0]);
+const stackZero2 = NDArray.zeros([0]);
+const stackedZero = NDArray.stack([stackZero1, stackZero2]);
+type STACK_D0 = Expect<Equal<(typeof stackedZero)["shape"], readonly [2, 0]>>;
+
+// =============================================================================
+// W4-Nachtrag: Verify-Runde Baustein B (BLOCKER-class M2 finding, fixed in
+// StackFold — see its doc comment in vector.ts for the full root-cause
+// trace): a row whose OWN static type is a union of same-rank shapes (an
+// ordinary ternary, no `stack`-specific machinery needed to produce one)
+// used to distribute through `StackFold`'s naked `Head extends readonly
+// [infer D]` check, forking the REST of the fold into parallel per-member
+// continuations that could reach DIFFERENT verdicts — `Guard`'s tuple-
+// wrapped uniform-error-only rejection then accepted the resulting MIXED
+// union, and `StackShape`'s `Extract<..., Dim>` silently dropped the
+// `ShapeError` member and kept a specific literal `D` that the runtime call
+// could (and did) reject. Fixed by gating `IsUnion<Head>` BEFORE the naked
+// destructure (the same `ReduceAxis` load-bearing-position precedent, D-
+// V1.3/Union-Axis-Mini-Scheibe) — a union-shaped row now ALWAYS widens to
+// no-claim, never distributes, never produces a `ShapeError` (not even on a
+// double mismatch where EVERY union member would individually fail — a
+// deliberate, simpler-than-necessary uniform degradation per D2's "no-claim
+// statt Falsch-Claim" policy, not a missed opportunity: proving "every
+// member fails" would need extra machinery for a marginal case, and
+// `stackRuntime` stays the authoritative backstop regardless).
+// =============================================================================
+
+// --- B's exact repro: an ordinary ternary-typed row + a fixed row ----------
+
+declare const stackUnionFlag: boolean;
+const stackFixed3 = NDArray.zeros([3]);
+const stackTernaryRow = stackUnionFlag ? NDArray.zeros([3]) : NDArray.zeros([4]); // NDArray<[3]> | NDArray<[4]>, an ORDINARY union, no cast
+
+// Compiles (no @ts-expect-error): before the fix this resolved to a
+// CONFIDENT `readonly [2, 3]` and threw at runtime for the `[4]` branch —
+// the exact Verify-B repro. Now widens honestly to `readonly [2, number]`.
+const stackReproResult = NDArray.stack([stackFixed3, stackTernaryRow]);
+type STACK_UNION_ROW_REPRO = Expect<Equal<(typeof stackReproResult)["shape"], readonly [2, number]>>;
+
+// Symmetry pin: same union row, swapped position — the fix must not be
+// order-sensitive (StackFold folds left-to-right; the union could appear at
+// ANY row index).
+const stackReproResultRev = NDArray.stack([stackTernaryRow, stackFixed3]);
+type STACK_UNION_ROW_REPRO_REV = Expect<Equal<(typeof stackReproResultRev)["shape"], readonly [2, number]>>;
+
+// --- double-mismatch union: [5]-fixed row + [3]|[4]-union row --------------
+// Every possible resolution of the union row (3 or 4) individually mismatches
+// the fixed row's length (5) — a case where a MORE SOPHISTICATED analysis
+// could in principle prove a guaranteed throw. `StackFold`'s fix does NOT
+// attempt that: it degrades uniformly to no-claim regardless, same as any
+// other union `Head`. Compiles (no @ts-expect-error); `stackRuntime` throws
+// at runtime for whichever branch actually runs.
+
+const stackFixed5 = NDArray.zeros([5]);
+const stackDoubleMismatch = NDArray.stack([stackFixed5, stackTernaryRow]);
+type STACK_UNION_ROW_DOUBLE_MISMATCH = Expect<Equal<(typeof stackDoubleMismatch)["shape"], readonly [2, number]>>;
+
+// --- F-ADV-2 closure: direct StackDimMerge-wide coverage, both orders ------
+// The only PRE-EXISTING coverage of `StackDimMerge`'s own wide-sentinel
+// branch ran indirectly through a `RankUnknowable` row (STACK_UNKNOWABLE_RANK
+// above, which short-circuits in `StackFold` BEFORE `StackDimMerge` is ever
+// called). These two pins reach `StackDimMerge` itself with a row whose rank
+// IS known (rank 1) but whose OWN dim is dynamic (`NDArray<[number]>`) —
+// the `IsDynamicDim` branch inside `StackDimMerge`, not `RankUnknowable`.
+
+declare const stackDynDimRow: NDArray<[number]>;
+declare const stackKnownDimRow: NDArray<[3]>;
+const stackDynDimResult = NDArray.stack([stackDynDimRow, stackKnownDimRow]);
+type STACK_DIM_MERGE_WIDE = Expect<Equal<(typeof stackDynDimResult)["shape"], readonly [2, number]>>;
+
+const stackDynDimResultRev = NDArray.stack([stackKnownDimRow, stackDynDimRow]);
+type STACK_DIM_MERGE_WIDE_REV = Expect<Equal<(typeof stackDynDimResultRev)["shape"], readonly [2, number]>>;
+
+// --- Verify-C coverage gap: array element union of DIFFERENT ranks ---------
+// `readonly (NDArray<[3]> | NDArray<[2,3]>)[]` — checked EMPIRICALLY first
+// (isolated tsc probe against a live symlink of spike/src, same technique
+// used to catch the original F8 bug): `Shapes[number]` for this array is
+// `readonly [3] | readonly [2, 3]`, a MIXED-rank union, so `RankUnknowable`
+// (`IsUnion<Shapes[number]["length"]>` = `IsUnion<1 | 2>` = true) fires
+// FIRST in both `StackCheckArray` and `StackShapeArray` — never reaches the
+// rank-1 destructure or `ArrayRowD` at all. Confirmed empirically:
+// `readonly [number, number]` (no-claim on BOTH `N` — already honest for
+// any array — AND `D`, since the row's own rank isn't even confidently 1).
+
+declare const stackArrMixedRankUnion: readonly (NDArray<[3]> | NDArray<[2, 3]>)[];
+const stackMixedRankArrResult = NDArray.stack(stackArrMixedRankUnion);
+type STACK_ARRAY_MIXED_RANK_UNION = Expect<Equal<(typeof stackMixedRankArrResult)["shape"], readonly [number, number]>>;

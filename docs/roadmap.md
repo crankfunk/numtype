@@ -253,4 +253,8 @@ WASM-Kernel). **W2 (Skalar-Overloads add/sub/mul/div + mean): implementiert 2026
 neue `mean`-Methode nach sum-Muster, NDArray-only, kein WASM-Kernel). **W3 (sqrt): implementiert
 2026-07-21** (docs/op-w3-sqrt-spec.md/-ergebnisse.md, niladische, shape-erhaltende Klassenkörper-
 Insertion, NDArray-only, kein WASM-Kernel — F1-Schließung der RAG-Demo-L2-Normalisierungskette
-byte-identisch bewiesen). W4–W5 (stack/fromRows, item/at) bleiben offen.
+byte-identisch bewiesen). **W4 (stack): implementiert 2026-07-21** (docs/op-w4-stack-spec.md v2 +
+Baustein-0-Addendum F1-F8/-ergebnisse.md, statische `NDArray.stack(rows)`-Methode nach
+`fromArray`, `StackCheck`/`StackShape` in vector.ts, `RowShapesOf` in ndarray.ts, NDArray-only,
+kein WASM-Kernel — F5-Schließung der `embedMatrix`-Zeilen-Flatten-Friction byte-identisch
+bewiesen). W5 (item/at) bleibt offen.

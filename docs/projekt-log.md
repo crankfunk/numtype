@@ -305,3 +305,108 @@ Final: 190,640 @ 137 (+2,077), stress Δ0 (niladischer Member rippelt nicht — 
 zu W1/W2 dokumentiert den Mechanismus weiter), test:core 1,564. Damit ist auch
 Wunschlisten-Platz 3 geschlossen: die L2-Normalisierung der RAG-Demo läuft komplett
 in numtype, byte-identisch zur alten Hand-Loop-Formulierung bewiesen.
+
+### W4: `stack` — vierte Op-Scheibe der Dogfooding-Wunschliste (2026-07-21)
+
+Wunschlisten-Platz 4 (docs/dogfooding-rag-ergebnisse.md W4/F5 — der selbstgebaute
+`embedMatrix`-Zeilen-Flatten-Helper in examples/rag-demo/embedding.ts, `np.stack`-Reflex)
+ist geschlossen: `NDArray.stack(rows)` — nur Rang-1-Zeilen gleicher Länge → Rang-2 `[N, D]`.
+Baustein 0 (brainroute:deep, frischer Scratch-Worktree mit kompilierender Skizze) fand acht
+verbindliche Typ-Formen VOR dem Bau (F1-F8, Spec-Addendum): Schichtung auf `readonly
+Shape[]` statt `NDArray` in vector.ts (Zyklus-Vermeidung); homomorpher Mapped Type
+`RowShapesOf<Rows>` statt der invarianz-kollabierenden `Rows[number]`-Extraktion (F2,
+BLOCKER); ein `Shapes["length"] extends 0`-Gate vor jeder Element-Extraktion (F3, die
+Leer-Tupel-Falle); Tupel-Wrapped-Akkumulator-Narrowing im Fold (F4); ein eigener
+Array-Pfad via `number extends Shapes["length"]` (F5, Tupel-Rekursion matcht Arrays nie);
+Wide-Sentinel-Dim-Merge nach CompatDim-Präzedenz (F6); Ablehnung eines Arrays mit
+uniform beweisbar falschem literalen Rang (F7, sound weil auch das leere Array wirft);
+IsUnion-Filter für Array-Union-Elementtypen (F8).
+
+Umsetzung: `StackCheck`/`StackShape` als APPEND in vector.ts (eigener Import-Block, drei
+gepinnte Message-Templates); `RowShapesOf`/`UnwrapRow` + die statische `stack`-Methode als
+Insertion in ndarray.ts NACH `fromArray` (Baustein-0-Empfehlung: stack ist konzeptionell
+ein Konstruktor); `stackRuntime` als APPEND in runtime.ts (ein Links-nach-rechts-Durchlauf,
+dieselbe Reihenfolge wie der Typ-Fold, dann `Float64Array#set`-Zeilenkopie — exakt
+`embedMatrix`s Algorithmus). Ein eigener Scratch-Probe (isolierter `tsc`-Lauf gegen einen
+Symlink auf spike/src, außerhalb des Repos) fing WÄHREND der eigenen Verifikation einen
+echten, von der Baustein-0-Skizze nicht abgedeckten Bug: `RowShapesOf`s naiv inline
+geschriebener homomorpher Mapped Type kollabierte für ein Array mit UNION-Elementtyp
+(der F8-Testfall) zu `readonly [number, never]` statt `[number, number]` — derselbe
+Invarianz-Kollaps-Mechanismus wie F2, aber innerhalb der Array-Element-Auswertung der
+Mapped-Type-Maschinerie selbst (TS wertet den Element-Typ-Ausdruck für ein Array EINMAL
+non-distributiv gegen den — hier: Union — Elementtyp aus). Fix: `UnwrapRow<R>` als eigene
+Generic mit eigenem naked Type-Parameter (derselbe „extra Generic erzwingt Distribution"-
+Kunstgriff wie `ArrayRowD` in vector.ts) — nach dem Fix liefert der Probe korrekt
+`[number, number]`, verifiziert am Typ-Pin `STACK_ARRAY_UNION`.
+
+W4-Testblock (8 neue Tests) an scalar-mean.test.ts angehängt (kein neues File):
+Stem-Pins über `stackRuntime` DIREKT und über die öffentliche API via dynamischer-Rang-
+Zeilen (dieselbe „widen-past-the-guard"-Technik wie `mean(5)`s Achsen-Pin, kein unsicherer
+Cast nötig); 1/2/3-Zeilen; D=0; ein Byte-exakter NaN-Payload-Test (`bitsOf`, mirroring
+special-values.test.ts's Transpose-Fixture); die F5-Rückprobe (`embedMatrix`s Algorithmus
+LOKAL nachgebaut, nicht importiert — das Beispielpaket bleibt bewusst außerhalb des
+spike/-Kompilationsgraphen, ein Import hätte check:diags Dateizahl kontaminiert);
+Large-N-Smoke (5.000×8); Aliasing-Isolation (W3-Lektion). 19 neue Typ-Pins in
+ndarray.test-d.ts decken jede D2-Kante inkl. Message-Equality-Pins am Argument.
+
+Finale Zahlen: Haupt-Pin 194,545 @ 137 (+3,905 zur W3-Baseline, Absolut-Gate ≤ +8,000
+mit deutlichem Spielraum eingehalten), stress 105,752 @ 82 (+852, Klassen-Surface-Ripple
+wie W1/W2 — ein neuer statischer Member rippelt über jede `NDArray<S>`-Instantiierung im
+Korpus), browser 2,142 @ 75 (Δ0), test:core 1,572 (+8), test:resident 4,278+2 unverändert,
+cargo 161 unverändert (kein Rust berührt), `check:freeze`-Hash byte-identisch,
+`bench:editor` zunächst FAIL (uniform +845 auf allen sieben Workloads, 2× deterministisch
+reproduziert — anders als W2s Verify-B-Fund differenziert dieser Ripple NICHT zwischen der
+Fehler-Workload w4 und den übrigen, da `stack` keinem der add/sub/mul/div/mean-Overloads
+hinzufügt), nach Pin-Update PASS; `graph-a-lama query lint` 0/0; `pnpm test:example`
+weiterhin auf numtype@0.1.1; `pnpm test:package` PASS. README: neuer eigenständiger Absatz
+nach der sqrt-Notiz. FOLLOWUPS: das Paritätsitem um einen W4-Nachtrag erweitert
+(WNDArray/Rust-Kernel-Parität fehlt auch für `stack`). Vollständige Zahlen, der
+F5-Schließungsbeweis und der Baustein-0-Fund im Detail: docs/op-w4-stack-ergebnisse.md.
+Post-Verification-Addendum (Verify-Runde, Stufe 3) steht noch aus.
+
+### W4-Nachtrag: Verify-Runde-Fix (Baustein B, BLOCKER-Klasse, 2026-07-21)
+
+Baustein B fand einen zweiten, von der eigenen Umsetzungs-Verifikation nicht gefangenen
+echten M2-Verstoß: `NDArray.stack([fixed, row])` mit `row: NDArray<[3]>|NDArray<[4]>` — eine
+GEWÖHNLICHE Union über einen Ternary, keine `stack`-spezifische Konstruktion — kompilierte
+konfident als `readonly [2, 3]` und warf zur Laufzeit. Root Cause: `UnwrapRow`s (bewusst für
+F8s Array-Pfad) erzwungene Distribution über ein naked `R` distribuiert AUCH an einer
+TUPEL-Position, deren eigener Zeilen-Typ zufällig eine Union ist; `StackFold`s naked
+`Head extends readonly [infer D]`-Check distribuiert weiter, gabelt den Fold in parallele
+Fortsetzungen mit unterschiedlichen Verdikten — Ergebnis eine gemischte Union
+`Dim | ShapeError<...>`, die `Guard`s uniform-error-only-Ablehnung passieren lässt und deren
+`ShapeError`-Zweig `StackShape`s `Extract<..., Dim>` still wegwirft. Dieselbe Fehlerform wie
+`reduce.ts`s eigene `ReduceAxis`-Lektion (Union-Axis-Mini-Scheibe D-A.2) — dieselbe Lösung:
+ein `IsUnion<Head>`-Gate VOR dem naked Match, Position load-bearing (dokumentiert im
+StackFold-Kommentar mit explizitem `ReduceAxis`-Verweis). Sechs neue Pins in
+ndarray.test-d.ts (Bs Repro beide Reihenfolgen, Doppel-Mismatch-Union, direkte
+`StackDimMerge`-Wide-Abdeckung beide Reihenfolgen — F-ADV-2-Schließung, Array-Element-Union
+verschiedener Ränge — Verify-C-Lücke, empirisch per Scratch-Probe bestätigt). Nicht-Vakuität
+per Backup-Kopie-Mutant bewiesen: den `IsUnion<Head>`-Zweig entfernt → `pnpm tsc --noEmit`
+schlägt mit exakt 4 Fehlern fehl (beide Repro-Pins + der Doppel-Mismatch-Aufruf selbst +
+dessen Equal-Check), kein anderer Pin betroffen; Restore aus der Kopie, `diff` UND MD5 vorher/
+nachher identisch. Finale Zahlen (2× je Messpunkt): Haupt-Pin **195.481 @ 137** (+4.841 zur
+W3-Baseline, davon +936 allein der Fix), stress **105.758 @ 82** (+858, davon +6 der Fix),
+browser 2.142 @ 75 unverändert, test:core weiterhin 1.572 (Fix ist rein typseitig),
+`bench:editor` erneut uniform +6 verschoben und neu gepinnt, Hash weiterhin byte-identisch,
+`graph-a-lama query lint` weiterhin 0/0. Pin-Zählungsfehler im Ergebnisse-Doc nebenbei
+korrigiert (F-ADV-3: tatsächlich 16 Pins aus der Erst-Umsetzung, nicht 19 — jetzt 22 gesamt
+mit den sechs neuen). Vollständiger Befund + Fix-Beweis: docs/op-w4-stack-ergebnisse.md,
+Abschnitt „F-ADV-1".
+
+### W4-Nachtrag: Verify-Runde mit In-Slice-Blocker-Fix (2026-07-21)
+
+Die Verify-Runde zahlte sich bei W4 am deutlichsten aus: A CONFIRMED (inkl. unabhängiger
+Reproduktion des selbstgefixten F8-Bugs — mit dokumentierter Warnung, dass
+Standalone-tsconfig-Proben für distributive Conditional-Fragen unzuverlässig sind),
+C ohne Verstöße, aber **B fand einen echten M2-BLOCKER**: Union-Row-Typen aus
+gewöhnlichem Branching kompilierten mit konfidentem Literal-Claim und warfen zur
+Laufzeit — die erzwungene Distribution des F8-Fixes leckte an Tupel-Positionen, und
+Guard-Tuple-Wrap + Extract verschluckten den Error-Zweig der geforkten Fold-Union.
+Fix nach Hauspolitik (IsUnion-Gate vor dem naked Destructure), 6 neue Pins (inkl.
+der von B und C benannten Coverage-Lücken), Nicht-Vakuität per Mutant, von B
+re-verifiziert (Typ ehrlich [2, number], Runtime wirft weiter). Lehre: „distribuiert
+natürlich" ist nie eine sichere Scope-Annahme — Misch-Verdikt-Unions müssen VOR der
+Destrukturierung gegated werden. Final: 195,481 @ 137 (+4,841), stress 105,758,
+test:core 1,572, 22 Typ-Pins. Wunschlisten-Platz 4 geschlossen: embedMatrix ist
+durch NDArray.stack ersetzt (byte-identische Rückprobe).

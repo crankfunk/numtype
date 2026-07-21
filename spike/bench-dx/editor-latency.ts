@@ -731,14 +731,46 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // workload, so its two failing calls are the only ones whose diagnostic
 // resolution order actually changed. Latency medians and the correctness
 // gate were unaffected (still PASS, still under the 2x ceiling).
+//
+// NOT re-measured for Op-Scheibe W3 (docs/op-w3-sqrt-spec.md): `sqrt()` is a
+// single niladic, guard-less method (no overload signature, no `Guard`-typed
+// argument) — measured, PASS WITHOUT a pin deviation (docs/op-w3-sqrt-
+// ergebnisse.md), unlike W1/W2's generic/overloaded additions above. Kept
+// here as the explanation for why the pins below skip straight from the W2
+// Verify-B values to the W4 ones.
+//
+// Re-measured again 2026-07-21 (Op-Scheibe W4, docs/op-w4-stack-spec.md, D6):
+// the new static `NDArray.stack` method (a `const`-generic static with a
+// `Guard`-typed parameter) is the same class-of-ripple as W1's argmax/topk —
+// every workload instantiates `NDArray<S>` against a now-larger static
+// surface, independent of each workload's own subject matter (unlike W2's
+// overload-reorder finding, this ripple does NOT differentiate the
+// deliberate-type-errors workload from the others, since `stack` adds no
+// overload to any of add/sub/mul/div/mean that w4's own two intentional
+// errors resolve against). Measured TWICE, byte-identical both times: a
+// UNIFORM **+845** shift across all seven workloads. Prior values (post-W2
+// Verify-B) preserved in this commit's diff for the before/after record.
+// Latency medians and the correctness gate were unaffected (still PASS,
+// still under the 2x ceiling) — only these exact counts moved.
+//
+// Re-measured again 2026-07-21 (W4 Verify-B finding, BLOCKER-class M2 fix):
+// `StackFold` (vector.ts) gained one new `IsUnion<Head>` gate, positioned
+// BEFORE the naked `Head extends readonly [infer D]` destructure (the
+// `ReduceAxis`/Union-Axis-Mini-Scheibe load-bearing-position precedent) — a
+// tiny amount of new type machinery on an already-small fold. Measured
+// TWICE, byte-identical both times: a UNIFORM **+6** shift across all seven
+// workloads (the smallest ripple of any Op-Scheibe re-measurement so far —
+// one extra conditional branch, not a new overload/generic surface).
+// Correctness gate and latency medians unaffected (still PASS, still under
+// the 2x ceiling).
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 26290,
-  w2: 28099,
-  w3: 59239,
-  w4: 26453,
-  w5: 31744,
-  w6: 32914,
-  w7: 25462,
+  w1: 27141,
+  w2: 28950,
+  w3: 60090,
+  w4: 27304,
+  w5: 32595,
+  w6: 33765,
+  w7: 26313,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

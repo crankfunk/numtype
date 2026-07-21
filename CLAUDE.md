@@ -51,7 +51,17 @@ neu gepinnt). Dritte Op-Scheibe: **W3 (`sqrt`) — ERLEDIGT 2026-07-21** (docs/o
 IEEE-754-korrekt-gerundet wie `+`/`-`/`*`/`/`, daher vom Transzendenten-Nicht-Ziel
 ausgenommen; F1-Schließung (Teilkette + volle L2-Normalisierung) byte-identisch gegen die
 alte Hand-Loop-Formulierung aus examples/rag-demo/main.ts bewiesen; stress/browser-Pins
-unverändert, kein Klassen-Surface-Ripple diesmal).
+unverändert, kein Klassen-Surface-Ripple diesmal). Vierte Op-Scheibe: **W4 (`stack`) —
+ERLEDIGT 2026-07-21, inkl. Verify-Runde-Fix** (docs/op-w4-stack-spec.md v2 + Baustein-0-
+Addendum F1-F8 /-ergebnisse.md; `NDArray.stack(rows)` baut `[N, D]` aus N Rang-1-Zeilen,
+NDArray-only/kein WASM-Kernel wie W1-W3; F5-Schließung — `embedMatrix`s Zeilen-Flatten-Helper
+— byte-identisch bewiesen; ZWEI echte Typfunde selbst gefangen und geschlossen: (1) während
+der eigenen Umsetzungs-Verifikation, Array-Union-Element-Kollaps in `RowShapesOf` (F2-
+verwandt); (2) während der Verify-Runde (Baustein B, BLOCKER-Klasse M2-Verstoß), Tupel-
+Positions-Union-Distribution in `StackFold` — `IsUnion<Head>`-Gate vor dem naked Match
+ergänzt, `ReduceAxis`-Positions-Präzedenz, Nicht-Vakuität per Mutations-Probe bewiesen;
+Klassen-Surface-Ripple wie W1/W2, `bench:editor`-Pins zweimal neu gesetzt: +845 uniform,
+dann +6 uniform aus dem Fix).
 FOLLOWUPS-Minis nebenher; Trusted Publishing optional (Fakten in FOLLOWUPS).
 Repo-Härtung aktiv seit 2026-07-20: Rulesets `protect-main` (kein Force-Push/Delete auf main —
 gilt auch für den Owner; bewusste Ausnahme nur via Ruleset-Deaktivierung) +
@@ -74,16 +84,18 @@ Session-Zustand).
 - **Artefakt-Hash** (Clean-Rebuild, SHA256 von `spike/src/wasm/numtype_core.wasm`):
   `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` (seit Kern 11; CI-Gate
   `check:freeze` mit plattform-gelabelter Pin-Menge).
-- **check:diag** Haupt-Pin **190,640 @ 137 Files** (nur Root-Korpus; seit W3, von 188,563 —
-  Δ+2,073, Aufschlüsselung in docs/op-w3-sqrt-ergebnisse.md) · **check:diag:stress 104,900 @ 82**
-  (unverändert seit W2 — W3 löst keinen Klassen-Surface-Ripple aus) ·
-  **check:diag:browser 2,142 @ 75** (unverändert seit W1, stress/browser ungated by design,
-  `pnpm check` compoundet alle drei).
-- **Testzahlen:** test:core 1564 (1335 + 227 aus W3) · test:resident 4278+2 ·
-  test:threaded 69 · test:browser 4 · test:package 3 + Typ-Smoke · cargo 161 · test:example
-  (Registry-Install + Example-Typcheck + 8 asserted Queries).
-- **Editor-Gate:** `bench:editor` W1–W7 — Instantiation-Pins exact-match hart, Latenz am
-  2x-Ceiling, Correctness wirft.
+- **check:diag** Haupt-Pin **195,481 @ 137 Files** (nur Root-Korpus; seit W4 inkl. Verify-Runde-
+  Fix, von 190,640 — Δ+4,841, Aufschlüsselung in docs/op-w4-stack-ergebnisse.md F-ADV-1) ·
+  **check:diag:stress 105,758 @ 82** (seit W4 inkl. Fix, von 104,900 — Δ+858, Klassen-Surface-
+  Ripple wie W1/W2) · **check:diag:browser 2,142 @ 75** (unverändert seit W1, stress/browser
+  ungated by design, `pnpm check` compoundet alle drei).
+- **Testzahlen:** test:core 1572 (1564 + 8 aus W4; der Verify-Fix ist rein typseitig, keine
+  neuen Runtime-Tests) · test:resident 4278+2 · test:threaded 69 · test:browser 4 ·
+  test:package 3 + Typ-Smoke · cargo 161 · test:example (Registry-Install + Example-Typcheck +
+  8 asserted Queries).
+- **Editor-Gate:** `bench:editor` W1–W7 — Instantiation-Pins exact-match hart (seit W4 zweimal
+  neu gesetzt: +845 uniform aus der Erst-Umsetzung, +6 uniform aus dem Verify-Runde-Fix),
+  Latenz am 2x-Ceiling, Correctness wirft.
 - **Mess-Regeln (tragend):** Der Instantiation-Counter ist CHECK-ORDER-abhängig — Pins sind nur
   für ein FIXES File-Set exakt. Datei hinzufügen/umbenennen (selbst ein leeres `export {}`)
   verschiebt den Wert um bis zu ±≈2,000 (Order-Noise, keine Typkosten) → per empty-then-fill
