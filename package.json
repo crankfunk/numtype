@@ -67,6 +67,7 @@
     "bench:slice": "pnpm build:wasm && node spike/bench-core/slice.ts",
     "bench:threaded": "pnpm build:wasm:threads && node spike/bench-core/threaded.ts",
     "bench:crossover": "pnpm build:wasm:threads && node spike/bench-core/threaded-crossover.ts",
+    "bench:topk": "node spike/bench-core/topk-selection.ts",
     "bench:editor": "node spike/bench-dx/gen-workloads.ts && node spike/bench-dx/editor-latency.ts",
     "bench:scale": "node spike/bench-dx/gen-scale-workloads.ts && node spike/bench-dx/scale-latency.ts",
     "test:example": "pnpm -C examples/rag-demo install --frozen-lockfile && node scripts/check-example-registry-drift.mjs && pnpm -C examples/rag-demo run check && pnpm -C examples/rag-demo run demo"

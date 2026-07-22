@@ -571,3 +571,57 @@ Z2-Abweichung durch Vertragspräzisierung in v6 auflösen statt dauerhaft dulden
 Covenant: keine Verletzung; zwei Textlücken (Z2 on-demand-Korpora, M2 Rang-Cliff als
 Falsch-Ablehnungs-Grenze) als v6-Kandidaten dokumentiert. Das v6-Bündel steht damit bei vier
 und ist reif für eine eigene kleine Vertrags-Scheibe.
+
+## topk-Selektion, Phase 1 — die Messung (2026-07-22)
+
+Anlass: ein beim WNDArray-Paritäts-Gespräch aufgefallener algorithmischer Fehler —
+`topkRuntime` sortiert das GESAMTE Array, um die k größten zu finden. Ergebnis der Messung:
+**reiner Heap**, mechanisch aus der Regel berechnet, beide Läufe einig, null duale
+Verletzungen im 92-Zellen-Raster, 57 Gewinn-Zellen. Bei einer Million Elementen und k=1 fällt
+der Aufruf von 280 ms auf 3,8 ms — Faktor 74. Vollständige Zahlen und Methodik:
+docs/op-topk-selection-ergebnisse.md. **Die Umsetzung ist bewusst NICHT Teil dieser Phase**
+und steht als eigene Scheibe mit eigener Verify-Runde aus.
+
+**Der eigentliche Ertrag liegt woanders — in zwei Befunden über das eigene Vorgehen.**
+
+**Erstens: Die Vorab-Sondage, die diese ganze Scheibe ausgelöst hat, war um mehr als eine
+Größenordnung daneben.** Sie hatte bei `k` nahe `n` einen Faktor 0,60 nahegelegt (Heap ca. 67 %
+langsamer) und damit die gesamte Hybrid-/Schwellen-Debatte begründet. Die disziplinierte
+Messung sagt 5,0 %. Bei `k = n/2` kippt sogar das Vorzeichen: Sondage „6 % langsamer",
+gemessen „24 % schneller". Das alte Sondage-Skript wurde live auf derselben Maschine erneut
+ausgeführt und reproduziert seine eigenen Zahlen exakt — es lag also nicht an der Umgebung,
+sondern an der Methode: zwei Aufwärm-Aufrufe statt adaptivem Warmup, 20.000
+Korrektheits-Fuzz-Fälle unmittelbar davor im selben Prozess (JIT-Kontamination), gewöhnliche
+JS-Arrays statt typisierter. Derselbe Mechanismus wie in Kern 06. Die unbequeme Lehre: Eine
+schnelle Sondage kann eine umfangreiche, sorgfältige Folgearbeit auf eine Zahl gründen, die
+einer sauberen Messung nicht standhält — und je aufwendiger die Folgearbeit wird, desto
+weniger denkt jemand an die Ausgangszahl zurück.
+
+**Zweitens: Die vorregistrierte Entscheidungsregel wurde VIERMAL gebrochen, bevor sie messen
+durfte** — jedes Mal von einem unabhängigen Fresh-Context-Verifier, jedes Mal an einer anderen
+Stelle, und zwei der gebrochenen Fassungen stammten vom Orchestrator selbst. v2: Die
+Zulässigkeitsprüfung ignorierte strukturell genau die Größen, an denen der Gewinn erwartet
+wurde; eine Klausel widersprach sich im selben Satz; ein undefinierter Fall ließ die Regel
+abbrechen. v3: kein Verdikt in 6,5 % der gefuzzten Raster, zwei Verdikte für dieselben Zahlen
+in 43,6 %, und „reiner Heap" trotz null gemessenem Gewinn. v4: der „hohle Hybrid" — Gewinn und
+Schwellenbildung entkoppelt, in 29,4 % der Hybrid-Verdikte eine Netto-Regression gegenüber
+Nichtstun. v5: zwei mandatierte Messläufe, keiner als verdikt-tragend benannt (39,6 %
+divergierende Lauf-Paare), plus rein relative Schwellen, die eine Sub-Mikrosekunden-Zelle über
+50-fach-Gewinne entscheiden ließen.
+
+Jeder dieser Fehler hätte nach der Messung ein mechanisch berechnetes, eindeutig aussehendes
+Verdikt geliefert — also als „die Zahlen sagen es doch" durchgehen können. **Die Regel selbst
+hätte nie signalisiert, dass sie falsch ist.** Gefunden wurden sie ausnahmslos dadurch, dass
+Verifier die Regel als Skript nachbauten und gegen tausende synthetische Raster laufen ließen,
+statt sie zu lesen. Eine gelesene Regel wirkt eindeutig; eine durchgespielte verrät ihre
+Lücken.
+
+Owner-Entscheidungen dieser Scheibe: erst messen statt Algorithmus vorab wählen · duales
+Kriterium (relativ UND absolut) für beide Gates, nachdem die Zweitmeinung die Rausch-Fragilität
+belegte · Gate gilt für den dekomponierten Pin-Anteil, nicht für die Gesamtverschiebung ·
+Schnitt nach der Messung, Umsetzung als eigene Sitzung.
+
+Nebenbefund mit Reichweite über die Scheibe hinaus: Eine einzige LEERE Datei verschob den
+Root-Instantiation-Zähler um **+6.611** — das in CLAUDE.md dokumentierte Order-Noise-Band von
+„±≈2.000" ist damit zweifach reproduziert widerlegt und auf „±≈7.000" korrigiert. Das betrifft
+jede künftige dateihinzufügende Scheibe.

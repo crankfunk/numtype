@@ -90,6 +90,20 @@ Frontier-Zweitmeinung änderten das Design VOR dem Bau an fünf Stellen (ohne si
 Cache-Treffer statt Skalierung gemessen — Faktor 19); Verify-B fand ein VAKUÖSES Hover-Gate auf
 der Rang-Achse (behoben, 8 Mutationen belegen die Wirksamkeit); zwei Verifier widerlegten
 unabhängig die „überproportional"-Charakterisierung der Datei-Achse, bevor sie publiziert wurde.
+**topk-Selektion, Phase 1 (Messung) ERLEDIGT 2026-07-22, Umsetzung OFFEN**
+(docs/op-topk-selection-spec.md v6 /-ergebnisse.md): Verdikt **reiner Heap**, mechanisch aus der
+vorregistrierten Regel berechnet — null duale Verletzungen im 92-Zellen-Raster, 57 Gewinn-Zellen,
+`n = 1e6, k = 1` von 280 ms auf 3,8 ms (Faktor 74); Kehrseite offengelegt: sieben Zellen ab
+`k/n = 0,85` absolut langsamer, max. +13,95 ms. Die Implementierung (`topkRuntime` in-place +
+Orakel-Umzug in den Test + Differentialtest) ist eine eigene Scheibe mit eigener Verify-Runde.
+**Zwei Prozess-Lehren, wertvoller als die Optimierung selbst:** (1) Die informelle Vorab-Sondage
+lag um mehr als eine Größenordnung daneben (0,60 gegen gemessene 1,050 bei `k = n`; bei `k = n/2`
+sogar mit falschem Vorzeichen) — live nachgestellt, Ursachen im Sondage-Quelltext belegt
+(2 Aufwärm-Aufrufe, JIT-Kontamination durch 20.000 vorherige Fuzz-Fälle, JS- statt typisierte
+Arrays); derselbe Mechanismus wie in Kern 06. (2) Die vorregistrierte Entscheidungsregel wurde
+VIERMAL gebrochen, bevor sie messen durfte — zwei der Fassungen stammten vom Orchestrator selbst;
+gefunden ausnahmslos dadurch, dass Verifier sie als Skript nachbauten und gegen tausende
+synthetische Raster laufen ließen statt sie zu lesen.
 FOLLOWUPS-Minis nebenher; Trusted Publishing optional (Fakten in FOLLOWUPS). **COVENANT-v6-Bündel
 steht bei vier Kandidaten** — reif für eine eigene kleine Vertrags-Scheibe.
 Repo-Härtung aktiv seit 2026-07-20: Rulesets `protect-main` (kein Force-Push/Delete auf main —
@@ -113,7 +127,11 @@ Session-Zustand).
 - **Artefakt-Hash** (Clean-Rebuild, SHA256 von `spike/src/wasm/numtype_core.wasm`):
   `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` (seit Kern 11; CI-Gate
   `check:freeze` mit plattform-gelabelter Pin-Menge).
-- **check:diag** Haupt-Pin **199,877 @ 139 Files** (nur Root-Korpus; seit der Scale-Probe, von
+- **check:diag** Haupt-Pin **206,801 @ 140 Files** (nur Root-Korpus; seit der topk-Messung
+  2026-07-22, von 199,877 @ 139 — zerlegt: **+6,611 reines Order-Noise** durch die eine neue
+  Datei, **+313 echte Typkosten** des Bench-Skripts; die Zerlegung wurde im frischen Worktree
+  gemessen und im Haupt-Baum exakt reproduziert. Details docs/op-topk-selection-ergebnisse.md).
+  Vorheriger Stand: **199,877 @ 139** (seit der Scale-Probe, von
   201,455 @ 137 — die Dateizahl steigt um die zwei neuen bench-dx-Skripte, der WERT sinkt: per
   empty-then-fill zerlegt in −2,410 Order-Noise (zwei zusätzliche Dateien verschieben die
   Prüfreihenfolge) und +775 echte Typkosten, plus +57 aus der Hover-Gate-Reparatur; Baustein A
@@ -142,7 +160,10 @@ Session-Zustand).
   README publizierte Hover-Aussage 0,04–0,08 ms hält auf der sauberen Basis.
 - **Mess-Regeln (tragend):** Der Instantiation-Counter ist CHECK-ORDER-abhängig — Pins sind nur
   für ein FIXES File-Set exakt. Datei hinzufügen/umbenennen (selbst ein leeres `export {}`)
-  verschiebt den Wert um bis zu ±≈2,000 (Order-Noise, keine Typkosten) → per empty-then-fill
+  verschiebt den Wert um **bis zu ±≈7,000** (Order-Noise, keine Typkosten; die früher hier
+  dokumentierte Spanne „±≈2,000" ist seit der topk-Messung 2026-07-22 empirisch WIDERLEGT —
+  eine einzige LEERE `export {}`-Datei bewegte den Zähler um **+6,611**, zweifach reproduziert,
+  während die echten Typkosten derselben Datei bei +313 lagen) → per empty-then-fill
   dekomponieren; Datei-EDITS können echte Typkosten sein → bisektieren mit gleichlanger
   Kommentar-Kontrollprobe. Dritter Mechanismus (W1/W2): geteilte KLASSEN-SURFACE rippelt auch
   in Korpora mit unberührtem File-Set (generische Member/Overloads; niladische Member nicht).
