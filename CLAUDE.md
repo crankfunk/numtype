@@ -184,6 +184,29 @@ Session-Zustand).
   installiert; im interaktiven Owner-Terminal läuft der Hook normal). Darum:
   `cd <root> 2>/dev/null; …` (Semikolon) oder `git -C`; `&&` direkt nach cd bricht
   die Kette ab. Kein `nvm install` als „Fix" — löst es nicht (2026-07-21 verifiziert).
+- **Arbeitsregeln aus der Scale-/topk-Serie (2026-07-22):** (6) **Ein Gate muss die GESUNDHEIT
+  seines eigenen Messlaufs mitprüfen, nicht nur dessen Kennzahl.** `enforceHardGate` pinnte über
+  Monate Instantiation-Zahlen aus Programmen, die mit 7x TS2591 fehlschlugen, weil es
+  `hadTypeErrors` nie las — und eine daraus abgeleitete Aussage stand bereits publiziert in der
+  README. Wer eine Kennzahl pinnt, pinnt im selben Gate Exit-Code/Fehleranzahl mit; sonst ist
+  der Pin ein Stabilitätsbeweis für ein kaputtes Setup. (7) **Eine vorregistrierte
+  Entscheidungsregel wird als Skript nachgebaut und gegen synthetische Ergebnisse gefuzzt,
+  BEVOR echte Zahlen existieren.** Die topk-Regel wurde in vier Runden achtmal gebrochen (kein
+  Verdikt; zwei Verdikte für dieselben Zahlen; „ersetzen" trotz null Gewinn; ein Hybrid, der
+  schlechter ist als Nichtstun; zwei Läufe ohne verdikt-tragenden benannt) — jeder Fehler hätte
+  danach ein mechanisch berechnetes, eindeutig AUSSEHENDES Verdikt geliefert. Gelesene Regeln
+  wirken eindeutig; durchgespielte verraten ihre Lücken. Zwei der gebrochenen Fassungen stammten
+  vom Orchestrator selbst — Selbstprüfung ersetzt den frischen Kontext hier nicht. (8)
+  **Informelle Sondagen sind keine Messungen und dürfen keine Folgearbeit begründen.** Die
+  topk-Sondage lag bei `k = n` um Faktor 13 daneben und bei `k = n/2` mit falschem VORZEICHEN —
+  Ursachen: 2 Aufwärm-Aufrufe statt adaptivem Warmup, JIT-Kontamination durch vorherige
+  Fuzz-Läufe im selben Prozess, JS- statt typisierte Arrays. Dasselbe Muster wie Kern 06. Je
+  aufwendiger die Folgearbeit, desto weniger denkt jemand an die Ausgangszahl zurück. (9)
+  **Delegations-Regel:** Agenten, die einen langlaufenden Hintergrundprozess starten, beenden
+  ihren Turn regelmäßig auf „ich warte, bis es fertig ist" statt auf einem Ergebnis (zweimal in
+  einer Session passiert). Die Befunde existieren dann, sind aber unberichtet. Entweder den Lauf
+  selbst im Haupt-Loop überwachen oder den Agenten per SendMessage gezielt zum Nachbericht
+  auffordern — nie annehmen, dass ein gestarteter Lauf auch dokumentiert wurde.
 
 ## Commands
 
