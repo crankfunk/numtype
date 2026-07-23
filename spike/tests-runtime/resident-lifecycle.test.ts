@@ -12,7 +12,7 @@
 import assert from "node:assert";
 import { test } from "node:test";
 import { initCore } from "../src/wasm/loader.ts";
-import { WNDArray } from "../src/wasm/resident.ts";
+import { getResidentFreeCount, WNDArray } from "../src/wasm/resident.ts";
 
 // --- use-after-dispose: throws, names the op, never touches WASM memory ---
 test("use-after-dispose: toArray throws naming the op", async () => {
@@ -265,5 +265,74 @@ test("leak plateau: >=1000 op+dispose cycles reach an exact byteLength plateau",
     byteLengthAt1000,
     byteLengthAt100,
     `expected byteLength to plateau: cycle 100 = ${byteLengthAt100}, cycle 1000 = ${byteLengthAt1000}`,
+  );
+});
+
+// =============================================================================
+// WASM parity S2 (docs/wasm-parity-mean-spec.md, D3/D5): `WNDArray.mean`
+// leak-non-vacuity. `mean` is a pure-TS composition — `this.sum(axis,
+// keepdims).div(n)` — with an intermediate `summed` WNDArray that MUST be
+// disposed exactly once per call (in a `finally`, after `.div` has already
+// produced its own independent result buffer). This test proves D3 with an
+// EXACT free-count delta, not just a plateau: `getResidentFreeCount()`
+// increments once per *resident data buffer* whose refcount reaches 0
+// (module doc comment, resident.ts) — scratch (shape/stride marshalling) is
+// NOT counted, so the expected delta per `mean()` call is exactly 2 (the
+// intermediate `summed`, freed inside `mean` itself, PLUS the final result,
+// freed by this test's own `dispose()` call) — proving neither a leak (delta
+// too small) nor a double-free (delta too large, or a corrupted allocator
+// on the follow-up allocation). The RECEIVER is allocated once, OUTSIDE the
+// measured window (and disposed only after the assertion) — its own
+// alloc/dispose lifecycle is orthogonal to D3's claim and must not dilute
+// the exact per-call delta.
+// =============================================================================
+test("mean leak non-vacuity: N mean() calls on ONE receiver (dispose each result) free exactly 2N resident buffers, no net leak", async () => {
+  const core = await initCore();
+  const shape = [4, 5];
+  const a = WNDArray.fromArray(
+    core,
+    shape,
+    new Array(20).fill(0).map((_, i) => i + 1),
+  );
+  const N = 500;
+
+  const before = getResidentFreeCount();
+  for (let i = 0; i < N; i++) {
+    const got = a.mean(1);
+    got.dispose();
+  }
+  const after = getResidentFreeCount();
+
+  a.dispose(); // outside the measured window — see comment above
+
+  assert.strictEqual(
+    after - before,
+    2 * N,
+    `expected exactly 2 resident-buffer frees per mean() call (intermediate summed + final result): ` +
+      `before=${before}, after=${after}, delta=${after - before}, expected=${2 * N}`,
+  );
+
+  // Independent corroboration: a plain allocator-growth check (same style as
+  // the byteLength plateau test above) — after warmup, many more mean()
+  // calls must not grow WASM memory at all.
+  const warmupShape = [4, 4];
+  for (let i = 0; i < 20; i++) {
+    const a = WNDArray.fromArray(core, warmupShape, new Array(16).fill(2));
+    a.mean(1).dispose();
+    a.dispose();
+  }
+  const byteLengthAfterWarmup = core.memory.buffer.byteLength;
+
+  for (let i = 0; i < 500; i++) {
+    const a = WNDArray.fromArray(core, warmupShape, new Array(16).fill(2));
+    a.mean(1).dispose();
+    a.dispose();
+  }
+  const byteLengthAfter500More = core.memory.buffer.byteLength;
+
+  assert.strictEqual(
+    byteLengthAfter500More,
+    byteLengthAfterWarmup,
+    `expected no growth from 500 more mean() call+dispose cycles: ${byteLengthAfterWarmup} -> ${byteLengthAfter500More}`,
   );
 });

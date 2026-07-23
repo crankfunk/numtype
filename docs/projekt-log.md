@@ -684,3 +684,65 @@ test:threaded 75→91.
 
 Details: docs/wasm-parity-scalar-spec.md v2, docs/wasm-parity-scalar-ergebnisse.md. Die
 Verify-Runde A+B+C dieser Scheibe steht zum Zeitpunkt dieses Eintrags noch aus.
+
+## WASM-Parität S2 — `mean` auf `WNDArray` (2026-07-23)
+
+Dritte Scheibe der Kampagne, und die erste, deren gesamte tragende Eigenschaft der Verzicht auf
+neuen Rust-Code ist: `mean` ist per Definition „Summe geteilt durch die Elementzahl", und beide
+Bausteine existierten bereits als bit-identisch bewiesene Kernel — der v1-`sum`-Kernel und der
+gerade in S1 gebaute `scalar_div`-Kernel. `WNDArray.mean(axis?, keepdims?)` ist damit eine reine
+TS-Klassenkörper-Insertion: `this.sum(axis, keepdims).div(n)`, `n` wortgleich `meanRuntime`s
+eigener Formel (Input-Shape, nicht reduzierte Output-Shape — mit keepdims bleibt der Divisor die
+Original-Achsengröße), das Zwischenergebnis `summed` in einem `finally` disponiert, nachdem
+`.div(n)` sein eigenes, unabhängiges Ergebnis bereits produziert hat. Kein neuer Kernel, kein ABI-
+Eintrag, kein `CoreExports`-Member, kein Freeze-Re-Pin — der Freeze-Hash bleibt wortwörtlich
+derselbe wie nach S1.
+
+**M1 als doppeltes Korollar:** anders als S0 (neuer empirischer Claim, 30k-Fälle-Vorab-Probe
+nötig) und anders als S1 (Korollar EINES eingefrorenen binären Kernels) ist `mean`s Bit-Identität
+ein Korollar ZWEIER bereits bewiesener Kernel gleichzeitig — `sum` UND `scalar_div`. Weil
+`scalar_div` exakt `x/n` rechnet, nie `x*(1/n)`, fällt die W2-Determinismus-Entscheidung
+(„sum/n, nicht sum*(1/n)") aus der Komposition heraus, ohne einen eigenen Beweis zu brauchen.
+Trotzdem direkt getestet, nicht nur behauptet: 320 Bit-Identitäts-Assertionen (250 M1-
+Differential-Fälle über resident.test.ts inkl. der F1-keepdims-Methodik, 60 randomisierte
+Spezialwert-Fälle, 10 threaded-vs-stable-Paritäts-Fälle), 0 Abweichungen.
+
+**Der F1-Befund aus Baustein 0 der Spec verdient eine eigene Erwähnung:** `meanRuntime` hat
+keinen `keepdims`-Parameter und gibt IMMER die reduzierte Shape zurück. Ein naiver
+`assertShapeEqual`-Vergleich gegen `meanRuntime(...).shape` scheitert deshalb bei JEDEM
+keepdims=true-Fall — in der Baustein-0-Probe waren das 523 von 1.746 Fällen. Der Fix ist einfach
+(Daten gegen `meanRuntime.data` — keepdims-invariant, eine size-1-Achse ändert die Elementzahl
+nicht; Shape gegen `keepdims ? keepDimsShape(...) : meanRuntime.shape`), aber die Lektion trägt
+über die Scheibe hinaus: ein Vergleichs-Helper, der für den EINEN Aufrufer (`sum` ohne keepdims)
+richtig war, wird beim zweiten Aufrufer (`mean` MIT keepdims) leise falsch, wenn niemand die
+Methodik neu prüft. Dieselbe Klasse Fehler wie ein Test, der die zu prüfende Verdrahtung gar
+nicht durchläuft — hier eine Test-METHODIK, die für den neuen Anwendungsfall strukturell blind
+war, bis Baustein 0 sie vorab gegenrechnete.
+
+**Backup-Kopie statt `git checkout`:** der Pflicht-Mutant (`.div(n)` → `.mul(1/n)`, D5-
+Determinismus-Kandidat) kippte 71 benannte Testfälle — 27/120 `mean_all`, 39/120 `mean_axis`,
+3/60 `mean special`, plus BEIDE dedizierten Determinismus-Pins namentlich. Dass nicht alle 320
+`mean`-Assertionen kippen, ist erwartet (dieselbe „nicht jedes Beispiel diskriminiert"-Lektion
+wie bei W2: für viele zufällige f64-Paare gilt `sum/n == sum*(1/n)` zufällig exakt bitweise) —
+die zwei dedizierten, nicht-vakuösen Determinismus-Pins sind genau für diesen Zweck gebaut und
+fingen ihn zuverlässig. Revert per `cp` aus einer vorab angelegten Backup-Kopie, SHA-256-Beweis
+vor/nach identisch, `test:resident` danach wieder vollständig grün (5022/5024, 2 skip).
+
+**Leak-Non-Vakuität exakt, nicht nur als Plateau:** ein neuer Test in resident-lifecycle.test.ts
+ruft `mean(1)` 500-mal auf EINEM persistenten Empfänger auf (dessen eigener Lebenszyklus bewusst
+AUSSERHALB des gemessenen Fensters bleibt) und misst `getResidentFreeCount()` als exakte Delta —
+erwartet und gemessen: exakt `2N = 1000` (der Zwischen-`summed`-Puffer, freigegeben in `mean`s
+eigenem `finally`, plus der finale `.div(n)`-Ergebnis-Puffer, freigegeben vom Test selbst). Eine
+zusätzliche `byteLength`-Plateau-Kontrolle bestätigt dasselbe unabhängig.
+
+**Zahlen:** check:diag Root von 208.015 auf 209.515 @ 140 (Δ+1.500, klar unter dem +6.000-Gate,
+kleiner als S1s +1.165 wie erwartet), dreistufig dekomponiert — die `mean`-Methode selbst (dritte
+Call-Site der `ReduceAxis`-Maschinerie) **+333**, die vier Test-Anhänge **+885**, die Typ-Pins
+**+282**. stress +323 (dieselbe Klassen-Surface-Ripple, kleinerer Absolutwert), browser
+unverändert. `bench:editor`s acht Pins bewegten sich uniform um +323 (zweimal gemessen,
+byte-identisch) — neu gesetzt. Freeze-Hash bestätigt UNVERÄNDERT `8255821b…` (Clean-Rebuild
+reproduziert ihn exakt, `git status crates/` leer, `cargo test` unverändert 184+1=185).
+Test-Wachstum: test:resident 4719→5024 (305 neue Fälle), test:threaded 91→101.
+
+Details: docs/wasm-parity-mean-spec.md v2, docs/wasm-parity-mean-ergebnisse.md. Die Verify-Runde
+A+B+C dieser Scheibe steht zum Zeitpunkt dieses Eintrags noch aus.

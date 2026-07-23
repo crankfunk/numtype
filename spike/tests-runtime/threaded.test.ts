@@ -24,7 +24,7 @@
  */
 import assert from "node:assert";
 import { after, test } from "node:test";
-import { matmulRuntime, scalarElementwiseRuntime, sqrtRuntime, transposeRuntime } from "../src/runtime.ts";
+import { keepDimsShape, matmulRuntime, meanRuntime, scalarElementwiseRuntime, sqrtRuntime, transposeRuntime } from "../src/runtime.ts";
 import { initCore, type CoreExports } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
 import {
@@ -1018,5 +1018,83 @@ function runScalarCase(name: string, op: ScalarOp, shape: number[], asView: bool
     runScalarCase(`${op}(s) threaded parity: special values, contiguous [2,3,4]`, op, [2, 3, 4], false, rng, 2.5, true);
     runScalarCase(`${op}(s) threaded parity: special values, transposed view [4,3,2]`, op, [4, 3, 2], true, rng, 2.5, true);
   }
+}
+
+// ---------------------------------------------------------------------------
+// WASM parity S2 (docs/wasm-parity-mean-spec.md, D6): `WNDArray.mean(axis?,
+// keepdims?)` threaded-vs-stable parity. Same non-pool-routed reasoning as
+// `sqrt`/the scalar ops above (spec's Nicht-Ziele: the pool only ever routes
+// `threadedMatmul`; `mean` is a pure-TS composition of `sum` + `div`, no new
+// kernel at all) — it runs directly on the resident core, on BOTH the stable
+// and threads artifacts, since they're the same crate. Extends the file's
+// established threaded-vs-stable differential to `mean`, reusing the
+// persistent `pools`/`stableCore` set up above.
+//
+// F1 methodology (spec addendum, CRITICAL — same as resident.test.ts's/
+// special-values.test.ts's own mean blocks): `meanRuntime` takes no
+// `keepdims` parameter and always returns the REDUCED shape — shape is
+// compared against `keepdims ? keepDimsShape(shape, axis) : ref.shape`,
+// never directly against `meanRuntime(...).shape` for keepdims=true.
+// ---------------------------------------------------------------------------
+
+function runMeanCase(name: string, shape: number[], axis: number | undefined, keepdims: boolean, asView: boolean, rng: Rng, special = false): void {
+  test(name, () => {
+    const data = special ? genDataSpecial(rng, shape) : genData(rng, shape);
+    const ref = meanRuntime(shape, data, axis);
+    const expectedShape = keepdims ? keepDimsShape(shape, axis) : ref.shape;
+
+    const stableOperand = makeOperand(stableCore, asView, shape, data);
+    let stableData: Float64Array;
+    try {
+      const got = stableOperand.arr.mean(axis, keepdims);
+      try {
+        assertShapeEqual(expectedShape, got.shape as readonly number[], `${name}: stable shape`);
+        stableData = got.toArray();
+      } finally {
+        got.dispose();
+      }
+    } finally {
+      disposeAll(stableOperand);
+    }
+    assertDataBitIdentical(ref.data, stableData, `${name}: runtime.ts vs stable resident`);
+
+    for (const wc of WORKER_COUNTS) {
+      const pool = pools.get(wc)!;
+      const operand = makeOperand(pool.core, asView, shape, data);
+      try {
+        const got = operand.arr.mean(axis, keepdims);
+        try {
+          assertShapeEqual(expectedShape, got.shape as readonly number[], `${name} workers=${wc}`);
+          const gotData = got.toArray();
+          assertDataBitIdentical(ref.data, gotData, `${name} workers=${wc} vs runtime.ts`);
+          assertDataBitIdentical(stableData, gotData, `${name} workers=${wc} vs stable resident`);
+        } finally {
+          got.dispose();
+        }
+      } finally {
+        disposeAll(operand);
+      }
+    }
+  });
+}
+
+{
+  const rng = makeRng(0x4d45414e5f5448524en); // "MEAN_THRN"-ish
+  runMeanCase("mean() threaded parity: contiguous [2,3,4]", [2, 3, 4], undefined, false, false, rng);
+  // Pflicht view case (spec D6): a transposed view on every pool AND stable.
+  runMeanCase("mean() threaded parity: transposed view [4,3,2]", [4, 3, 2], undefined, false, true, rng);
+  runMeanCase("mean() threaded parity: rank-0 scalar", [], undefined, false, false, rng);
+  runMeanCase("mean() threaded parity: size-0 dim [0,5]", [0, 5], undefined, false, false, rng);
+  // Mandatory axis case (spec D5/task): both a plain axis form and a
+  // keepdims form, contiguous AND view.
+  runMeanCase("mean(axis) threaded parity: contiguous [2,3,4]", [2, 3, 4], 1, false, false, rng);
+  runMeanCase("mean(axis) threaded parity: transposed view [4,3,2]", [4, 3, 2], -1, false, true, rng);
+  runMeanCase("mean(axis, keepdims=true) threaded parity: contiguous [2,3,4]", [2, 3, 4], 0, true, false, rng);
+  // C-2 lesson (from the S0/sqrt verify round): at least one genDataSpecial
+  // case, contiguous AND view, directly on the threads artifact — niladic
+  // and axis form.
+  runMeanCase("mean() threaded parity: special values, contiguous [2,3,4]", [2, 3, 4], undefined, false, false, rng, true);
+  runMeanCase("mean() threaded parity: special values, transposed view [4,3,2]", [4, 3, 2], undefined, false, true, rng, true);
+  runMeanCase("mean(axis) threaded parity: special values, contiguous [2,3,4]", [2, 3, 4], 1, false, false, rng, true);
 }
 

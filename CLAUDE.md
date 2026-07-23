@@ -124,7 +124,24 @@ Diagnose-Qualitätstest (T4b, mirrors scalar-mean.test.ts) wurde per Reihenfolge
 nicht-vakuös bewiesen. check:diag Root **+1.165** (dekomponiert: CoreExports-4-Member Δ0,
 WNDArray-Klassen-Surface +730, Test-/Typ-Pin-Anhänge +435 — Absolut-Gate ≤+6.000 klar
 eingehalten), stress +721, browser Δ0, bench:editor 8 Pins uniform +721 neu gesetzt, neuer
-Freeze-Hash `8255821b…`. S2–S5 offen (FOLLOWUPS).
+Freeze-Hash `8255821b…`.
+**S2 (mean): Umsetzung ERLEDIGT 2026-07-23, Verify-Runde A+B+C steht aus** (docs/wasm-parity-mean-
+spec.md v2 /-ergebnisse.md): KEIN neuer Rust-Kernel — `WNDArray.mean(axis?, keepdims?)` ist eine
+reine TS-Klassenkörper-Insertion, `this.sum(axis, keepdims).div(n)`, die den bestehenden v1-`sum`-
+Kernel und den S1-`scalar_div`-Kernel wiederverwendet (dritte Call-Site der `ReduceAxis`/`Guard`/
+`OkShape`-Maschinerie, keine neue Typ-Maschinerie). **Freeze-Hash bleibt UNVERÄNDERT `8255821b…`**
+(Clean-Rebuild reproduziert ihn exakt, `cargo test` bei unverändert 184+1=185 — `git status
+crates/` leer). M1 bindet als Korollar zweier bereits bewiesener Kernel und ist über 320 direkte
+Bit-Identitäts-Assertionen bestätigt (250 M1-Differential-Fälle inkl. F1-keepdims-Methodik + 60
+Spezialwert-Raster + 10 threaded-vs-stable-Fälle, 0 Abweichungen), Determinismus-Pin (`sum/n`,
+nicht `sum*(1/n)`) nicht-vakuös über zwei dedizierte Fälle bewiesen, Leak-Non-Vakuität exakt belegt
+(`getResidentFreeCount()`-Delta = `2N` über 500 Aufrufe auf einem persistenten Empfänger).
+Pflicht-Mutant (`.div(n)` → `.mul(1/n)`) fing 71 benannte Testfehlschläge inkl. beider
+Determinismus-Pins, per Backup-Kopie revertiert (SHA-256-Beweis, kein `git checkout`). check:diag
+Root **+1.500** (gestuft: `mean`-Methode +333, Test-Anhänge +885, Typ-Pins +282 — Absolut-Gate
+≤+6.000 klar eingehalten, kleiner als S1s +1.165 wie erwartet), stress +323, browser Δ0,
+bench:editor 8 Pins uniform +323 neu gesetzt (doppelt reproduziert); test:resident 5022+2
+(Δ+305), test:threaded 101 (Δ+10). **S3–S5 offen** (FOLLOWUPS).
 **Zwei Prozess-Lehren, wertvoller als die Optimierung selbst:** (1) Die informelle Vorab-Sondage
 lag um mehr als eine Größenordnung daneben (0,60 gegen gemessene 1,050 bei `k = n`; bei `k = n/2`
 sogar mit falschem Vorzeichen) — live nachgestellt, Ursachen im Sondage-Quelltext belegt
@@ -154,20 +171,36 @@ Session-Zustand).
 ## Aktuelle Pins & Gates (IST-Zahlen; Historie im Projekt-Log)
 
 - **Artefakt-Hash** (Clean-Rebuild, SHA256 von `spike/src/wasm/numtype_core.wasm`):
-  `8255821bb1fb42b0367296cc9f64886a4e72968fcc3290086e7ab24309739176` (seit WASM-Parität S1/Skalar-
-  Overloads 2026-07-23, von `24a048c7…` S0/sqrt — die vier neuen `nt_scalar_{add,sub,mul,div}_strided`-
+  `8255821bb1fb42b0367296cc9f64886a4e72968fcc3290086e7ab24309739176` — **UNVERÄNDERT seit WASM-
+  Parität S2/mean 2026-07-23** (mean fügt KEINEN neuen Kernel hinzu, reine TS-Komposition;
+  Clean-Rebuild hat den bestehenden S1-Pin exakt reproduziert, `git status crates/` leer, `cargo
+  test` unverändert 184+1). Zuvor gesetzt seit WASM-Parität S1/Skalar-Overloads 2026-07-23, von
+  `24a048c7…` S0/sqrt — die vier neuen `nt_scalar_{add,sub,mul,div}_strided`-
   Kernel ändern den Hash legitim; additive-only-Dekomposition (neues File `kernels/scalar.rs`, vier
   abi.rs-Anhänge, `kernels/mod.rs`-Anhang, `unary_strided` → `pub(crate)`), Pre-Edit-Clean-Rebuild
   hat den alten Pin selbst reproduziert. Threads-Artefakt `046262911b…`, bewusst KEIN persistierter
   Pin — test:threaded beweist seine Bit-Identität zum stable Core. CI-Gate `check:freeze` mit
-  plattform-gelabelter Pin-Menge). **Vorheriger Stand:** `24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2`
+  plattform-gelabelter Pin-Menge. **Vorheriger Stand:** `24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2`
   (seit WASM-Parität S0/sqrt 2026-07-23, von `0b9df4f1…` Kern 11).
-- **check:diag** Haupt-Pin **208,015 @ 140 Files** (nur Root-Korpus; seit WASM-Parität S1/Skalar-
-  Overloads 2026-07-23, von 206,850 @ 140 — **Δ+1,165**, dekomponiert in drei Stufen (Dateiset
+- **check:diag** Haupt-Pin **213,704 @ 140 Files** (nur Root-Korpus; seit dem View-Coverage-
+  Nachtrag zu WASM-Parität S2/mean 2026-07-23 (Verify-B-Befund — resident.test.ts bekam 26 neue
+  `mean`-Fälle auf nicht-kontiguierten Empfängern: transponiert, geschnitten, offset-verschoben,
+  zusammengesetzt), von 209,515 @ 140 — **Δ+4,189**, Dateiset unverändert 140 (kein neues File,
+  kein Order-Noise), reine Testinhalts-/Typ-Pin-Kosten der neuen View-Fälle plus des
+  `assertMeanViewMatches`-Helpers. Gesamtdelta gegen die S2-Vor-Baseline 208,015: **Δ+5,689**,
+  Absolut-Gate ≤+6,000 weiterhin eingehalten. Details docs/wasm-parity-mean-ergebnisse.md, Stufe
+  4). **Vorheriger Stand: 209,515 @ 140** (seit WASM-Parität S2/mean
+  2026-07-23, von 208,015 @ 140 — **Δ+1,500**, dekomponiert in drei Stufen (Dateiset unverändert
+  140, kein Order-Noise, kein neuer `CoreExports`-Member also auch kein `keyof`-Mechanismus): die
+  `mean`-Methode selbst (dritte Call-Site der `ReduceAxis`-Maschinerie) Δ+333, Test-Anhänge Δ+885,
+  Typ-Pins Δ+282; Absolut-Gate ≤+6,000 eingehalten (kleiner als S1s +1,165, wie erwartet — mean hat
+  nur 3 Overloads statt 4 Overload-Umbauten + Helper, keinen neuen CoreExports-Member). Details
+  docs/wasm-parity-mean-ergebnisse.md). **Davor: 208,015 @ 140** (seit WASM-Parität S1/
+  Skalar-Overloads 2026-07-23, von 206,850 @ 140 — **Δ+1,165**, dekomponiert in drei Stufen (Dateiset
   unverändert 140, kein Order-Noise): CoreExports-4-Member + backend-oom-Stubs Δ0 (S0/D10-Omit-Fix
   bei n=4 bestätigt), WNDArray-Klassen-Surface-Umbau (4 Overloads + `scalarOp`) Δ+730, Test-/
   Typ-Pin-Anhänge Δ+435; Absolut-Gate ≤+6,000 eingehalten. Details
-  docs/wasm-parity-scalar-ergebnisse.md). **Vorheriger Stand: 206,850 @ 140** (seit WASM-Parität
+  docs/wasm-parity-scalar-ergebnisse.md). **Davor: 206,850 @ 140** (seit WASM-Parität
   S0/sqrt 2026-07-23, von 206,854 @ 140 — **Δ−4**: die sqrt-Typkosten minus der threaded.ts-Omit-
   Ersparnis (D10), Dateiset unverändert 140, von allen drei Verifiern reproduziert; Details
   docs/wasm-parity-sqrt-ergebnisse.md). **Davor: 206,854 @ 140** (seit der topk-Umsetzung
@@ -187,25 +220,36 @@ Session-Zustand).
   docs/scale-probe-ergebnisse.md). Historie: **201,455 @ 137** war der W5-Stand, von 195,481 —
   Δ+5,873, Aufschlüsselung in docs/op-w5-item-ergebnisse.md — davon nur +623 Quellcode, der Rest
   Test-/Typ-Pin-Kosten; enthält den D6-Befund „`Equal<ItemGuard<...>>`-Message-Pins sind pro
-  Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 106,960 @ 82**
-  (seit WASM-Parität S1/Skalar-Overloads 2026-07-23, Δ+721 aus dem WNDArray-Klassen-Surface-Umbau
-  — stress importiert `spike/src` direkt; davor 106,239 @ 82 seit S0/sqrt, Δ−159 aus der
-  threaded.ts-Omit-Ersparnis, D10; davor 106,398 @ 82 seit W5, von 105,758 — Δ+640, ausschließlich
-  aus den geteilten spike/src-Änderungen, kein stress-eigenes File berührt) ·
-  **check:diag:browser 2,142 @ 75** (unverändert seit W1 — S1 rührt es Δ0 (browser kompiliert
-  threaded.ts nicht und die WNDArray-Klassen-Surface bewegt browsers Instantiation-Zahl nicht),
-  stress/browser ungated by design, `pnpm check` compoundet alle drei).
-- **Testzahlen:** test:core 1591 · test:resident 4717+2 (+372 S1-Skalar-Overload-Tests: 24 View-Fälle
-  + 100 Broadcast-Äquivalenz + 4 kuratierte Spezialwert-Fixtures + 240 randomisierte Spezialwert-Fälle
-  + 3 kuratierte div(0)/div(-0)/sub-Ordnung-Fixtures + 1 Diagnose-Qualitätstest) · test:threaded 91
-  (+16 S1-Skalar-Parität, davor 75 = +4 sqrt-Parität +2 Spezialwerte) · test:browser 4 · test:package 3
-  + Typ-Smoke · cargo 184 (+15 scalar-Kernel-Tests, davor 169 = +8 sqrt-Kernel) · test:example
-  (Registry-Install + Example-Typcheck + 8 asserted Queries, unberührt).
+  Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 107,283 @ 82**
+  (unverändert seit WASM-Parität S2/mean 2026-07-23 — der View-Coverage-Nachtrag berührt nur
+  `spike/tests-runtime/resident.test.ts`, das stress nicht importiert, Δ0, gemessen; davor Δ+323
+  aus der neuen `mean`-Methode auf `resident.ts` — stress importiert `spike/src` direkt; davor
+  106,960 @ 82 seit S1/Skalar-Overloads, Δ+721 aus dem WNDArray-Klassen-Surface-Umbau; davor
+  106,239 @ 82 seit S0/sqrt, Δ−159 aus der threaded.ts-Omit-Ersparnis, D10; davor 106,398 @ 82 seit
+  W5, von 105,758 — Δ+640, ausschließlich aus den geteilten spike/src-Änderungen, kein
+  stress-eigenes File berührt) · **check:diag:browser 2,142 @ 75** (unverändert seit W1 — weder S2
+  noch der View-Coverage-Nachtrag rühren es (browser kompiliert weder threaded.ts noch die
+  Test-Runtime-/Typ-Pin-Dateien, in denen `mean`s Anhänge landen), Δ0, gemessen; stress/browser
+  ungated by design, `pnpm check` compoundet alle drei).
+- **Testzahlen:** test:core 1591 · test:resident 5048+2 (+26 View-Coverage-Nachtrag zu S2/mean,
+  Verify-B-Befund: transponierte/geschnittene/offset-verschobene/zusammengesetzte Empfänger je
+  niladisch/positive-/negative-Achse × keepdims true/false, in resident.test.ts; davor 5022+2
+  (+305 S2-mean-Tests: 244 M1-Differential in resident.test.ts inkl. Determinismus-/size-0-Pins +
+  60 randomisierte Spezialwert-Fälle + 1 Leak-Non-Vakuitäts-Test, davor 4717+2 seit S1)) ·
+  test:threaded 101 (+10 S2-mean-Parität, davor
+  91 = +16 S1-Skalar-Parität, davor 75 = +4 sqrt-Parität +2 Spezialwerte) · test:browser 4 ·
+  test:package 3 + Typ-Smoke · cargo 184 (+1 zero_alloc = 185, UNVERÄNDERT seit S1 — S2 berührt
+  kein Rust) · test:example (Registry-Install + Example-Typcheck + 8 asserted Queries, unberührt).
 - **Editor-Gate:** `bench:editor` W1–**W8** — Instantiation-Pins exact-match hart (seit
-  **WASM-Parität S1/Skalar-Overloads 2026-07-23** uniform **+721** neu gesetzt = `{w1 28.466,
-  w2 30.275, w3 61.415, w4 28.629, w5 33.920, w6 35.090, w7 27.638, w8 35.505}`; Grund ist der
-  WNDArray-Klassen-Surface-Umbau (jeder Workload instanziiert WNDArray mindestens einmal),
-  zweifach gemessen, byte-identisch. Davor seit **WASM-Parität S0/sqrt 2026-07-23** uniform
+  **WASM-Parität S2/mean 2026-07-23** uniform **+323** neu gesetzt = `{w1 28.789, w2 30.598,
+  w3 61.738, w4 28.952, w5 34.243, w6 35.413, w7 27.961, w8 35.828}`; Grund ist dieselbe
+  WNDArray-Klassen-Surface-Ripple wie beim Root-/Stress-check:diag (jeder Workload instanziiert
+  WNDArray mindestens einmal, `mean` fügt drei neue Overload-Signaturen auf der Klasse hinzu),
+  zweifach gemessen, byte-identisch. Davor seit **WASM-Parität S1/Skalar-Overloads 2026-07-23**
+  uniform **+721** neu gesetzt = `{w1 28.466, w2 30.275, w3 61.415, w4 28.629, w5 33.920,
+  w6 35.090, w7 27.638, w8 35.505}`; Grund war der WNDArray-Klassen-Surface-Umbau (jeder Workload
+  instanziiert WNDArray mindestens einmal), zweifach gemessen, byte-identisch. Davor seit
+  **WASM-Parität S0/sqrt 2026-07-23** uniform
   **−159** neu gesetzt = `{w1 27.745, w2 29.554, w3 60.694, w4 27.908, w5 33.199, w6 34.369,
   w7 26.917, w8 34.784}`; Grund war der threaded.ts-Omit-Fix
   (D10), der die `keyof`-getriebene Generic-Fixkosten aus JEDEM Workload entfernt — davor seit V0

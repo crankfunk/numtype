@@ -768,9 +768,11 @@ type MEAN_AXIS_OOB_MSG = Expect<
   Equal<Guard<ReduceAxis<[2, 3, 4], 5>, 5>, { readonly __shapeError: "reduce: axis 5 is out of range for shape [2,3,4] (rank 3)" }>
 >;
 
-// WNDArray twin note (D7 v2, structural — not a pin): `WNDArray` has NEITHER
-// add/sub/mul/div NOR mean today, so there is no WUA-style mirror section to
-// write here — a documented absence, not an oversight (see spec D7 v2).
+// WNDArray twin note (superseded — originally D7 v2, structural, "not a
+// pin"): `WNDArray` gained add/sub/mul/div in WASM parity S1 and `mean` in
+// WASM parity S2 — both now have their own WNDArray-side pin sections
+// (search "WASM parity S1"/"WASM parity S2" below) — no longer a documented
+// absence.
 
 // =============================================================================
 // Op-Scheibe W3 (docs/op-w3-sqrt-spec.md, D3): `sqrt()` — shape-PRESERVING at
@@ -1165,3 +1167,58 @@ type WSCALAR_DIV_WORKAROUND = Expect<Equal<(typeof wScalarWorkaround)["shape"], 
 declare const wScalarIncompatible: WNDArray<[9, 9]>;
 // @ts-expect-error - shapes [2,3] and [9,9] are not broadcast-compatible (3 vs 9); calling the overloaded scalar method with an incompatible WNDArray argument must still be rejected through the real overload set (T4b)
 wScalarBase.add(wScalarIncompatible);
+
+// =============================================================================
+// WASM parity S2 (docs/wasm-parity-mean-spec.md, D4/T6): `WNDArray.mean`
+// type pins — WNDArray-side twin of the NDArray W2 mean pins above
+// (MEAN_FLAT etc.), a THIRD call site of the ReduceAxis/Guard/OkShape
+// machinery (after sum's own WNDArray pins T7f/T7g above and mean's NDArray
+// pins above) — proves the WIRING, not the underlying degradation rules a
+// second time (same house convention the WNDArray sum/scalar sections above
+// already establish; does NOT re-litigate the union-axis-mini-scheibe's own
+// 15-pin degradation family, which is sum-only).
+// =============================================================================
+
+// mean(): niladic -> WNDArray<[]>-shaped, like sum() and NDArray.mean() (D4)
+// — NOT a bare `number` (mean stays a chainable reduction, unlike argmax()).
+const wMeanFlat = rw.mean();
+type WMEAN_FLAT = Expect<Equal<(typeof wMeanFlat)["shape"], readonly []>>;
+
+// mean(axis[, keepdims]): exact literal tuples (basic positive wiring proof).
+const wMeanAxis1 = rw.mean(1);
+type WMEAN_AXIS1 = Expect<Equal<(typeof wMeanAxis1)["shape"], readonly [2, 4]>>;
+
+const wMeanAxis1Keep = rw.mean(1, true);
+type WMEAN_AXIS1_KEEP = Expect<Equal<(typeof wMeanAxis1Keep)["shape"], readonly [2, 1, 4]>>;
+
+const wMeanNeg = rw.mean(-1);
+type WMEAN_NEG = Expect<Equal<(typeof wMeanNeg)["shape"], readonly [2, 3]>>;
+
+// mean(axis): degradations — same ReduceAxis machinery as sum/mean(NDArray),
+// only the WIRING is proven here (dyn axis, mixed rank, union axis,
+// keepdims-union) — reusing the SAME declared receivers `wMixedRankRecv`/
+// `wUAxisRecv` the WNDArray sum section above already declares (proves the
+// identical machinery, not a re-derivation).
+
+declare const wDynAxisMean: number;
+const wMeanDynAxis = rw.mean(wDynAxisMean);
+type WMEAN_DYN_AXIS = Expect<Equal<(typeof wMeanDynAxis)["shape"], readonly number[]>>;
+
+const wMeanMixedSummed = wMixedRankRecv.mean(2);
+type WMEAN_MIXED_RANK = Expect<Equal<(typeof wMeanMixedSummed)["shape"], readonly number[]>>;
+
+const wMeanUnionAxis = wUAxisRecv.mean(0 as 0 | 2);
+type WMEAN_UNION_AXIS = Expect<Equal<(typeof wMeanUnionAxis)["shape"], readonly number[]>>;
+
+declare const wMeanDynKeep: true | undefined;
+const wMeanKeepUnion = rw.mean(1, wMeanDynKeep);
+type WMEAN_KEEP_UNION = Expect<Equal<(typeof wMeanKeepUnion)["shape"], readonly [2, 4] | readonly [2, 1, 4]>>;
+
+// OOB pin (T6): axis 5 is out of range for rank-3 shape [2,3,4] — error
+// stays at the argument, through the SAME `Guard`/`__shapeError` the
+// MEAN_AXIS_OOB_MSG pin above already checks at the type-alias level
+// (ReduceAxis is class-agnostic — this call site proves the second class's
+// overload set surfaces the identical `reduce: axis …` stem, word-for-word
+// `sum`'s own throw, M3).
+// @ts-expect-error - axis 5 is out of range for rank-3 shape [2,3,4]: error stays at the argument (ReduceAxis reused unmodified from sum, verbatim message — same Guard the MEAN_AXIS_OOB_MSG pin above already checks)
+rw.mean(5);

@@ -314,5 +314,16 @@ Runde A+B+C steht aus** (docs/wasm-parity-scalar-spec.md v2 /-ergebnisse.md): vi
 Guard-Träger-zuletzt, D2-v3-Muster proaktiv angewandt), M1 bindet und ist dreifach belegt (36k-Fälle-
 Baustein-0-Differential, committeter M1-Test, Pflicht-Mutant). check:diag-Root +1.165 (dekomponiert:
 CoreExports Δ0, WNDArray-Klassen-Surface +730, Tests/Typ-Pins +435), bench:editor 8 Pins uniform
-+721 neu gesetzt, neuer Freeze-Hash `8255821b…`. S2–S5 folgen dem etablierten Workflow (Spec →
-Baustein 0 → Impl → Verify A+B+C → Freeze-Re-Pin).
++721 neu gesetzt, neuer Freeze-Hash `8255821b…`. **S2 (mean): Umsetzung ERLEDIGT 2026-07-23,
+Verify-Runde A+B+C steht aus** (docs/wasm-parity-mean-spec.md v2 /-ergebnisse.md): KEIN neuer
+Rust-Kernel — `WNDArray.mean` ist eine reine TS-Komposition, `this.sum(axis, keepdims).div(n)`,
+die den bestehenden v1-`sum`-Kernel und den S1-`scalar_div`-Kernel wiederverwendet; Freeze-Hash
+bleibt UNVERÄNDERT `8255821b…` (Clean-Rebuild reproduziert ihn exakt). M1 bindet als Korollar
+zweier bereits bewiesener Kernel und ist per direktem Differentialtest bestätigt (randomisierte
+Raster über resident.test.ts/special-values.test.ts, threaded-vs-stable-Parität inkl.
+Spezialwerten und Achsen-Fall), Determinismus-Pin (`sum/n`, nicht `sum*(1/n)`) nicht-vakuär,
+Leak-Non-Vakuität exakt belegt (`getResidentFreeCount()`-Delta = `2N` über 500 Aufrufe).
+check:diag-Root +1.500 (Δ deutlich unter dem +6.000-Gate; gestuft: Methode +333, Test-Anhänge
++885, Typ-Pins +282), stress +323 (dieselbe Klassen-Surface-Ripple, kein Order-Noise), browser
+Δ0, bench:editor 8 Pins uniform +323 neu gesetzt (doppelt reproduziert). S3–S5 folgen dem
+etablierten Workflow (Spec → Baustein 0 → Impl → Verify A+B+C → Freeze-Re-Pin).

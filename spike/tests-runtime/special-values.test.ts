@@ -19,7 +19,7 @@
 import assert from "node:assert";
 import { test } from "node:test";
 import { NDArray } from "../src/ndarray.ts";
-import { dotRuntime, elementwiseBinary, matmulRuntime, normSqRuntime, scalarElementwiseRuntime, sqrtRuntime, sumRuntime, transposeRuntime } from "../src/runtime.ts";
+import { dotRuntime, elementwiseBinary, keepDimsShape, matmulRuntime, meanRuntime, normSqRuntime, scalarElementwiseRuntime, sqrtRuntime, sumRuntime, transposeRuntime } from "../src/runtime.ts";
 import { wasmAdd, wasmMatmul, wasmSum, wasmTranspose } from "../src/wasm/backend.ts";
 import { initCore } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
@@ -990,3 +990,57 @@ test("diagnostic quality (T4b/F1 pin, WASM parity S1): WNDArray broadcast mismat
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// =============================================================================
+// WASM parity S2 (docs/wasm-parity-mean-spec.md, D6(b)): `WNDArray.mean()`
+// special-value coverage — randomized `genDataSpecial` grid, ranks 0..4,
+// axis + niladic (~60 cases), same structure as the sqrt/scalar blocks
+// above. `mean` is arithmetic (sum then divide via composition, no new
+// kernel), so NaN stays class-equality here, matching the discipline the
+// sqrt/scalar special-value blocks above already establish.
+//
+// F1 methodology (spec addendum, CRITICAL — same as resident.test.ts's own
+// mean block): `meanRuntime` takes no `keepdims` parameter and always
+// returns the REDUCED shape — data is compared against `meanRuntime(...)
+// .data` (keepdims-invariant: a size-1 axis never changes the element
+// count), shape against `keepdims ? keepDimsShape(shape, axis) : ref.shape`,
+// never directly against `meanRuntime(...).shape` for keepdims=true.
+// =============================================================================
+
+{
+  const rng = makeRng(0x4d45414e5f53504543n); // "MEAN_SPEC"-ish
+  const CASE_COUNT = 60;
+  for (let c = 0; c < CASE_COUNT; c++) {
+    const shape = genShape(rng, 0, 4);
+    const data = genDataSpecial(rng, shape);
+    const rank = shape.length;
+    const useAxis = rank > 0 && rng.nextBool();
+    let axis: number | undefined;
+    if (useAxis) {
+      const positiveAxis = rng.nextInt(0, rank - 1);
+      axis = rng.nextBool() ? positiveAxis - rank : positiveAxis;
+    } else {
+      axis = undefined;
+    }
+    const keepdims = rng.nextBool();
+
+    test(`mean special case ${c}: shape=[${shape.join(",")}] axis=${axis} keepdims=${keepdims}`, () => {
+      const ref = meanRuntime(shape, data, axis);
+      const ctx = `mean special case ${c} shape=[${shape.join(",")}] axis=${axis} keepdims=${keepdims}`;
+      const expectedShape = keepdims ? keepDimsShape(shape, axis) : ref.shape;
+
+      const w = WNDArray.fromArray(core, shape, data);
+      try {
+        const got = w.mean(axis, keepdims);
+        try {
+          assertShapeEqual(expectedShape, got.shape as readonly number[], `${ctx} [resident]`);
+          assertDataBitIdentical(ref.data, got.toArray(), `${ctx} [resident]`);
+        } finally {
+          got.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}

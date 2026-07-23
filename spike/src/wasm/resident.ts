@@ -949,6 +949,71 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
     }
   }
 
+  /** Mean-reduce along `axis` (negative axes count from the end); omit
+   * `axis` to average every element down to a rank-0 array (WASM parity S2,
+   * docs/wasm-parity-mean-spec.md, D1-D4): overloads 0/1/2 are BYTE-IDENTICAL
+   * to `sum`'s own (same `ReduceAxis`/`Guard`/`OkShape` machinery,
+   * `reduce.ts` unchanged) — a third call site of that already-proven
+   * machinery, no new type machinery.
+   *
+   * **Pure TS composition, NOT a new kernel (D1-D3):** `this.sum(axis,
+   * keepdims).div(n)`, reusing the already-M1-bit-identical `sum` kernel (v1)
+   * and the S1 `scalar_div` kernel unchanged — zero Rust, zero ABI, zero
+   * `CoreExports` member, freeze hash unaffected. `n` mirrors `meanRuntime`'s
+   * own formula exactly (`runtime.ts:865-872`, D2): `product(this.shape)` for
+   * the full reduction, else `this.shape[normAxis]` on the INPUT shape (never
+   * the reduced output shape — with keepdims the output axis is size-1, but
+   * the divisor stays the original axis size), with the same negative-axis
+   * normalization. Because `scalar_div` computes exactly `sum[i] / n` (never
+   * `sum[i] * (1/n)`, which rounds differently in f64), the D5
+   * sum-over-n-not-times-reciprocal determinism decision falls out of the
+   * composition for free.
+   *
+   * Axis validation is entirely `this.sum`'s own — a bad axis throws before
+   * `n` is computed, with the identical `reduce: axis …` stem `sum` throws
+   * (M3), so `n`'s own normalization below only ever runs on an
+   * already-validated axis.
+   *
+   * **Lifecycle (D3):** `summed` is a fresh resident buffer; `summed.div(n)`
+   * allocates its own fresh, independent result buffer (scalar ops never
+   * alias an operand, S1) BEFORE `finally` runs, so disposing `summed`
+   * afterward cannot affect the already-produced result. `dispose()` is
+   * idempotent (line 375), so this never double-frees even on an exotic
+   * control-flow path.
+   *
+   * size-0 (an empty receiver, or a size-0 axis): the reduced sum is `0` and
+   * `n` is `0`, so every output element is `0/0 -> NaN` (NumPy-conformant),
+   * never a throw — same disclosed divergence from `argmax()` that
+   * `NDArray.mean`'s own doc comment documents. */
+  mean(): WNDArray<OkShape<ReduceAxis<S, undefined, false>>>;
+  mean<const Axis extends number | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+  ): WNDArray<OkShape<ReduceAxis<S, Axis, false>>>;
+  mean<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims: KeepDims,
+  ): WNDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>;
+  mean<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
+    axis?: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims?: KeepDims,
+  ): WNDArray<any> {
+    const axisNum = axis as unknown as Axis | undefined;
+    const summed = this.sum(axis as any, keepdims as any);
+    try {
+      let n: number;
+      if (axisNum === undefined) {
+        n = product(this.shape);
+      } else {
+        const rank = this.shape.length;
+        const normAxis = axisNum < 0 ? rank + axisNum : axisNum;
+        n = this.shape[normAxis] ?? 1;
+      }
+      return summed.div(n);
+    } finally {
+      summed.dispose();
+    }
+  }
+
   /** 1-D inner product (Kern 07) — resident twin of `NDArray.dot`/
    * `dotRuntime`, routed through the strided `nt_dot_strided` reduction
    * kernel. Returns a plain `number` (deliberately leaves the `WNDArray`

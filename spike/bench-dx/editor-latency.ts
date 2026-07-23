@@ -823,15 +823,24 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // signatures + the private `scalarOp` helper added to the class body move every
 // workload uniformly. Measured twice (byte-identical both times). See
 // docs/wasm-parity-scalar-ergebnisse.md.
+// Re-pinned uniformly +323 on 2026-07-23 (WASM-parity S2 / mean): `mean` adds
+// NO CoreExports member at all (pure-TS composition, `this.sum(axis,
+// keepdims).div(n)` -- zero Rust, zero ABI) so the keyof-resolution mechanism
+// above contributes +0 here as expected; every workload still moves uniformly
+// because every workload instantiates WNDArray, and `mean`'s three overload
+// signatures are new members on that same class body (third call site of the
+// ReduceAxis/Guard/OkShape machinery -- the class-surface-ripple mechanism
+// W1/W2 already established, not the CoreExports mechanism). Measured twice
+// (byte-identical both times). See docs/wasm-parity-mean-ergebnisse.md.
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 28466,
-  w2: 30275,
-  w3: 61415,
-  w4: 28629,
-  w5: 33920,
-  w6: 35090,
-  w7: 27638,
-  w8: 35505,
+  w1: 28789,
+  w2: 30598,
+  w3: 61738,
+  w4: 28952,
+  w5: 34243,
+  w6: 35413,
+  w7: 27961,
+  w8: 35828,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

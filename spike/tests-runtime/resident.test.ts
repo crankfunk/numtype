@@ -19,9 +19,9 @@
  */
 import assert from "node:assert";
 import { test } from "node:test";
-import { elementwiseBinary, matmulRuntime, sumRuntime, transposeRuntime } from "../src/runtime.ts";
+import { elementwiseBinary, keepDimsShape, matmulRuntime, meanRuntime, sumRuntime, transposeRuntime } from "../src/runtime.ts";
 import { initCore } from "../src/wasm/loader.ts";
-import { WNDArray } from "../src/wasm/resident.ts";
+import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
 import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
 import { genBroadcastShapes, genData, makeRng, type Rng } from "./prng.ts";
 
@@ -270,6 +270,288 @@ test("resident zeros/ones: plumbing sanity", () => {
       assert.strictEqual(rD.disposed, true);
       assert.strictEqual(rF.disposed, true);
       assert.strictEqual(rG.disposed, true);
+    });
+  }
+}
+
+// =============================================================================
+// WASM parity S2 (docs/wasm-parity-mean-spec.md, D5): `WNDArray.mean` — the
+// M1 differential. `mean` is a pure-TS composition (`this.sum(axis,
+// keepdims).div(n)`, no new kernel), but bit-identity to `meanRuntime` is
+// still proven directly here, not merely argued.
+//
+// F1 methodology (Baustein-0 finding, spec addendum — CRITICAL): `meanRuntime`
+// takes NO `keepdims` parameter and always returns the REDUCED shape, so a
+// direct `assertShapeEqual` against `meanRuntime(...).shape` fails every
+// keepdims=true case. Data is compared against `meanRuntime(...).data`
+// (keepdims-invariant: a size-1 axis never changes the element count); shape
+// is compared against `keepdims ? keepDimsShape(shape, axis) : ref.shape` —
+// exactly the methodology `scalar-mean.test.ts:285-292`/`:461-466` already
+// establishes on the NDArray side.
+// =============================================================================
+
+// --- mean(): full reduction, resident vs naive, bit-identical -------------
+{
+  const rng = makeRng(0x5245535f4d45414en); // "RES_MEAN"
+  for (let c = 0; c < CASE_COUNT; c++) {
+    const shape = genShape(rng, 0, 4);
+    const data = genData(rng, shape);
+    const keepdims = rng.nextBool();
+
+    test(`resident mean_all case ${c}: shape=[${shape.join(",")}] keepdims=${keepdims}`, () => {
+      const ref = meanRuntime(shape, data, undefined);
+      const a = WNDArray.fromArray(core, shape, Array.from(data));
+      try {
+        const got = a.mean(undefined, keepdims);
+        try {
+          const ctx = `resident mean_all case ${c} shape=[${shape.join(",")}] keepdims=${keepdims}`;
+          const expectedShape = keepdims ? keepDimsShape(shape, undefined) : ref.shape;
+          assertShapeEqual(expectedShape, got.shape, ctx);
+          assertDataBitIdentical(ref.data, got.toArray(), ctx);
+        } finally {
+          got.dispose();
+        }
+      } finally {
+        a.dispose();
+      }
+    });
+  }
+}
+
+// --- mean(axis[, keepdims]): resident vs naive, bit-identical -------------
+{
+  const rng = makeRng(0x5245535f4d5f4158n); // "RES_M_AX"
+  for (let c = 0; c < CASE_COUNT; c++) {
+    const shape = genShape(rng, 1, 4);
+    const data = genData(rng, shape);
+    const rank = shape.length;
+    const positiveAxis = rng.nextInt(0, rank - 1);
+    const axis = rng.nextBool() ? positiveAxis - rank : positiveAxis;
+    const keepdims = rng.nextBool();
+
+    test(`resident mean_axis case ${c}: shape=[${shape.join(",")}] axis=${axis} keepdims=${keepdims}`, () => {
+      const ref = meanRuntime(shape, data, axis);
+      const a = WNDArray.fromArray(core, shape, Array.from(data));
+      try {
+        const got = a.mean(axis, keepdims);
+        try {
+          const ctx = `resident mean_axis case ${c} shape=[${shape.join(",")}] axis=${axis} keepdims=${keepdims}`;
+          const expectedShape = keepdims ? keepDimsShape(shape, axis) : ref.shape;
+          assertShapeEqual(expectedShape, got.shape, ctx);
+          assertDataBitIdentical(ref.data, got.toArray(), ctx);
+        } finally {
+          got.dispose();
+        }
+      } finally {
+        a.dispose();
+      }
+    });
+  }
+}
+
+// --- mean: non-vacuous sum/n vs sum*(1/n) determinism pin (D5), full form --
+// Proves the composition's `summed.div(n)` produces `sum/n`, NOT
+// `sum*(1/n)` — same discriminator scalar-mean.test.ts's own NDArray-side
+// pin uses (n=49, sum=5: `5/49` and `5*(1/49)` diverge in f64). Precondition
+// asserted first so the pin is non-vacuous (proves the two formulas actually
+// differ before pinning which one `WNDArray.mean` uses).
+test("resident mean: sum/n vs sum*(1/n) discriminator, full reduction (n=49, sum=5)", () => {
+  const n = 49;
+  const viaDiv = 5 / n;
+  const viaMul = 5 * (1 / n);
+  assert.notStrictEqual(viaDiv, viaMul, "precondition: the two formulas must actually diverge in f64");
+
+  const data = new Float64Array(n);
+  data[0] = 5;
+  const a = WNDArray.fromArray(core, [n], Array.from(data));
+  try {
+    const got = a.mean();
+    try {
+      const gotVal = got.toArray()[0];
+      assert.ok(Object.is(gotVal, viaDiv), `mean() must equal sum/n = ${viaDiv}, got ${gotVal}`);
+      assert.notStrictEqual(gotVal, viaMul, "mean() must NOT equal the rejected sum*(1/n) formula");
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    a.dispose();
+  }
+});
+
+// --- mean: the SAME discriminator at axis granularity (D5) -----------------
+test("resident mean: sum/n vs sum*(1/n) discriminator, axis form (n=49, sum=5)", () => {
+  const n = 49;
+  const viaDiv = 5 / n;
+  const viaMul = 5 * (1 / n);
+  assert.notStrictEqual(viaDiv, viaMul, "precondition: the two formulas must actually diverge in f64");
+
+  const data = new Float64Array(n); // single row [1, n]: sum=5, rest 0
+  data[0] = 5;
+  const a = WNDArray.fromArray(core, [1, n], Array.from(data));
+  try {
+    const got = a.mean(1);
+    try {
+      const gotVal = got.toArray()[0];
+      assert.ok(Object.is(gotVal, viaDiv), `mean(1) must equal sum/n = ${viaDiv}, got ${gotVal}`);
+      assert.notStrictEqual(gotVal, viaMul, "mean(1) must NOT equal the rejected sum*(1/n) formula");
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    a.dispose();
+  }
+});
+
+// --- mean: size-0 -> NaN, never a throw, both reduction paths (D5) --------
+test("resident mean: full reduction of an empty (size-0) receiver is NaN (0/0), never throws", () => {
+  const a = WNDArray.fromArray(core, [0], []);
+  try {
+    const got = a.mean();
+    try {
+      const v = got.toArray()[0];
+      assert.ok(Number.isNaN(v), `expected NaN, got ${v}`);
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    a.dispose();
+  }
+});
+
+test("resident mean: a size-0 axis is NaN for every output element (0/0), never throws", () => {
+  const a = WNDArray.fromArray(core, [2, 0, 3], []);
+  try {
+    const got = a.mean(1);
+    try {
+      assertShapeEqual([2, 3], got.shape, "resident mean(1) over a size-0 axis stays well-defined (shape)");
+      assert.ok(
+        Array.from(got.toArray()).every((v) => Number.isNaN(v)),
+        "resident mean over a size-0 axis must be all-NaN",
+      );
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    a.dispose();
+  }
+});
+
+// --- mean on VIEWS (Verify-B coverage gap, WASM parity S2): the mean_all/
+// mean_axis differential blocks above only exercise contiguous receivers via
+// `WNDArray.fromArray` — this closes that gap by running `mean` through the
+// same non-contiguous view kinds `keepdims.test.ts` already established for
+// `sum` (transposed, sliced, offset-shifted, and their composition), each
+// across niladic/positive-axis/negative-axis and keepdims true/false.
+//
+// F1 methodology (unchanged from mean_all/mean_axis above): `meanRuntime`
+// has no keepdims parameter, so DATA is compared against
+// `meanRuntime(<view's logical shape>, <view's logical data>, axis).data`,
+// and SHAPE against `keepdims ? keepDimsShape(viewShape, axis) : ref.shape`
+// — never directly against `meanRuntime(...).shape`. The view's logical
+// data is obtained via `view.toArray()` taken BEFORE the `mean` call (the
+// same technique the S1 scalar-op view tests use in elementwise.test.ts) —
+// an independent read of the view's own already-proven logical content, not
+// a second pass through the op under test.
+
+/** Runs `view.mean(axis, keepdims)` and asserts it against `meanRuntime`
+ * over the view's own logical shape/data (`view.toArray()`, read BEFORE the
+ * mean call). Disposes `got`; the caller owns `view`/any base handles. */
+function assertMeanViewMatches(view: AnyWNDArray, axis: number | undefined, keepdims: boolean, ctx: string): void {
+  const viewShape = view.shape as readonly number[];
+  const viewData = view.toArray(); // logical content of the view, BEFORE the mean call
+  const ref = meanRuntime(viewShape, viewData, axis);
+  const got = view.mean(axis, keepdims);
+  try {
+    const expectedShape = keepdims ? keepDimsShape(viewShape, axis) : ref.shape;
+    assertShapeEqual(expectedShape, got.shape as readonly number[], ctx);
+    assertDataBitIdentical(ref.data, got.toArray(), ctx);
+  } finally {
+    got.dispose();
+  }
+}
+
+// transpose view: [3,4] -> T [4,3]
+for (const axis of [0, 1, undefined] as const) {
+  for (const keepdims of [true, false] as const) {
+    test(`resident mean on transpose view: [3,4]^T axis=${axis} keepdims=${keepdims}`, () => {
+      const w = WNDArray.fromArray(core, [3, 4], Array.from({ length: 12 }, (_, i) => i + 1));
+      try {
+        const view = w.transpose(); // O(1) view, reversed strides
+        try {
+          assertMeanViewMatches(view, axis, keepdims, `resident mean transpose view axis=${axis} keepdims=${keepdims}`);
+        } finally {
+          view.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}
+
+// sliced view (step slice, non-natural strides, offset 0): [4,3] -> rows
+// {0,2} via step 2 -> [2,3].
+for (const axis of [0, 1, undefined] as const) {
+  for (const keepdims of [true, false] as const) {
+    test(`resident mean on sliced view (step): [4,3] step 2 axis=${axis} keepdims=${keepdims}`, () => {
+      const baseData = Array.from({ length: 12 }, (_, i) => (i + 1) * (i + 1));
+      const w = WNDArray.fromArray(core, [4, 3], baseData);
+      try {
+        const view = w.slice({ step: 2 }, null); // O(1) view, non-natural strides
+        try {
+          assertMeanViewMatches(view, axis, keepdims, `resident mean sliced view axis=${axis} keepdims=${keepdims}`);
+        } finally {
+          view.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}
+
+// offset window (nonzero offset, natural strides): [5,3] -> rows 2.. -> [3,3], offset 6.
+for (const axis of [0, -1, undefined] as const) {
+  for (const keepdims of [true, false] as const) {
+    test(`resident mean on offset window: [5,3] rows 2.. axis=${axis} keepdims=${keepdims}`, () => {
+      const baseData = Array.from({ length: 15 }, (_, i) => i - 7);
+      const w = WNDArray.fromArray(core, [5, 3], baseData);
+      try {
+        const view = w.slice({ start: 2 }); // O(1) view, offset 6, natural strides
+        try {
+          assertMeanViewMatches(view, axis, keepdims, `resident mean offset window axis=${axis} keepdims=${keepdims}`);
+        } finally {
+          view.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}
+
+// composed view: [2,3,4] -> transpose [4,3,2] -> slice rows 1.. of axis 1 ->
+// [4,2,2], non-natural strides AND nonzero offset.
+for (const axis of [0, 1, 2, undefined] as const) {
+  for (const keepdims of [true, false] as const) {
+    test(`resident mean on composed transpose+slice view: [2,3,4]^T sliced axis=${axis} keepdims=${keepdims}`, () => {
+      const baseData = Array.from({ length: 24 }, (_, i) => i - 11);
+      const w = WNDArray.fromArray(core, [2, 3, 4], baseData);
+      try {
+        const t = w.transpose();
+        try {
+          const view = t.slice(null, { start: 1 }, null);
+          try {
+            assertMeanViewMatches(view, axis, keepdims, `resident mean composed view axis=${axis} keepdims=${keepdims}`);
+          } finally {
+            view.dispose();
+          }
+        } finally {
+          t.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
     });
   }
 }
