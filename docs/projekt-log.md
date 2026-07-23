@@ -625,3 +625,62 @@ Nebenbefund mit Reichweite über die Scheibe hinaus: Eine einzige LEERE Datei ve
 Root-Instantiation-Zähler um **+6.611** — das in CLAUDE.md dokumentierte Order-Noise-Band von
 „±≈2.000" ist damit zweifach reproduziert widerlegt und auf „±≈7.000" korrigiert. Das betrifft
 jede künftige dateihinzufügende Scheibe.
+
+## WASM-Parität S1 — Skalar-Overloads `add`/`sub`/`mul`/`div` auf `WNDArray` (2026-07-23)
+
+Zweite Scheibe der WASM-Parität-Serie (nach S0/sqrt): die vier Skalar-Overloads, die W2 der
+naiven `NDArray`-Klasse gegeben hat (`x.div(2)`, shape-erhaltend, kein `[1]`-Broadcast-Umweg),
+bekommen jetzt ihr resident-WASM-Gegenstück. Vollständigkeits-/Symmetriearbeit, kein gemessener
+Nutzerbedarf — genau wie S0.
+
+**Umsetzung folgt der etablierten Pipeline strukturgleich zu S0:** neues Kernel-File
+(`crates/core/src/kernels/scalar.rs`) mit vier `pub fn scalar_{add,sub,mul,div}_strided`, jede
+ein Einzeiler über den S0-`unary_strided`-Kern — kein neuer Iterationskern, reine Wiederver-
+wendung. Das erforderte, `unary_strided` von `fn` auf `pub(crate) fn` zu erweitern: eine reine
+Sichtbarkeitserweiterung, deren Codegen-Neutralität ein Clean-Rebuild-Hash-Vergleich vor dem Bau
+bestätigte. ABI: vier `nt_scalar_*_strided`-Einträge (9-Parameter-Form, `scalar: f64` zwischen
+Daten- und Output-Block, `nt_fill`s eigener `value: f64`-Parameter als Präzedenz) strikt ans
+Ende von `abi.rs` angehängt. `CoreExports` bekam einen vierten Merge-Block in `loader.ts`;
+`ThreadedCoreExports` erbte automatisch, ohne eine einzige `threaded.ts`-Zeile zu berühren — der
+S0/D10-Omit-Fix (direkter Cast statt `Omit<ThreadedCoreExports,"memory">`) trug hier zum ersten
+Mal über eine ganze Vier-Member-Scheibe hinweg und bestätigte sein eigenes Versprechen
+(„+0 statt +7 pro Member") empirisch am echten check:diag.
+
+**Die WNDArray-Seite:** die vier Bestandsmethoden `add`/`sub`/`mul`/`div` wurden zu Overload-Sets
+umgebaut — Skalar-Overload ZUERST deklariert, generischer `Guard`-Träger ZULETZT (die W2-F1-
+Lektion, hier proaktiv statt reaktiv angewandt), der komplette Array-Array-Körper jeder Methode
+BYTE-IDENTISCH in den else-Zweig der neuen Implementierungssignatur verschoben — am `git diff`
+bewiesen, die verschobenen Zeilen erscheinen als reine Kontextzeilen. Ein neuer privater
+`scalarOp`-Helfer (Klassenkörper-Insertion, kein Bestandsmember editiert außer den vier
+erzwungenen Overload-Umbauten) marshalt einmal statt vierfach dupliziert.
+
+**M1 als Korollar, nicht als neuer Claim:** anders als `sqrt`, das eine 30k-Fälle-Vorab-Probe
+brauchte, weil `f64::sqrt`-Bit-Parität ein neuer empirischer Claim war, ist Skalar-Bit-Parität
+ein Korollar der längst eingefrorenen binären Kernel (Kern 07) — `x op s` ist derselbe IEEE-Op
+mit konstantem zweiten Operanden. Trotzdem dreifach belegt: Baustein 0 verifizierte das
+Korollar-Argument selbst und fuhr zusätzlich einen 36.324-Fälle-Differential gegen den echten
+Kernel (0 Abweichungen); der committete M1-Test deckt contiguous/View/Offset-Fenster/rank-0/
+size-0/Spezialwert-Raster/kuratierte `div(0)`-`div(-0)`-`sub`-Ordnungs-Fixtures je Op sowie eine
+`[1]`-Broadcast-Äquivalenzprobe über 100 Fälle; der Pflicht-Mutant bewies, dass der Katalog eine
+echte Regression fängt.
+
+**Zwei Backup-Kopie-Beweise statt `git checkout`:** die Kernel-Mutation (`|x| x + s` →
+`|x| x - s` im add-Kernel) kippte 5 benannte cargo-Tests und 30 benannte JS-Differential-Fälle
+— Revert per `cp` aus einer vorab angelegten Backup-Kopie, SHA-256-Beweis vor/nach identisch.
+Zusätzlich wurde der T4b-Diagnose-Qualitätstest (der reale-tsc-Test, der beweist, dass die
+Broadcast-Shape-Message durch das Overload-Set überlebt) selbst per Reihenfolgen-Flip auf
+Nicht-Vakuität geprüft: mit vertauschter Deklarationsreihenfolge kollabierte die Meldung exakt
+wie bei der W2-F1-Regression vorhergesagt — vom benannten shape-Text zum Skalar-Decoy „not
+assignable to type 'number'". Auch dieser Flip wurde per Backup-Kopie revertiert, nicht per
+`git checkout`.
+
+**Zahlen:** check:diag Root von 206.850 auf 208.015 @ 140 (Δ+1.165, klar unter dem +6.000-Gate),
+dreistufig dekomponiert — die vier `CoreExports`-Member kosten wie erwartet **0**, der
+WNDArray-Klassen-Surface-Umbau **+730**, die Test-/Typ-Pin-Anhänge **+435**. stress +721, browser
+unverändert. `bench:editor`s acht Pins bewegten sich uniform um +721 (WNDArray wird in jedem
+Workload instanziiert) — zweimal gemessen, neu gesetzt. Neuer Freeze-Hash `8255821b…`, ersetzt
+den S0-Pin `24a048c7…`. Test-Wachstum: cargo 169→184, test:resident 4471→4719 (248 neue Fälle),
+test:threaded 75→91.
+
+Details: docs/wasm-parity-scalar-spec.md v2, docs/wasm-parity-scalar-ergebnisse.md. Die
+Verify-Runde A+B+C dieser Scheibe steht zum Zeitpunkt dieses Eintrags noch aus.

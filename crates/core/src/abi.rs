@@ -1398,3 +1398,198 @@ pub extern "C" fn nt_sqrt_strided(
     }
 }
 
+// ---------------------------------------------------------------------------
+// WASM parity S1 (docs/wasm-parity-scalar-spec.md): scalar elementwise ops
+// (`add`/`sub`/`mul`/`div` with a constant `f64` operand) on the
+// resident/threaded backends. Appended strictly after every pre-existing
+// item in this file (freeze discipline: `nt_sqrt_strided` above is the last
+// pre-existing item; nothing above this comment is touched). NOT cfg-gated
+// (same reasoning as the sqrt/Kern-07 blocks above it) — these ops belong in
+// BOTH the plain artifact (`pnpm build:wasm`) and the threads artifact, so
+// the plain artifact's hash legitimately changes again this phase.
+// ---------------------------------------------------------------------------
+
+/// WASM parity S1: elementwise `data[i] + s` over a strided view
+/// (shape-preserving, no broadcast). Nine-parameter convention: the
+/// `nt_sqrt_strided` 8-parameter operand/output form PLUS a `scalar: f64`
+/// parameter inserted between the input-operand block (`data_ptr`,
+/// `data_len`) and the output block (`out_data_ptr`, `out_len`) — `f64` is a
+/// native wasm value type, no pointer needed (`nt_fill`'s own `value: f64`
+/// parameter, above, is the precedent). See `kernels::scalar`'s module doc
+/// comment for the M1 bit-parity argument.
+#[no_mangle]
+pub extern "C" fn nt_scalar_add_strided(
+    shape_ptr: u32,
+    rank: u32,
+    strides_ptr: u32,
+    offset: u32,
+    data_ptr: u32,
+    data_len: u32,
+    scalar: f64,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    // Defense-in-depth prevalidation (see module doc).
+    if let Err(e) = validate_rank(rank) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(shape_ptr, rank, 4),
+        validate_region(strides_ptr, rank, 4),
+        validate_region(data_ptr, data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
+    let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
+    let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
+
+    match kernels::scalar::scalar_add_strided(shape, strides, offset, data, scalar) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// WASM parity S1: elementwise `data[i] - s` over a strided view
+/// (shape-preserving, no broadcast). Same nine-parameter convention as
+/// `nt_scalar_add_strided` above. Operand order PINNED: `data[i] - s`, NOT
+/// `s - data[i]`.
+#[no_mangle]
+pub extern "C" fn nt_scalar_sub_strided(
+    shape_ptr: u32,
+    rank: u32,
+    strides_ptr: u32,
+    offset: u32,
+    data_ptr: u32,
+    data_len: u32,
+    scalar: f64,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    if let Err(e) = validate_rank(rank) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(shape_ptr, rank, 4),
+        validate_region(strides_ptr, rank, 4),
+        validate_region(data_ptr, data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
+    let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
+    let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
+
+    match kernels::scalar::scalar_sub_strided(shape, strides, offset, data, scalar) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// WASM parity S1: elementwise `data[i] * s` over a strided view
+/// (shape-preserving, no broadcast). Same nine-parameter convention as
+/// `nt_scalar_add_strided` above.
+#[no_mangle]
+pub extern "C" fn nt_scalar_mul_strided(
+    shape_ptr: u32,
+    rank: u32,
+    strides_ptr: u32,
+    offset: u32,
+    data_ptr: u32,
+    data_len: u32,
+    scalar: f64,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    if let Err(e) = validate_rank(rank) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(shape_ptr, rank, 4),
+        validate_region(strides_ptr, rank, 4),
+        validate_region(data_ptr, data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
+    let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
+    let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
+
+    match kernels::scalar::scalar_mul_strided(shape, strides, offset, data, scalar) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// WASM parity S1: elementwise `data[i] / s` over a strided view
+/// (shape-preserving, no broadcast). Same nine-parameter convention as
+/// `nt_scalar_add_strided` above. Operand order PINNED: `data[i] / s`, NOT
+/// `s / data[i]`. Pure IEEE 754: no zero-divisor guard.
+#[no_mangle]
+pub extern "C" fn nt_scalar_div_strided(
+    shape_ptr: u32,
+    rank: u32,
+    strides_ptr: u32,
+    offset: u32,
+    data_ptr: u32,
+    data_len: u32,
+    scalar: f64,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    if let Err(e) = validate_rank(rank) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(shape_ptr, rank, 4),
+        validate_region(strides_ptr, rank, 4),
+        validate_region(data_ptr, data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
+    let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
+    let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
+
+    match kernels::scalar::scalar_div_strided(shape, strides, offset, data, scalar) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+

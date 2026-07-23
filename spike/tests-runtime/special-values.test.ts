@@ -19,12 +19,12 @@
 import assert from "node:assert";
 import { test } from "node:test";
 import { NDArray } from "../src/ndarray.ts";
-import { dotRuntime, elementwiseBinary, matmulRuntime, normSqRuntime, sqrtRuntime, sumRuntime, transposeRuntime } from "../src/runtime.ts";
+import { dotRuntime, elementwiseBinary, matmulRuntime, normSqRuntime, scalarElementwiseRuntime, sqrtRuntime, sumRuntime, transposeRuntime } from "../src/runtime.ts";
 import { wasmAdd, wasmMatmul, wasmSum, wasmTranspose } from "../src/wasm/backend.ts";
 import { initCore } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
 import { assertDataBitIdentical, assertShapeEqual, bitsOf } from "./assert-helpers.ts";
-import { genBroadcastShapes, genDataSpecial, makeRng, SPECIAL_VALUES, type Rng } from "./prng.ts";
+import { genBroadcastShapes, genDataSpecial, makeRng, nextF64Special, SPECIAL_VALUES, type Rng } from "./prng.ts";
 
 const core = await initCore();
 
@@ -768,3 +768,225 @@ test("sqrt fixture: [-0,-1,NaN,+Inf,+0,subnormal,MAX_VALUE] special-value edges,
     });
   }
 }
+
+// =============================================================================
+// WASM parity S1 (docs/wasm-parity-scalar-spec.md, D6): `WNDArray.{add,sub,
+// mul,div}(s)` scalar-overload special-value coverage. (a) a curated fixture
+// per op: special-value data array x an ordinary scalar, WNDArray vs
+// `scalarElementwiseRuntime`, bit-identical. (b) randomized `genDataSpecial`
+// grid per op, ranks 0..4, BOTH the array AND the scalar drawn special
+// (`nextF64Special`) — same structure as the sqrt/transpose blocks above.
+// (c) v2 addendum (Baustein-0 finding F3): curated `div(0)`/`div(-0)`/
+// `sub`-ordering fixtures — the randomized grid covers a scalar of exactly
+// 0/-0 only ~3.5%/case, so belt-and-suspenders coverage is curated here
+// rather than left to chance. (d) T4b/F1: a real-tsc diagnostic-quality test
+// proving the broadcast-shape message survives `WNDArray.add`'s overload
+// set (mirrors scalar-mean.test.ts's own F1 pin, WNDArray call site).
+// =============================================================================
+
+type ScalarOp = "add" | "sub" | "mul" | "div";
+const SCALAR_OPS: readonly ScalarOp[] = ["add", "sub", "mul", "div"];
+
+function callResidentScalar(op: ScalarOp, w: AnyWNDArray, s: number): AnyWNDArray {
+  if (op === "add") return w.add(s);
+  if (op === "sub") return w.sub(s);
+  if (op === "mul") return w.mul(s);
+  return w.div(s);
+}
+
+// --- (a) curated special-value-data fixture, per op -------------------------
+
+for (const op of SCALAR_OPS) {
+  test(`${op}(s) fixture: [-0,-1,NaN,+Inf,+0,subnormal,MAX_VALUE] special-value data, scalar=2.5, on resident`, () => {
+    const subnormal = Number.MIN_VALUE * 4;
+    const shape = [7];
+    const data = new Float64Array([-0, -1, Number.NaN, Number.POSITIVE_INFINITY, 0, subnormal, Number.MAX_VALUE]);
+    const s = 2.5;
+    const ref = scalarElementwiseRuntime(op, data, s);
+
+    const w = WNDArray.fromArray(core, shape, data);
+    try {
+      const got = callResidentScalar(op, w, s);
+      try {
+        assertDataBitIdentical(ref, got.toArray(), `${op}(s) special fixture [resident]`);
+      } finally {
+        got.dispose();
+      }
+    } finally {
+      w.dispose();
+    }
+  });
+}
+
+// --- (b) randomized SPECIAL_VALUES grid, ranks 0..4, special array AND scalar ---
+
+const SCALAR_SPECIAL_SEED: Record<ScalarOp, bigint> = {
+  add: 0x4144445f5343414cn, // "ADD_SCAL"
+  sub: 0x5355425f5343414cn, // "SUB_SCAL"
+  mul: 0x4d554c5f5343414cn, // "MUL_SCAL"
+  div: 0x4449565f5343414cn, // "DIV_SCAL"
+};
+
+for (const op of SCALAR_OPS) {
+  const rng = makeRng(SCALAR_SPECIAL_SEED[op]);
+  const CASE_COUNT = 60;
+  for (let c = 0; c < CASE_COUNT; c++) {
+    const shape = genShape(rng, 0, 4);
+    const data = genDataSpecial(rng, shape);
+    const s = nextF64Special(rng, 0.3);
+
+    test(`${op}(s) special case ${c}: shape=[${shape.join(",")}] s=${s}`, () => {
+      const ref = scalarElementwiseRuntime(op, data, s);
+      const ctx = `${op}(s) special case ${c} shape=[${shape.join(",")}] s=${s}`;
+
+      const w = WNDArray.fromArray(core, shape, data);
+      try {
+        const got = callResidentScalar(op, w, s);
+        try {
+          assertShapeEqual(shape, got.shape as readonly number[], ctx);
+          assertDataBitIdentical(ref, got.toArray(), ctx);
+        } finally {
+          got.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}
+
+// --- (c) v2 addendum (Baustein-0 F3): curated div(0)/div(-0)/sub-ordering ----
+
+test("div(s) fixture: x.div(0) -> signed Infinity/NaN per data sign, bit-identical to scalarElementwiseRuntime (F3)", () => {
+  const shape = [4];
+  const data = new Float64Array([1, -1, 0, -0]);
+  const s = 0;
+  const ref = scalarElementwiseRuntime("div", data, s);
+  assert.strictEqual(ref[0], Infinity, "sanity: 1/0 == +Inf");
+  assert.strictEqual(ref[1], -Infinity, "sanity: -1/0 == -Inf");
+  assert.ok(Number.isNaN(ref[2]), "sanity: 0/0 is NaN");
+  assert.ok(Number.isNaN(ref[3]), "sanity: -0/0 is NaN");
+
+  const w = WNDArray.fromArray(core, shape, data);
+  try {
+    const got = w.div(s);
+    try {
+      assertDataBitIdentical(ref, got.toArray(), "div(0) fixture [resident]");
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+test("div(s) fixture: x.div(-0) -> sign-flipped Infinity vs x.div(0), bit-identical to scalarElementwiseRuntime (F3)", () => {
+  const shape = [2];
+  const data = new Float64Array([1, -1]);
+  const s = -0;
+  const ref = scalarElementwiseRuntime("div", data, s);
+  assert.strictEqual(ref[0], -Infinity, "sanity: 1/-0 == -Inf");
+  assert.strictEqual(ref[1], Infinity, "sanity: -1/-0 == +Inf");
+
+  const w = WNDArray.fromArray(core, shape, data);
+  try {
+    const got = w.div(s);
+    try {
+      assertDataBitIdentical(ref, got.toArray(), "div(-0) fixture [resident]");
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+test("sub(s) fixture: x.sub(s) == data - s, NOT s - data — order-sensitive curated fixture (F3)", () => {
+  const shape = [2];
+  const data = new Float64Array([3, 10]);
+  const s = 5;
+  const ref = scalarElementwiseRuntime("sub", data, s);
+  assert.strictEqual(ref[0], -2, "sanity: 3 - 5 == -2 (NOT 5 - 3 == 2)");
+  assert.strictEqual(ref[1], 5, "sanity: 10 - 5 == 5 (NOT 5 - 10 == -5)");
+
+  const w = WNDArray.fromArray(core, shape, data);
+  try {
+    const got = w.sub(s);
+    try {
+      assertDataBitIdentical(ref, got.toArray(), "sub order fixture [resident]");
+      const arr = got.toArray();
+      assert.strictEqual(arr[0], -2, "resident sub(s) must compute data - s at index 0");
+      assert.strictEqual(arr[1], 5, "resident sub(s) must compute data - s at index 1");
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+// --- (d) T4b/F1: real-tsc diagnostic-quality pin (mirrors scalar-mean.test.ts) ---
+// The S1 overload conversion of WNDArray's add/sub/mul/div made the
+// DECLARATION ORDER of the two overloads load-bearing, exactly like the
+// NDArray-side W2 conversion (Verify-B finding F1, W2 verify round; proven
+// NOT to be already covered by the type-level UW4 pin in ndarray.test-d.ts —
+// this WASM-parity spec's own Baustein-0 finding F1, since UW4 checks
+// `Guard<Broadcast<...>>` as a standalone type alias, never through a real
+// `.add()` call). This test runs the real compiler on a throwaway fixture
+// (OUTSIDE the repo, so the deliberately-broken code never joins any type
+// corpus) and asserts the message CONTENT.
+
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+test("diagnostic quality (T4b/F1 pin, WASM parity S1): WNDArray broadcast mismatch surfaces the shape-naming message through the overload set", () => {
+  const dir = mkdtempSync(join(tmpdir(), "numtype-wnd-diag-pin-"));
+  try {
+    const residentPath = fileURLToPath(new URL("../src/wasm/resident.ts", import.meta.url).href);
+    const ambientPath = fileURLToPath(new URL("../src/ambient.d.ts", import.meta.url).href);
+    const repoRoot = fileURLToPath(new URL("../..", import.meta.url).href);
+    writeFileSync(
+      join(dir, "probe.ts"),
+      `import type { WNDArray } from ${JSON.stringify(residentPath)};\n` +
+        `declare const a: WNDArray<[2, 3]>;\n` +
+        `declare const b: WNDArray<[4]>;\n` +
+        `a.add(b); // deliberate mismatch — must surface the broadcast message\n` +
+        `a.div(2); // scalar overload — must stay clean\n`,
+    );
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "bundler",
+          noEmit: true,
+          allowImportingTsExtensions: true,
+          skipLibCheck: true,
+          noUncheckedIndexedAccess: true,
+          exactOptionalPropertyTypes: true,
+        },
+        include: ["probe.ts", ambientPath],
+      }),
+    );
+    const res = spawnSync("pnpm", ["exec", "tsc", "--noEmit", "-p", dir], { cwd: repoRoot, encoding: "utf8" });
+    const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
+    assert.notStrictEqual(res.status, 0, `fixture must fail to compile:\n${out}`);
+    assert.ok(
+      out.includes("cannot broadcast shapes [2,3] and [4]"),
+      `the shape-naming broadcast message must survive overload resolution on WNDArray (F1 regression):\n${out}`,
+    );
+    const probeErrors = out.split("\n").filter((l) => l.includes("probe.ts(") && l.includes("error TS"));
+    assert.strictEqual(
+      probeErrors.length,
+      1,
+      `expected exactly ONE fixture error (the bad add; div(2) must resolve cleanly to the scalar overload):\n${out}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

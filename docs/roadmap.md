@@ -307,5 +307,12 @@ grün, netto −4 check:diag, neuer Freeze-Hash. **Kampagnen-Gewinn (aus einem U
 `Omit<ThreadedCoreExports,"memory">`-Cast in threaded.ts verursachte pro `CoreExports`-Member +7
 Instantiations (`keyof`-getriebene Generic-Neuauflösung, kumulativ); der Fix (direkter Cast,
 laufzeit-identisch, vierfach belegt) beseitigt das an der Wurzel — jede Folge-Scheibe kostet auf
-diesem Mechanismus +0. S1–S5 folgen dem etablierten Workflow (Spec → Baustein 0 → Impl → Verify
-A+B+C → Freeze-Re-Pin).
+diesem Mechanismus +0. **S1 (Skalar-Overloads add/sub/mul/div): Umsetzung ERLEDIGT 2026-07-23, Verify-
+Runde A+B+C steht aus** (docs/wasm-parity-scalar-spec.md v2 /-ergebnisse.md): vier Rust/WASM-Kernel
+`nt_scalar_{add,sub,mul,div}_strided` (Einzeiler über den wiederverwendeten S0-`unary_strided`-Kern,
+`data[i] op s` mit gepinnter Operandenordnung) + vier `WNDArray`-Skalar-Overloads (Skalar-zuerst/
+Guard-Träger-zuletzt, D2-v3-Muster proaktiv angewandt), M1 bindet und ist dreifach belegt (36k-Fälle-
+Baustein-0-Differential, committeter M1-Test, Pflicht-Mutant). check:diag-Root +1.165 (dekomponiert:
+CoreExports Δ0, WNDArray-Klassen-Surface +730, Tests/Typ-Pins +435), bench:editor 8 Pins uniform
++721 neu gesetzt, neuer Freeze-Hash `8255821b…`. S2–S5 folgen dem etablierten Workflow (Spec →
+Baustein 0 → Impl → Verify A+B+C → Freeze-Re-Pin).

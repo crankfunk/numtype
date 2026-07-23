@@ -281,3 +281,63 @@ export interface CoreExports {
     outLen: number,
   ): number;
 }
+
+// WASM parity S1 (docs/wasm-parity-scalar-spec.md, D4): scalar elementwise
+// ops (`add`/`sub`/`mul`/`div` with a constant operand). Declared as a
+// FOURTH `export interface CoreExports { ... }` block, appended strictly
+// after every pre-existing line in this file (freeze discipline, same
+// technique as the Kern-07/S0 blocks above it — TypeScript merges
+// same-named interface declarations in the same module automatically, so
+// this augments `CoreExports` without touching a single pre-existing line).
+// `ThreadedCoreExports extends CoreExports` (threaded.ts) inherits these
+// declarations automatically.
+export interface CoreExports {
+  // Nine-parameter convention: `nt_sqrt_strided`'s 8-argument operand/output
+  // form PLUS a `scalar: number` parameter inserted between `dataLen` and
+  // `outDataPtr` — mirrors `nt_fill`'s own `value: number` direct f64
+  // parameter (no pointer needed for a scalar).
+  nt_scalar_add_strided(
+    shapePtr: number,
+    rank: number,
+    stridesPtr: number,
+    offset: number,
+    dataPtr: number,
+    dataLen: number,
+    scalar: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
+  nt_scalar_sub_strided(
+    shapePtr: number,
+    rank: number,
+    stridesPtr: number,
+    offset: number,
+    dataPtr: number,
+    dataLen: number,
+    scalar: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
+  nt_scalar_mul_strided(
+    shapePtr: number,
+    rank: number,
+    stridesPtr: number,
+    offset: number,
+    dataPtr: number,
+    dataLen: number,
+    scalar: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
+  nt_scalar_div_strided(
+    shapePtr: number,
+    rank: number,
+    stridesPtr: number,
+    offset: number,
+    dataPtr: number,
+    dataLen: number,
+    scalar: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
+}

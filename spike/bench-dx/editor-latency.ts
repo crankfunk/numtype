@@ -816,15 +816,22 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // sqrt-parity `CoreExports` member itself contributes +0 here (was +7 before the
 // Omit fix) -- so each future WASM-parity op adds 0 on this mechanism, not +7.
 // See docs/wasm-parity-sqrt-ergebnisse.md.
+// Re-pinned uniformly +721 on 2026-07-23 (WASM-parity S1 / scalar overloads):
+// the four new `nt_scalar_*_strided` CoreExports members themselves contribute
+// +0 here (same Omit-fix mechanism, confirmed at n=4 during S1's own check:diag
+// staging), but every workload instantiates WNDArray -- the four scalar-overload
+// signatures + the private `scalarOp` helper added to the class body move every
+// workload uniformly. Measured twice (byte-identical both times). See
+// docs/wasm-parity-scalar-ergebnisse.md.
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 27745,
-  w2: 29554,
-  w3: 60694,
-  w4: 27908,
-  w5: 33199,
-  w6: 34369,
-  w7: 26917,
-  w8: 34784,
+  w1: 28466,
+  w2: 30275,
+  w3: 61415,
+  w4: 28629,
+  w5: 33920,
+  w6: 35090,
+  w7: 27638,
+  w8: 35505,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

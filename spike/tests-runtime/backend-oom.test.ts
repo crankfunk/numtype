@@ -115,6 +115,13 @@ function makeMockCore(failAtCall?: number): MockCore {
     // WASM parity S0 (docs/wasm-parity-sqrt-spec.md): not used by backend.ts's
     // v1 ops either (sqrt only exists on the resident/threaded backends).
     nt_sqrt_strided: notImplemented("nt_sqrt_strided"),
+    // WASM parity S1 (docs/wasm-parity-scalar-spec.md): not used by
+    // backend.ts's v1 ops either (scalar ops only exist on the
+    // resident/threaded backends).
+    nt_scalar_add_strided: notImplemented("nt_scalar_add_strided"),
+    nt_scalar_sub_strided: notImplemented("nt_scalar_sub_strided"),
+    nt_scalar_mul_strided: notImplemented("nt_scalar_mul_strided"),
+    nt_scalar_div_strided: notImplemented("nt_scalar_div_strided"),
   };
 
   return { core, allocs, frees };

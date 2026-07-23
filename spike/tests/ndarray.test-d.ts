@@ -1108,3 +1108,60 @@ type ITEM_MIXED_RANK_S = Expect<Equal<ItemGuard<[2, 3] | [2, 3, 4], [0, 0]>, [0,
 
 declare const itemDynIndices: number[];
 itemM.item(...itemDynIndices); // F4: dynamic-length spread on a FIXED-rank receiver compiles (IsDynamicRank<Idx> gate, not just RankUnknowable<S>)
+
+// =============================================================================
+// WASM parity S1 (docs/wasm-parity-scalar-spec.md, D6): WNDArray scalar-
+// overload (`add`/`sub`/`mul`/`div`) type pins — WNDArray-side twin of the
+// NDArray W2 pins above (SCALAR_DIV_SHAPE etc.), proving the same
+// scalar-overload machinery on the resident class (second call site of the
+// already-proven `number | Guard<Broadcast<S,B>,...>` overload form — no
+// new type machinery). Plus the T4b-mandated pin (Baustein-0 finding F1):
+// an @ts-expect-error that actually CALLS the overloaded scalar method with
+// a shape-incompatible WNDArray argument — something UW1-UW4 above never do
+// (those probe `Guard<Broadcast<...>>` as a standalone type alias, never
+// through a real method call).
+// =============================================================================
+
+declare const wScalarBase: WNDArray<[2, 3]>;
+const wScalarDivided = wScalarBase.div(2);
+type WSCALAR_DIV_SHAPE = Expect<Equal<(typeof wScalarDivided)["shape"], readonly [2, 3]>>;
+
+declare const wScalarRank0: WNDArray<[]>;
+const wScalarRank0Divided = wScalarRank0.div(2);
+type WSCALAR_DIV_RANK0 = Expect<Equal<(typeof wScalarRank0Divided)["shape"], readonly []>>;
+
+// wide/dynamic-rank receiver: the scalar overload stays callable and
+// degrades exactly like the binary overload already does — never a
+// confident literal claim on an unknowable shape.
+declare const wScalarWide: WNDArray<readonly number[]>;
+const wScalarWideDivided = wScalarWide.div(2);
+type WSCALAR_DIV_WIDE = Expect<Equal<(typeof wScalarWideDivided)["shape"], readonly number[]>>;
+
+// Readonly-S receiver (a literal `readonly [...]` type argument threads
+// through the scalar overload identically to every other op above).
+declare const wScalarReadonlyS: WNDArray<readonly [4, 5]>;
+const wScalarReadonlySDivided = wScalarReadonlyS.div(2);
+type WSCALAR_DIV_READONLY_S = Expect<Equal<(typeof wScalarReadonlySDivided)["shape"], readonly [4, 5]>>;
+
+// union-over-boundary (D2 v2 kink, same as the NDArray side above): a UNION
+// argument spanning both the scalar overload and the WNDArray overload is
+// rejected AS A WHOLE (TS2769), even though each member alone would be valid.
+declare const wScalarOrArray: number | WNDArray<[3]>;
+// @ts-expect-error - a UNION argument spanning both the scalar overload and the WNDArray overload is rejected as a whole (TS2769) even though each member alone is individually valid — same documented D2 v2 kink as the NDArray side above
+wScalarBase.add(wScalarOrArray);
+
+// The old `[1]`-wrap workaround path still compiles and still resolves
+// through the ordinary binary overload, unaffected by the new scalar
+// overload's addition (overload-set growth is additive, not replacing).
+declare const wScalarWrap: WNDArray<[1]>;
+const wScalarWorkaround = wScalarBase.div(wScalarWrap);
+type WSCALAR_DIV_WORKAROUND = Expect<Equal<(typeof wScalarWorkaround)["shape"], readonly [2, 3]>>;
+
+// T4b-mandated pin (Baustein-0 finding F1): exercises the overloaded method
+// with an actual shape-INCOMPATIBLE WNDArray argument — [2,3] and [9,9] are
+// not broadcast-compatible at the trailing dim (3 vs 9, neither equal nor
+// 1) — proving the overload SET rejects it, not just `Guard<Broadcast<...>>`
+// probed in isolation (which is all UW1-UW4 above ever do).
+declare const wScalarIncompatible: WNDArray<[9, 9]>;
+// @ts-expect-error - shapes [2,3] and [9,9] are not broadcast-compatible (3 vs 9); calling the overloaded scalar method with an incompatible WNDArray argument must still be rejected through the real overload set (T4b)
+wScalarBase.add(wScalarIncompatible);

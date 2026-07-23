@@ -14,10 +14,18 @@
 
 use crate::shape::{aligned_effective_strides, checked_element_count, compute_strides, unravel, validate_strided_bounds, KResult};
 
-/// Private generic core: unary counterpart of
+/// Generic core: unary counterpart of
 /// [`crate::kernels::elementwise::binary_strided`] — identical structure, ONE
 /// operand, `F: Fn(f64) -> f64` instead of a binary op.
-fn unary_strided<F: Fn(f64) -> f64>(shape: &[u32], strides: &[u32], offset: u32, data: &[f64], op: F) -> KResult<(Vec<u32>, Vec<f64>)> {
+///
+/// WASM parity S1 (docs/wasm-parity-scalar-spec.md, D2/M4): widened from
+/// private `fn` to `pub(crate) fn` so `kernels::scalar` can reuse it for the
+/// four scalar ops instead of duplicating the iteration kernel — a purely
+/// additive visibility change (grants access, removes nothing); the
+/// monomorphization at THIS file's own `|x| x.sqrt()` call site is
+/// unaffected, so `sqrt_strided`'s codegen/behavior is unchanged (confirmed
+/// by a clean-rebuild byte-identical artifact hash, spec's Baustein-0 probe).
+pub(crate) fn unary_strided<F: Fn(f64) -> f64>(shape: &[u32], strides: &[u32], offset: u32, data: &[f64], op: F) -> KResult<(Vec<u32>, Vec<f64>)> {
     checked_element_count(shape)?;
     validate_strided_bounds(shape, strides, offset, data.len() as u32)?;
 

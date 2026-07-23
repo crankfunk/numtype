@@ -110,7 +110,21 @@ automatisch (dasselbe Crate); M1 bindet erstmals für eine der neuen Ops und ist
 Kampagnen-Gewinn aus einem Umsetzungs-Befund: der `Omit<ThreadedCoreExports,"memory">` →
 direkter-Cast-Fix in threaded.ts (D10, laufzeit-identisch, vierfach belegt) beseitigt die
 `keyof`-getriebene Generic-Neuauflösung an der Wurzel — jede Folge-Scheibe kostet auf diesem
-Mechanismus **+0 statt +7** (vierter Kostenmechanismus, s. Mess-Regeln). S1–S5 offen (FOLLOWUPS).
+Mechanismus **+0 statt +7** (vierter Kostenmechanismus, s. Mess-Regeln).
+**S1 (Skalar-Overloads add/sub/mul/div): Umsetzung ERLEDIGT 2026-07-23, Verify-Runde A+B+C steht
+aus** (docs/wasm-parity-scalar-spec.md v2 /-ergebnisse.md): vier neue Kernel
+`nt_scalar_{add,sub,mul,div}_strided` — jeweils ein Einzeiler über den wiederverwendeten
+S0-`unary_strided`-Kern, Operandenordnung gepinnt (`data[i] − s`, `data[i] / s`) — plus vier
+`WNDArray`-Skalar-Overloads (D2-v3-Muster proaktiv angewandt: Skalar-Overload zuerst, generischer
+Guard-Träger zuletzt, W2-F1-Lektion) und ein neuer privater `scalarOp`-Marshalling-Helfer; die
+vier Bestandsmethoden-Körper byte-identisch in den else-Zweig verschoben. M1 bindet und ist
+dreifach belegt (Baustein-0-36k-Fälle-Differential am echten Kernel, committeter M1-Test über
+contiguous/View/rank-0/size-0/Spezialwerte/`[1]`-Broadcast-Äquivalenz, Pflicht-Mutant); der
+Diagnose-Qualitätstest (T4b, mirrors scalar-mean.test.ts) wurde per Reihenfolgen-Flip
+nicht-vakuös bewiesen. check:diag Root **+1.165** (dekomponiert: CoreExports-4-Member Δ0,
+WNDArray-Klassen-Surface +730, Test-/Typ-Pin-Anhänge +435 — Absolut-Gate ≤+6.000 klar
+eingehalten), stress +721, browser Δ0, bench:editor 8 Pins uniform +721 neu gesetzt, neuer
+Freeze-Hash `8255821b…`. S2–S5 offen (FOLLOWUPS).
 **Zwei Prozess-Lehren, wertvoller als die Optimierung selbst:** (1) Die informelle Vorab-Sondage
 lag um mehr als eine Größenordnung daneben (0,60 gegen gemessene 1,050 bei `k = n`; bei `k = n/2`
 sogar mit falschem Vorzeichen) — live nachgestellt, Ursachen im Sondage-Quelltext belegt
@@ -140,15 +154,23 @@ Session-Zustand).
 ## Aktuelle Pins & Gates (IST-Zahlen; Historie im Projekt-Log)
 
 - **Artefakt-Hash** (Clean-Rebuild, SHA256 von `spike/src/wasm/numtype_core.wasm`):
-  `24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2` (seit WASM-Parität S0/sqrt
-  2026-07-23, von `0b9df4f1…` Kern 11 — der neue `nt_sqrt_strided`-Kernel ändert den Hash legitim;
-  additive-only-Dekomposition, Baustein A hat den Pre-Edit-Rebuild == altem Pin selbst reproduziert.
-  Threads-Artefakt `9743338d…`, bewusst KEIN persistierter Pin — test:threaded beweist seine
-  Bit-Identität zum stable Core. CI-Gate `check:freeze` mit plattform-gelabelter Pin-Menge).
-- **check:diag** Haupt-Pin **206,850 @ 140 Files** (nur Root-Korpus; seit WASM-Parität S0/sqrt
-  2026-07-23, von 206,854 @ 140 — **Δ−4**: die sqrt-Typkosten minus der threaded.ts-Omit-Ersparnis
-  (D10), Dateiset unverändert 140, von allen drei Verifiern reproduziert; Details
-  docs/wasm-parity-sqrt-ergebnisse.md). **Vorheriger Stand: 206,854 @ 140** (seit der topk-Umsetzung
+  `8255821bb1fb42b0367296cc9f64886a4e72968fcc3290086e7ab24309739176` (seit WASM-Parität S1/Skalar-
+  Overloads 2026-07-23, von `24a048c7…` S0/sqrt — die vier neuen `nt_scalar_{add,sub,mul,div}_strided`-
+  Kernel ändern den Hash legitim; additive-only-Dekomposition (neues File `kernels/scalar.rs`, vier
+  abi.rs-Anhänge, `kernels/mod.rs`-Anhang, `unary_strided` → `pub(crate)`), Pre-Edit-Clean-Rebuild
+  hat den alten Pin selbst reproduziert. Threads-Artefakt `046262911b…`, bewusst KEIN persistierter
+  Pin — test:threaded beweist seine Bit-Identität zum stable Core. CI-Gate `check:freeze` mit
+  plattform-gelabelter Pin-Menge). **Vorheriger Stand:** `24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2`
+  (seit WASM-Parität S0/sqrt 2026-07-23, von `0b9df4f1…` Kern 11).
+- **check:diag** Haupt-Pin **208,015 @ 140 Files** (nur Root-Korpus; seit WASM-Parität S1/Skalar-
+  Overloads 2026-07-23, von 206,850 @ 140 — **Δ+1,165**, dekomponiert in drei Stufen (Dateiset
+  unverändert 140, kein Order-Noise): CoreExports-4-Member + backend-oom-Stubs Δ0 (S0/D10-Omit-Fix
+  bei n=4 bestätigt), WNDArray-Klassen-Surface-Umbau (4 Overloads + `scalarOp`) Δ+730, Test-/
+  Typ-Pin-Anhänge Δ+435; Absolut-Gate ≤+6,000 eingehalten. Details
+  docs/wasm-parity-scalar-ergebnisse.md). **Vorheriger Stand: 206,850 @ 140** (seit WASM-Parität
+  S0/sqrt 2026-07-23, von 206,854 @ 140 — **Δ−4**: die sqrt-Typkosten minus der threaded.ts-Omit-
+  Ersparnis (D10), Dateiset unverändert 140, von allen drei Verifiern reproduziert; Details
+  docs/wasm-parity-sqrt-ergebnisse.md). **Davor: 206,854 @ 140** (seit der topk-Umsetzung
   2026-07-23, von 206,801 @ 140 — **Δ+53 reine Typkosten** des in-place-Heap-Körpertauschs plus
   der Testdatei-Erweiterung, KEIN Order-Noise (Dateiset unverändert 140, keine neue Datei);
   Baseline im frischen Worktree reproduziert, im Haupt-Baum bestätigt und von allen drei Verifiern
@@ -165,17 +187,27 @@ Session-Zustand).
   docs/scale-probe-ergebnisse.md). Historie: **201,455 @ 137** war der W5-Stand, von 195,481 —
   Δ+5,873, Aufschlüsselung in docs/op-w5-item-ergebnisse.md — davon nur +623 Quellcode, der Rest
   Test-/Typ-Pin-Kosten; enthält den D6-Befund „`Equal<ItemGuard<...>>`-Message-Pins sind pro
-  Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 106,239 @ 82**
-  (seit WASM-Parität S0/sqrt 2026-07-23, Δ−159 aus der threaded.ts-Omit-Ersparnis, D10; davor
-  106,398 @ 82 seit W5, von 105,758 — Δ+640, ausschließlich aus den geteilten spike/src-Änderungen, kein
-  stress-eigenes File berührt) · **check:diag:browser 2,142 @ 75** (unverändert seit W1,
+  Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 106,960 @ 82**
+  (seit WASM-Parität S1/Skalar-Overloads 2026-07-23, Δ+721 aus dem WNDArray-Klassen-Surface-Umbau
+  — stress importiert `spike/src` direkt; davor 106,239 @ 82 seit S0/sqrt, Δ−159 aus der
+  threaded.ts-Omit-Ersparnis, D10; davor 106,398 @ 82 seit W5, von 105,758 — Δ+640, ausschließlich
+  aus den geteilten spike/src-Änderungen, kein stress-eigenes File berührt) ·
+  **check:diag:browser 2,142 @ 75** (unverändert seit W1 — S1 rührt es Δ0 (browser kompiliert
+  threaded.ts nicht und die WNDArray-Klassen-Surface bewegt browsers Instantiation-Zahl nicht),
   stress/browser ungated by design, `pnpm check` compoundet alle drei).
-- **Testzahlen:** test:core 1591 · test:resident 4345+2 · test:threaded 75 (+4 sqrt-Parität +2 Spezialwerte) ·
-  test:browser 4 · test:package 3 + Typ-Smoke · cargo 169 (+8 sqrt-Kernel) · test:example (Registry-Install +
-  Example-Typcheck + 8 asserted Queries).
+- **Testzahlen:** test:core 1591 · test:resident 4717+2 (+372 S1-Skalar-Overload-Tests: 24 View-Fälle
+  + 100 Broadcast-Äquivalenz + 4 kuratierte Spezialwert-Fixtures + 240 randomisierte Spezialwert-Fälle
+  + 3 kuratierte div(0)/div(-0)/sub-Ordnung-Fixtures + 1 Diagnose-Qualitätstest) · test:threaded 91
+  (+16 S1-Skalar-Parität, davor 75 = +4 sqrt-Parität +2 Spezialwerte) · test:browser 4 · test:package 3
+  + Typ-Smoke · cargo 184 (+15 scalar-Kernel-Tests, davor 169 = +8 sqrt-Kernel) · test:example
+  (Registry-Install + Example-Typcheck + 8 asserted Queries, unberührt).
 - **Editor-Gate:** `bench:editor` W1–**W8** — Instantiation-Pins exact-match hart (seit
-  **WASM-Parität S0/sqrt 2026-07-23** uniform **−159** neu gesetzt = `{w1 27.745, w2 29.554,
-  w3 60.694, w4 27.908, w5 33.199, w6 34.369, w7 26.917, w8 34.784}`; Grund ist der threaded.ts-Omit-Fix
+  **WASM-Parität S1/Skalar-Overloads 2026-07-23** uniform **+721** neu gesetzt = `{w1 28.466,
+  w2 30.275, w3 61.415, w4 28.629, w5 33.920, w6 35.090, w7 27.638, w8 35.505}`; Grund ist der
+  WNDArray-Klassen-Surface-Umbau (jeder Workload instanziiert WNDArray mindestens einmal),
+  zweifach gemessen, byte-identisch. Davor seit **WASM-Parität S0/sqrt 2026-07-23** uniform
+  **−159** neu gesetzt = `{w1 27.745, w2 29.554, w3 60.694, w4 27.908, w5 33.199, w6 34.369,
+  w7 26.917, w8 34.784}`; Grund war der threaded.ts-Omit-Fix
   (D10), der die `keyof`-getriebene Generic-Fixkosten aus JEDEM Workload entfernt — davor seit V0
   uniform +135 über die 7 Altworkloads plus w8 als Scale-Sentinel (Rang 24 + item/slice/topk, mit
   Toggle-Ziel — schützt die publizierte Skalen-Aussage im Dauerbetrieb, weil der volle Sweep nur
@@ -275,7 +307,13 @@ unregistrierten/doppelt gelisteten/fehlenden Dateien, Invariante (d) deckt auch
 
 ## Frozen-baseline discipline (hard, since Kern 06)
 
-New code in files shared with frozen kernels/entry points (abi.rs, matmul_blocked.rs, shape.rs) must be APPENDED strictly after all pre-existing content — mere line shifts change `#[track_caller]` panic-location metadata and thus the compiled bytes of UNTOUCHED functions. The binding freeze proof is the artifact hash from a clean rebuild (SHA256 of spike/src/wasm/numtype_core.wasm), not a plus-lines-only git diff. Pin from Kern 11 (superseded 2026-07-23 by WASM-parity S0/sqrt's `24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2` — the new `nt_sqrt_strided` kernel changes the hash via the same additive-only decomposition): `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` (Kern 11 added a genuine contiguous fast path INSIDE `add_strided`/`binary_strided` themselves — not just new exports like Kern 07 — so the hash legitimately changes again: proof decomposes into (1) pre-edit clean rebuild reproduced the prior Kern-07 pin `7a65d800…` exactly, (2) the new fast path is guarded by a post-validation, post-broadcast condition (`a_shape==b_shape && offsets==0 && both natural strides`) with the pre-existing general `unravel`-based loop otherwise byte-for-byte unchanged, (3) behavioral pins green (`test:core` 817, `test:resident` 4265+2, `cargo` 159 incl. 2 new fast-path-vs-general-path equivalence tests), (4) a mutation proof (`a[i].max(0.0)` in both fast paths) broke 3/159 cargo tests and 158/4267 TS tests, revert restored full green, (5) new hash becomes the pin — docs/kern-11-elementwise-fastpath-ergebnisse.md). Kern-07 lesson still applies generally: a phase that legitimately ADDS exports (not just kernel-body changes) also changes the hash by the same decomposition; append-only is an artifact-bytes argument — TS CLASS BODIES with private constructors take the intent-preserving equivalent instead: insertion-only diffs, zero edits to pre-existing members; specs should say which discipline applies to which file. Threads-path extras: env RUSTFLAGS REPLACES the config-file rustflags (always carry `+simd128`); the threads artifact builds via scripts/build-wasm-threads.sh on pinned nightly-2026-07-09 (+rust-src) with its own target-dir; `thread_local!` is forbidden in the crate (`__tls_base` only initializes in the winning instance); never cache memory.buffer/views — with shared memory this fails SILENTLY (stale length, no detach).
+New code in files shared with frozen kernels/entry points (abi.rs, matmul_blocked.rs, shape.rs) must be APPENDED strictly after all pre-existing content — mere line shifts change `#[track_caller]` panic-location metadata and thus the compiled bytes of UNTOUCHED functions. The binding freeze proof is the artifact hash from a clean rebuild (SHA256 of spike/src/wasm/numtype_core.wasm), not a plus-lines-only git diff.
+
+**Current pin (WASM-parity S1/scalar-overloads, 2026-07-23):** `8255821bb1fb42b0367296cc9f64886a4e72968fcc3290086e7ab24309739176`. The four new `nt_scalar_{add,sub,mul,div}_strided` kernels change the hash legitimately via an additive-only decomposition: new file `kernels/scalar.rs` (reuses S0's `unary_strided` generic core), four `nt_scalar_*_strided` appended strictly to the end of abi.rs, one append to `kernels/mod.rs`, and one visibility-only token change in sqrt.rs (`fn unary_strided` → `pub(crate) fn unary_strided` — additive, behavior-neutral: the pre-edit clean rebuild reproduced the prior pin exactly, all pre-existing sqrt.rs tests stayed green). Mutant proof (kernel closure flipped, caught by both cargo and the committed JS differential, reverted via backup-copy SHA-256 round-trip) and the T4b diagnostic-test non-vacuity proof (overload order flipped in resident.ts, diagnostic test failed as predicted, reverted the same way) both documented in docs/wasm-parity-scalar-ergebnisse.md.
+
+**Previous pin (WASM-parity S0/sqrt, 2026-07-23):** `24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2` — the new `nt_sqrt_strided` kernel changed the hash via the same additive-only decomposition, superseding Kern 11's `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` (Kern 11 added a genuine contiguous fast path INSIDE `add_strided`/`binary_strided` themselves — not just new exports like Kern 07 — so the hash legitimately changed again: proof decomposed into (1) pre-edit clean rebuild reproduced the prior Kern-07 pin `7a65d800…` exactly, (2) the new fast path is guarded by a post-validation, post-broadcast condition (`a_shape==b_shape && offsets==0 && both natural strides`) with the pre-existing general `unravel`-based loop otherwise byte-for-byte unchanged, (3) behavioral pins green (`test:core` 817, `test:resident` 4265+2, `cargo` 159 incl. 2 new fast-path-vs-general-path equivalence tests), (4) a mutation proof (`a[i].max(0.0)` in both fast paths) broke 3/159 cargo tests and 158/4267 TS tests, revert restored full green, (5) new hash becomes the pin — docs/kern-11-elementwise-fastpath-ergebnisse.md).
+
+Kern-07 lesson still applies generally: a phase that legitimately ADDS exports (not just kernel-body changes) also changes the hash by the same decomposition; append-only is an artifact-bytes argument — TS CLASS BODIES with private constructors take the intent-preserving equivalent instead: insertion-only diffs, zero edits to pre-existing members; specs should say which discipline applies to which file. Threads-path extras: env RUSTFLAGS REPLACES the config-file rustflags (always carry `+simd128`); the threads artifact builds via scripts/build-wasm-threads.sh on pinned nightly-2026-07-09 (+rust-src) with its own target-dir; `thread_local!` is forbidden in the crate (`__tls_base` only initializes in the winning instance); never cache memory.buffer/views — with shared memory this fails SILENTLY (stale length, no detach).
 
 ## Toolchain note (2026-07-09)
 

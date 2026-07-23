@@ -24,7 +24,7 @@
  */
 import assert from "node:assert";
 import { after, test } from "node:test";
-import { matmulRuntime, sqrtRuntime, transposeRuntime } from "../src/runtime.ts";
+import { matmulRuntime, scalarElementwiseRuntime, sqrtRuntime, transposeRuntime } from "../src/runtime.ts";
 import { initCore, type CoreExports } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
 import {
@@ -945,5 +945,78 @@ function runSqrtCase(name: string, shape: number[], asView: boolean, rng: Rng, s
   // threaded resident core, contiguous AND on a transposed view.
   runSqrtCase("sqrt threaded parity: special values, contiguous [2,3,4]", [2, 3, 4], false, rng, true);
   runSqrtCase("sqrt threaded parity: special values, transposed view [4,3,2]", [4, 3, 2], true, rng, true);
+}
+
+// ---------------------------------------------------------------------------
+// WASM parity S1 (docs/wasm-parity-scalar-spec.md, D6): `WNDArray.{add,sub,
+// mul,div}(s)` threaded-vs-stable parity. Same non-pool-routed reasoning as
+// `sqrt` above (spec's Nicht-Ziele: the pool only ever routes
+// `threadedMatmul`) — the scalar ops run directly on the resident core, on
+// BOTH the stable and threads artifacts, since they're the same crate.
+// Extends the file's established threaded-vs-stable differential to the
+// four scalar ops, reusing the persistent `pools`/`stableCore` set up above.
+// ---------------------------------------------------------------------------
+
+type ScalarOp = "add" | "sub" | "mul" | "div";
+const SCALAR_OPS: readonly ScalarOp[] = ["add", "sub", "mul", "div"];
+
+function callResidentScalar(op: ScalarOp, w: AnyWNDArray, s: number): AnyWNDArray {
+  if (op === "add") return w.add(s);
+  if (op === "sub") return w.sub(s);
+  if (op === "mul") return w.mul(s);
+  return w.div(s);
+}
+
+function runScalarCase(name: string, op: ScalarOp, shape: number[], asView: boolean, rng: Rng, s: number, special = false): void {
+  test(name, () => {
+    const data = special ? genDataSpecial(rng, shape) : genData(rng, shape);
+    const ref = scalarElementwiseRuntime(op, data, s);
+
+    const stableOperand = makeOperand(stableCore, asView, shape, data);
+    let stableData: Float64Array;
+    try {
+      const got = callResidentScalar(op, stableOperand.arr, s);
+      try {
+        assertShapeEqual(shape, got.shape as readonly number[], `${name}: stable shape`);
+        stableData = got.toArray();
+      } finally {
+        got.dispose();
+      }
+    } finally {
+      disposeAll(stableOperand);
+    }
+    assertDataBitIdentical(ref, stableData, `${name}: runtime.ts vs stable resident`);
+
+    for (const wc of WORKER_COUNTS) {
+      const pool = pools.get(wc)!;
+      const operand = makeOperand(pool.core, asView, shape, data);
+      try {
+        const got = callResidentScalar(op, operand.arr, s);
+        try {
+          assertShapeEqual(shape, got.shape as readonly number[], `${name} workers=${wc}`);
+          const gotData = got.toArray();
+          assertDataBitIdentical(ref, gotData, `${name} workers=${wc} vs runtime.ts`);
+          assertDataBitIdentical(stableData, gotData, `${name} workers=${wc} vs stable resident`);
+        } finally {
+          got.dispose();
+        }
+      } finally {
+        disposeAll(operand);
+      }
+    }
+  });
+}
+
+{
+  const rng = makeRng(0x5343414c5f5448524en); // "SCAL_THRN"-ish
+  for (const op of SCALAR_OPS) {
+    runScalarCase(`${op}(s) threaded parity: contiguous [2,3,4]`, op, [2, 3, 4], false, rng, 2.5);
+    // Pflicht view case (spec D6): a transposed view on every pool AND stable.
+    runScalarCase(`${op}(s) threaded parity: transposed view [4,3,2]`, op, [4, 3, 2], true, rng, 2.5);
+    // C-2 lesson (from the S0/sqrt verify round): at least one genDataSpecial
+    // case per op, contiguous AND view, directly on the threads artifact.
+    runScalarCase(`${op}(s) threaded parity: special values, contiguous [2,3,4]`, op, [2, 3, 4], false, rng, 2.5, true);
+    runScalarCase(`${op}(s) threaded parity: special values, transposed view [4,3,2]`, op, [4, 3, 2], true, rng, 2.5, true);
+  }
 }
 

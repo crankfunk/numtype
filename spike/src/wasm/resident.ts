@@ -453,8 +453,29 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
    * `wasmAdd`, routed through the strided kernel (contiguous handles pass
    * natural strides): operand data stays resident; only the four shape/
    * stride arrays are marshalled per call, and a fresh output buffer is
-   * allocated for the result (never aliasing either operand). */
-  add<B extends Shape>(other: Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>> {
+   * allocated for the result (never aliasing either operand).
+   *
+   * Scalar overload (WASM parity S1, docs/wasm-parity-scalar-spec.md, D5):
+   * `w.add(s)` for a plain `number` `s` is shape-PRESERVING (NumPy-scalar
+   * semantics, same as `NDArray.add`'s own W2 scalar overload — not a
+   * `[1]`-broadcast), routed through the new `nt_scalar_add_strided` kernel
+   * via the private `scalarOp` helper below. No guard on the scalar (every
+   * finite/non-finite `number` is valid, IEEE propagation only).
+   *
+   * Declaration ORDER of the two overloads is LOAD-BEARING (W2-F1 lesson,
+   * proactively applied here as D2-v3): the scalar overload is declared
+   * FIRST, the generic `Guard`-carrying overload LAST — on a failed overload
+   * set TS surfaces the error of the LAST candidate, so this order keeps the
+   * shape-naming broadcast message intact instead of collapsing behind the
+   * scalar decoy. Resolution is unaffected: a `number` argument matches the
+   * scalar overload first regardless of declaration order. Pinned by the
+   * diagnostic-quality test in special-values.test.ts (T4b). */
+  add(s: number): WNDArray<S>;
+  add<B extends Shape>(other: Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>>;
+  add<B extends Shape>(other: number | Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>> | WNDArray<S> {
+    if (typeof other === "number") {
+      return this.scalarOp("add", other);
+    }
     this.assertLive("add");
     const o = other as unknown as WNDArray<B>;
     o.assertLive("add");
@@ -516,8 +537,20 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
   /** Broadcasting elementwise subtract (Kern 07) — structural clone of
    * `add` modulo the entry point (`nt_sub_strided`) and message strings;
    * same scratch-list/`finally` discipline, same fresh-output-buffer rule,
-   * same pre-allocation shape validation. */
-  sub<B extends Shape>(other: Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>> {
+   * same pre-allocation shape validation.
+   *
+   * Scalar overload (WASM parity S1, docs/wasm-parity-scalar-spec.md, D5):
+   * structural mirror of `add`'s own scalar overload above — shape-
+   * preserving NumPy-scalar semantics, no guard on the scalar, routed
+   * through `nt_scalar_sub_strided` via `scalarOp`. Operand order PINNED:
+   * `data[i] - s`, NOT `s - data[i]` (same LOAD-BEARING declaration order as
+   * `add`'s — see its doc comment). */
+  sub(s: number): WNDArray<S>;
+  sub<B extends Shape>(other: Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>>;
+  sub<B extends Shape>(other: number | Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>> | WNDArray<S> {
+    if (typeof other === "number") {
+      return this.scalarOp("sub", other);
+    }
     this.assertLive("sub");
     const o = other as unknown as WNDArray<B>;
     o.assertLive("sub");
@@ -572,8 +605,19 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
   }
 
   /** Broadcasting elementwise multiply (Kern 07) — structural clone of
-   * `add` modulo the entry point (`nt_mul_strided`) and message strings. */
-  mul<B extends Shape>(other: Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>> {
+   * `add` modulo the entry point (`nt_mul_strided`) and message strings.
+   *
+   * Scalar overload (WASM parity S1, docs/wasm-parity-scalar-spec.md, D5):
+   * structural mirror of `add`'s own scalar overload above — shape-
+   * preserving NumPy-scalar semantics, no guard on the scalar, routed
+   * through `nt_scalar_mul_strided` via `scalarOp` (same LOAD-BEARING
+   * declaration order as `add`'s — see its doc comment). */
+  mul(s: number): WNDArray<S>;
+  mul<B extends Shape>(other: Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>>;
+  mul<B extends Shape>(other: number | Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>> | WNDArray<S> {
+    if (typeof other === "number") {
+      return this.scalarOp("mul", other);
+    }
     this.assertLive("mul");
     const o = other as unknown as WNDArray<B>;
     o.assertLive("mul");
@@ -631,8 +675,21 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
    * modulo the entry point (`nt_div_strided`) and message strings. Pure
    * IEEE 754 (see `kernels::elementwise` / spec): no zero checks, no
    * throws for a zero divisor — `x/0`, `0/0` flow through into the output
-   * data as signed infinity / NaN. */
-  div<B extends Shape>(other: Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>> {
+   * data as signed infinity / NaN.
+   *
+   * Scalar overload (WASM parity S1, docs/wasm-parity-scalar-spec.md, D5):
+   * structural mirror of `add`'s own scalar overload above — shape-
+   * preserving NumPy-scalar semantics, no guard on the scalar (same pure-
+   * IEEE contract: `x/0 -> +/-Infinity`, `0/0 -> NaN`), routed through
+   * `nt_scalar_div_strided` via `scalarOp`. Operand order PINNED: `data[i] /
+   * s`, NOT `s / data[i]` (same LOAD-BEARING declaration order as `add`'s —
+   * see its doc comment). */
+  div(s: number): WNDArray<S>;
+  div<B extends Shape>(other: Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>>;
+  div<B extends Shape>(other: number | Guard<Broadcast<S, B>, WNDArray<B>>): WNDArray<OkShape<Broadcast<S, B>>> | WNDArray<S> {
+    if (typeof other === "number") {
+      return this.scalarOp("div", other);
+    }
     this.assertLive("div");
     const o = other as unknown as WNDArray<B>;
     o.assertLive("div");
@@ -1202,6 +1259,64 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
       // ARE the same dims, so the round trip through unknown is sound here.
       return WNDArray.fresh<S>(this.core, [...this.shape] as unknown as S, outDataBuf.ptr, len);
     } finally {
+      for (const buf of scratch) freeBuf(this.core, buf);
+    }
+  }
+
+  /** WASM parity S1 (docs/wasm-parity-scalar-spec.md, D5): private
+   * marshalling helper shared by the four scalar overloads
+   * (`add`/`sub`/`mul`/`div`) above — marshals ONCE (instead of duplicating
+   * the shape/strides/output-buffer dance four times) and selects the
+   * kernel entry point via a 4-way switch on the op key, mirroring
+   * `scalarElementwiseRuntime`'s own dispatcher shape (runtime.ts). Mirrors
+   * `sqrt()`'s own marshalling mechanics below (single strided operand,
+   * fresh output buffer, validate-before-alloc, scratch `finally`), plus
+   * the `scalar: number` parameter inserted between the data block and the
+   * output block (same nine-parameter convention as every
+   * `nt_scalar_*_strided` ABI entry). Shape-preserving, no broadcast:
+   * `outShape === this.shape`, even at rank 0. The four WASM exports are
+   * context-free functions (no JS `this`), so assigning one to `kernel`
+   * without binding is correct. */
+  private scalarOp(op: "add" | "sub" | "mul" | "div", s: number): WNDArray<S> {
+    this.assertLive(op);
+    const outLen = product(this.shape);
+
+    const scratch: ScratchBuf[] = [];
+    try {
+      const shapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(shapeBuf);
+      const stridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(stridesBuf);
+      const outDataBuf = allocBytes(this.core, outLen * 8);
+
+      const kernel =
+        op === "add"
+          ? this.core.nt_scalar_add_strided
+          : op === "sub"
+            ? this.core.nt_scalar_sub_strided
+            : op === "mul"
+              ? this.core.nt_scalar_mul_strided
+              : this.core.nt_scalar_div_strided;
+
+      const status = kernel(
+        shapeBuf.ptr,
+        this.shape.length,
+        stridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        s,
+        outDataBuf.ptr,
+        outLen,
+      );
+      if (status !== 0) {
+        freeBuf(this.core, outDataBuf); // fresh output buffer never escapes on failure
+        throw new Error(`wasm resident nt_scalar_${op}_strided: status ${status} for shape [${this.shape.join(",")}]`);
+      }
+      return WNDArray.fresh<S>(this.core, [...this.shape] as unknown as S, outDataBuf.ptr, outLen);
+    } finally {
+      // Ephemeral per-call scratch: always freed — success, kernel failure,
+      // or an OOM throw between the allocations above.
       for (const buf of scratch) freeBuf(this.core, buf);
     }
   }

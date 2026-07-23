@@ -16,7 +16,7 @@
 import assert from "node:assert";
 import { test } from "node:test";
 import { NDArray } from "../src/ndarray.ts";
-import { elementwiseBinary, sqrtRuntime, transposeRuntime } from "../src/runtime.ts";
+import { elementwiseBinary, scalarElementwiseRuntime, sqrtRuntime, transposeRuntime } from "../src/runtime.ts";
 import { initCore } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
 import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
@@ -347,3 +347,169 @@ test("sqrt: size-0 dim [0,3]", () => {
     w.dispose();
   }
 });
+
+// =============================================================================
+// WASM parity S1 (docs/wasm-parity-scalar-spec.md, D6): `WNDArray.{add,sub,
+// mul,div}(s)` scalar-overload M1 differential against the naive reference
+// (`scalarElementwiseRuntime`) — contiguous, transposed view, sliced view,
+// offset window, rank-0, and a size-0 dim, per op. Reference is computed via
+// `w.toArray()` BEFORE the op (the logically-ordered view content), then
+// `scalarElementwiseRuntime` over that — the same technique this file's own
+// sqrt block above uses. Plus a `[1]`-broadcast equivalence differential
+// (rank >= 1) against the pre-existing binary overload path.
+// =============================================================================
+
+type ScalarOp = "add" | "sub" | "mul" | "div";
+const SCALAR_OPS: readonly ScalarOp[] = ["add", "sub", "mul", "div"];
+
+function callResidentScalar(op: ScalarOp, w: AnyWNDArray, s: number): AnyWNDArray {
+  if (op === "add") return w.add(s);
+  if (op === "sub") return w.sub(s);
+  if (op === "mul") return w.mul(s);
+  return w.div(s);
+}
+
+/** Runs `w.op(s)`, computes the reference via `w.toArray()` (BEFORE the op —
+ * the view's own logically-ordered content) piped through
+ * `scalarElementwiseRuntime`, and asserts shape + bit-identity. Disposes the
+ * op's result; the caller owns `w`/any view chain. */
+function assertScalarOpMatches(op: ScalarOp, w: AnyWNDArray, s: number, ctx: string): void {
+  const refData = scalarElementwiseRuntime(op, w.toArray(), s);
+  const got = callResidentScalar(op, w, s);
+  try {
+    assertShapeEqual(w.shape as readonly number[], got.shape as readonly number[], ctx);
+    assertDataBitIdentical(refData, got.toArray(), ctx);
+  } finally {
+    got.dispose();
+  }
+}
+
+for (const op of SCALAR_OPS) {
+  test(`${op}(s): contiguous [2,3]`, () => {
+    const shape = [2, 3];
+    const data = new Float64Array([1, -2.5, 3, 4, -5, 6]);
+    const w = WNDArray.fromArray(core, shape, data);
+    try {
+      assertScalarOpMatches(op, w, 2.5, `${op}(s) contiguous`);
+    } finally {
+      w.dispose();
+    }
+  });
+
+  test(`${op}(s): transposed view (non-natural strides)`, () => {
+    const shape = [3, 2];
+    const refData = new Float64Array([1, -2.5, 3, 4, -5, 6]);
+    const { arr: view, owners } = makeView(shape, refData);
+    try {
+      assertScalarOpMatches(op, view, 2.5, `${op}(s) transposed view`);
+    } finally {
+      for (const h of owners) h.dispose();
+    }
+  });
+
+  test(`${op}(s): sliced view (step slice, non-contiguous strides, offset 0)`, () => {
+    // [4,3] -> rows {0,2} via step 2 -> shape [2,3], strides [6,1] (non-natural).
+    const baseShape = [4, 3];
+    const baseData = Array.from({ length: 12 }, (_, i) => (i + 1) * (i + 1));
+    const w = WNDArray.fromArray(core, baseShape, baseData);
+    try {
+      const view = w.slice({ step: 2 }, null); // O(1) view, non-natural strides
+      try {
+        assertScalarOpMatches(op, view, 2.5, `${op}(s) sliced view`);
+      } finally {
+        view.dispose();
+      }
+    } finally {
+      w.dispose();
+    }
+  });
+
+  test(`${op}(s): offset window (1-D, nonzero base offset, natural stride)`, () => {
+    // [6] -> rows 2.. -> shape [4], offset 2, stride 1 (natural, just shifted).
+    const baseShape = [6];
+    const baseData = [0, 1, 4, 9, 16, 25];
+    const w = WNDArray.fromArray(core, baseShape, baseData);
+    try {
+      const view = w.slice({ start: 2 }); // O(1) view, offset 2
+      try {
+        assertScalarOpMatches(op, view, 2.5, `${op}(s) offset window`);
+      } finally {
+        view.dispose();
+      }
+    } finally {
+      w.dispose();
+    }
+  });
+
+  test(`${op}(s): rank-0 scalar`, () => {
+    const shape: readonly number[] = [];
+    const data = new Float64Array([7]);
+    const w = WNDArray.fromArray(core, shape, data);
+    try {
+      assertScalarOpMatches(op, w, 3, `${op}(s) rank-0`);
+    } finally {
+      w.dispose();
+    }
+  });
+
+  test(`${op}(s): size-0 dim [0,3]`, () => {
+    const shape = [0, 3];
+    const data = new Float64Array([]);
+    const w = WNDArray.fromArray(core, shape, data);
+    try {
+      assertScalarOpMatches(op, w, 2, `${op}(s) size-0 dim`);
+    } finally {
+      w.dispose();
+    }
+  });
+}
+
+// --- [1]-broadcast equivalence differential (rank >= 1, D6 mandatory) -------
+// `w.op(s)` byte-identical to `w.op(WNDArray.fromArray([1], [s]))` — the
+// pre-existing binary broadcast overload — proves semantic equivalence where
+// both paths exist. Rank-0 is deliberately NOT covered here ([1]-broadcast
+// would turn `[]` into `[1]`, exactly the divergence the scalar overload's
+// shape-preserving semantics exists to avoid).
+
+function callResidentBinary(op: ScalarOp, a: AnyWNDArray, b: AnyWNDArray): AnyWNDArray {
+  if (op === "add") return a.add(b);
+  if (op === "sub") return a.sub(b);
+  if (op === "mul") return a.mul(b);
+  return a.div(b);
+}
+
+{
+  const rng = makeRng(0x5343414c5f425243n); // "SCAL_BRC"
+  const CASE_COUNT = 100;
+  for (let c = 0; c < CASE_COUNT; c++) {
+    const op = SCALAR_OPS[c % SCALAR_OPS.length]!;
+    const rank = rng.nextInt(1, 3);
+    const shape = Array.from({ length: rank }, () => rng.nextInt(1, 5));
+    const data = genData(rng, shape);
+    const s = rng.nextF64();
+
+    test(`${op}(s) case ${c}: [1]-broadcast equivalence, shape=[${shape.join(",")}] s=${s}`, () => {
+      const w = WNDArray.fromArray(core, shape, data);
+      const wrap = WNDArray.fromArray(core, [1], [s]);
+      try {
+        const viaScalar = callResidentScalar(op, w, s);
+        try {
+          const viaBroadcast = callResidentBinary(op, w, wrap);
+          try {
+            const ctx = `${op}(s) case ${c} shape=[${shape.join(",")}] s=${s}`;
+            assertShapeEqual(shape, viaScalar.shape as readonly number[], `${ctx}: scalar-overload shape must equal the ORIGINAL shape`);
+            assertShapeEqual(viaBroadcast.shape as readonly number[], viaScalar.shape as readonly number[], `${ctx}: scalar vs [1]-broadcast shape`);
+            assertDataBitIdentical(viaBroadcast.toArray(), viaScalar.toArray(), ctx);
+          } finally {
+            viaBroadcast.dispose();
+          }
+        } finally {
+          viaScalar.dispose();
+        }
+      } finally {
+        w.dispose();
+        wrap.dispose();
+      }
+    });
+  }
+}
