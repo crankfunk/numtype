@@ -219,6 +219,10 @@ Session-Zustand).
   installiert; im interaktiven Owner-Terminal läuft der Hook normal). Darum:
   `cd <root> 2>/dev/null; …` (Semikolon) oder `git -C`; `&&` direkt nach cd bricht
   die Kette ab. Kein `nvm install` als „Fix" — löst es nicht (2026-07-21 verifiziert).
+  Zwei weitere zsh-Fallen (beide 2026-07-23 in CI-Watchern getroffen): **`status` ist read-only**
+  (Alias für `$?`) — `status=$(…)` wirft „read-only variable", nie an `status` zuweisen; und der
+  Pipe-Exit-Array heißt **`$pipestatus[1]`**, nicht `${PIPESTATUS[0]}` (bash-Name, in zsh leer). Für
+  „auf CI warten" `gh run watch <run-id> --exit-status` statt einer eigenen Poll-Schleife.
 - **Arbeitsregeln aus der Scale-/topk-Serie (2026-07-22):** (6) **Ein Gate muss die GESUNDHEIT
   seines eigenen Messlaufs mitprüfen, nicht nur dessen Kennzahl.** `enforceHardGate` pinnte über
   Monate Instantiation-Zahlen aus Programmen, die mit 7x TS2591 fehlschlugen, weil es
