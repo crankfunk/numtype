@@ -222,3 +222,116 @@ den Heap ersetzen (Abweichung von der Append-Konvention ist in der Spec vorab ge
 begründet), die heutige Sortierung wörtlich als Orakel in den Test verschieben, und der
 Differentialtest über NaN-Bitmuster, `+0`/`-0`, Gleichstände und Randfälle (`k = 0`, `k = n`,
 `n = 1`). Erst dort bindet die Bit-Identität als Testpflicht statt als Messvoraussetzung.
+
+---
+
+# Phase-2-Umsetzung (PURE HEAP / D8) — ERLEDIGT 2026-07-23
+
+Status: **Umsetzung abgeschlossen**, Verify-Runde A+B+C durchgeführt (alle drei grün). Jede Zahl
+unten stammt aus einem Kommando mit geprüftem Exit-Code.
+
+## Was umgesetzt wurde
+
+`topkRuntime` (spike/src/runtime.ts) wurde **an Ort und Stelle** von der Vollsortierung
+(O(n log n) über alle n Indizes) auf einen **größenbeschränkten Max-Heap** (O(n log k))
+umgestellt — der mechanisch aus D6 berechnete Ausgang PURE HEAP (t* = 1,0). Die Konstruktion ist
+der in Phase 1 über 184 Zellen bit-identisch bewiesene Heap-Kandidat B aus
+spike/bench-core/topk-selection.ts, wortgetreu portiert (zwei parallele typisierte Arrays für
+Werte + Quellindizes; Wurzel = schlechtestes gehaltenes Element; Ersetzen-bei-Verbesserung +
+Resift; finale O(k log k)-Sortierung mit DEMSELBEN Comparator-Ausdruck; `values[i]` aus dem
+ursprünglichen `data`-Array re-gelesen, nie aus einem Heap-Wert — D2 Punkt 4).
+
+- `topkCompareValues` bleibt **byte-unverändert** und wird wiederverwendet.
+- Die In-Place-Ersetzung bricht bewusst runtime.ts' Append-Konvention — **in der Spec vorab
+  genehmigt** (Absatz „Vorab-Genehmigung der In-Place-Abweichung" vor D8). Weder COVENANT M4
+  (Anker nur die drei Rust-Dateien) noch die Frozen-baseline-Disziplin betreffen die
+  freistehende Funktion `topkRuntime`.
+- `NDArray.topk`s Signatur, Aufrufer, Validierungsverhalten und jede beobachtbare Ausgabe bleiben
+  unverändert.
+
+## Test-Migration, Differentialtest, Mutant (D11)
+
+Die heutige Full-Sort-Fassung lebt **wörtlich** als test-lokales Orakel (`topkOracleFullSort` +
+`topkOracleCompareValues`) in spike/tests-runtime/argmax-topk.test.ts weiter — bewusst KEINE
+unabhängig geschriebene Referenz (das ist `bruteTopk`, unverändert daneben). Drei neue Tests:
+
+1. **Feste Grenzfälle:** n=0/k=0, n=1/k=0, n=1/k=1, all-NaN-Vektor (diverse k), all-equal-Vektor,
+   +0/-0-Gleichstand-Fixture, ±Infinity gemischt, k=n-1, k=n.
+2. **Randomisierter Differentialtest:** 300 Fälle, n über 0..40, k gleichverteilt über 0..n,
+   `genDataSpecial` (NaN/±0/±Inf/Subnormale); Nicht-Vakuität (trifft NaN- und Gleichstands-Pfade)
+   assertet. Pro Fall indices deepStrictEqual, values bit-identisch (Object.is).
+3. **Exakte nicht-kanonische NaN-Payload** (`0x7ff800000000beef`) direkt über DataView in den
+   Backing-Buffer geschrieben (nie Array-Literal — der in D11 mandatierte JIT-Fallstrick),
+   byte-identisch durch Heap UND Orakel via `bitsAt` geprüft.
+
+**Pflicht-Mutant (T5):** Eviction-Vergleich `cmp(v,i,rv,ri) < 0` → `> 0` in der Heap-Schleife →
+`node --test spike/tests-runtime/argmax-topk.test.ts` **exit 1, 4/33 rot** (darunter BEIDE neuen
+Differentialtests). Revert per Backup-Kopie (cp nach /tmp, zurück), diff-Beweis byte-identisch
+(SHA `d125527…`), erneuter Lauf **33/33 grün, exit 0**. Kein `git checkout` auf uncommittete
+Arbeit (harte Arbeitsregel 1).
+
+## Gate-Block
+
+| Gate | Ergebnis | Exit |
+|---|---|---|
+| `pnpm check` (Dreier-Verbund) | sauber | 0 |
+| `pnpm check:diag` | **206.854 @ 140** (Δ+53 gg. 206.801 @ 140; ≤ +3.000-Gate) | 0 |
+| `pnpm check:diag:stress` | 106.398 @ 82 (**Δ0**) | 0 |
+| `pnpm check:diag:browser` | 2.142 @ 75 (**Δ0**) | 0 |
+| `pnpm test:core` | **1591 / 1591** (1588 + 3 neu) | 0 |
+| `pnpm test:resident` | 4278 pass, 0 fail (2 skipped) | 0 |
+| `cargo test` | 161 passed | 0 |
+| `pnpm check:freeze` | Hash byte-identisch `0b9df4f1…` (kein Rust berührt) | 0 |
+| `pnpm bench:editor` | 8 Pins Δ0, Hard-Gate PASS | 0 |
+| `pnpm test:example` | 8 Queries + Demo grün | 0 |
+| `graph-a-lama query lint` | 0 Befunde (S1) | — |
+
+## Pins (Δ-Zerlegung)
+
+Baseline im frischen Worktree @ d9dd5a0 (alte Full-Sort, `heapVal`-Count 0) reproduziert:
+**206.801 @ 140**. Nach der Scheibe: **206.854 @ 140**. Da KEINE Datei hinzukommt (Dateiset
+bleibt 140), gibt es **kein Order-Noise** — der **Δ+53 ist reine Typkosten** des
+runtime.ts-Körpertauschs plus der Testdatei-Erweiterung. Weit unter dem D12-Gate von +3.000.
+stress/browser exakt Δ0, bench:editor alle 8 Pins Δ0 — die öffentliche NDArray-Fläche ist
+unberührt. Neuer Root-Pin: **206.854 @ 140**.
+
+## Post-Verification-Addendum
+
+Verify-Runde Stufe 3, drei Fresh-Context-Verifier parallel (A/B je im eigenen `isolation:
+worktree` mit appliziertem Patch, um Mutanten-Kollision im geteilten Haupt-Baum zu vermeiden; C
+read-only). **Alle drei grün, kein Blocker/Major/Minor.**
+
+- **Baustein A (Spec + alle Gates frisch + eigener Mutant) — CONFIRMED.** D8/D2/D11/T6 einzeln
+  gegen den Diff konform (hohe Konfidenz). Baseline 206.801 → 206.854 (Δ+53) selbst reproduziert;
+  alle Gates frisch grün (stress/browser Δ0, bench:editor 8 Pins Δ0, test:core 1591, test:resident
+  4278, cargo 161, check:freeze byte-identisch, graph frisch gebaut + lint 0). Eigener Mutant —
+  Off-by-one `size < k` → `size <= k`, verschieden vom bereits gefangenen — von BEIDEN neuen
+  Differentialtests plus zwei Bestandstests gefangen (Nicht-Vakuität aus zwei Testgenerationen),
+  byte-identisch revertiert ohne `git checkout`. Zwei Nits: Doc-Platzierung (D13) war nicht Teil
+  des Diffs (bewusst, hiermit erledigt); ein harmloser System-Reminder aus dem eigenen Revert.
+- **Baustein B (adversarial) — keine Blocker/Major/Minor.** Unabhängig geschriebene Full-Sort-
+  Referenz (andere Code-Form: decorate-sort-undecorate, eigener PRNG), 3517 Fälle inkl. vier NaNs
+  mit vier distinkten nicht-kanonischen Payloads gleichzeitig, dichte Duplikat-Cluster,
+  ausschließlich-Spezialwert-Vektoren, geslicte NDArray-Empfänger (9/9) → **0 Fehler**. 6/6
+  angeforderte Mutantenklassen (siftUp/siftDown, Parent-Formel, Kinder-Off-by-one,
+  Vergleichsrichtung, Sortierrichtung, Kapazitätsgrenze) vom committeten Suite gefangen. Zwei
+  zusätzliche Mutanten **beweisbar semantisch inert** (KEINE Testlücken): (3a) siftDowns
+  Kinder-Labels vertauscht = order-unabhängiger Max-von-3-Scan; **(7) Root-Replace `< 0` → `<= 0`
+  inert, weil der Scan-Index im Ersetzungs-Zweig immer strikt größer ist als jeder gehaltene Index
+  — `cmp` wird an dieser Stelle nie exakt 0.** Letzteres ist eine schöne unabhängige Bestätigung
+  der Korrektheit; der Tiebreak `|| (aIdx - bIdx)` ist dort toter-aber-harmloser Code und bleibt
+  bewusst identisch zur bit-identisch bewiesenen Bench-Konstruktion (nicht wegoptimiert).
+  Messbedingungen selbst reproduziert (Δ+53, stress/browser Δ0, keine Korpus-Kontamination),
+  Typ-Fläche unberührt.
+- **Baustein C (covenant-verify) — keine Befunde.** S1 (lint 0 Errors, Regel `covenant-s1` ↔
+  Invariante S1 1:1, Diff fügt keinen runtime→Test/Demo-Import hinzu), M1 (topk hat weiterhin
+  keinen WASM-Kernel — `grep -rn topk crates/core/src/` null Treffer —, Bit-Identitäts-PFLICHT
+  bindet also laut v5-Präzisierung nicht; Paritätslücke in FOLLOWUPS getrackt), M2/M3/M4/M5/Z1/Z2
+  eigenständig gegen den Diff verifiziert — alle unberührt. Nicht-Ziele gewahrt: der Diff
+  implementiert exakt den `t*=1,0`-Ausgang (unbedingter Heap, kein Per-Call-Routing), nicht den
+  verworfenen Hybrid. Die Append-Abweichung korrekt als außerhalb des Covenant-Mandats an Baustein
+  A verwiesen.
+
+**Merge-Fazit:** kein Blocker/Major, keine Code-Änderung nötig. Die einzige offene Aktion (die
+D13-Doc-Platzierung, von A als Nit benannt) ist mit dieser Doc-Aktualisierung + den Updates in
+roadmap.md/CLAUDE.md/FOLLOWUPS.md erledigt.

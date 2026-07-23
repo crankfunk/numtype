@@ -90,12 +90,17 @@ Frontier-Zweitmeinung änderten das Design VOR dem Bau an fünf Stellen (ohne si
 Cache-Treffer statt Skalierung gemessen — Faktor 19); Verify-B fand ein VAKUÖSES Hover-Gate auf
 der Rang-Achse (behoben, 8 Mutationen belegen die Wirksamkeit); zwei Verifier widerlegten
 unabhängig die „überproportional"-Charakterisierung der Datei-Achse, bevor sie publiziert wurde.
-**topk-Selektion, Phase 1 (Messung) ERLEDIGT 2026-07-22, Umsetzung OFFEN**
+**topk-Selektion KOMPLETT (Messung 2026-07-22, Umsetzung ERLEDIGT 2026-07-23)**
 (docs/op-topk-selection-spec.md v6 /-ergebnisse.md): Verdikt **reiner Heap**, mechanisch aus der
 vorregistrierten Regel berechnet — null duale Verletzungen im 92-Zellen-Raster, 57 Gewinn-Zellen,
 `n = 1e6, k = 1` von 280 ms auf 3,8 ms (Faktor 74); Kehrseite offengelegt: sieben Zellen ab
-`k/n = 0,85` absolut langsamer, max. +13,95 ms. Die Implementierung (`topkRuntime` in-place +
-Orakel-Umzug in den Test + Differentialtest) ist eine eigene Scheibe mit eigener Verify-Runde.
+`k/n = 0,85` absolut langsamer, max. +13,95 ms. **Phase 2 (Umsetzung):** `topkRuntime` in-place
+durch den größenbeschränkten Max-Heap (O(n log k)) ersetzt, bit-identisch zur alten Full-Sort
+(Orakel-Umzug + Differentialtest über 300+ Fälle inkl. exakter nicht-kanonischer NaN-Payload),
+voller Verify-Katalog A+B+C alle grün (Root-Pin 206.854 @ 140, Δ+53 reine Typkosten; stress/browser/
+bench:editor Δ0). NDArray-only, kein WASM-Kernel (M1 bindet nicht); künftiger `nt_topk`-Kernel
+spiegelt den Heap (FOLLOWUPS). In-Place-Bruch der runtime.ts-Append-Konvention in der Spec vorab
+genehmigt.
 **Zwei Prozess-Lehren, wertvoller als die Optimierung selbst:** (1) Die informelle Vorab-Sondage
 lag um mehr als eine Größenordnung daneben (0,60 gegen gemessene 1,050 bei `k = n`; bei `k = n/2`
 sogar mit falschem Vorzeichen) — live nachgestellt, Ursachen im Sondage-Quelltext belegt
@@ -127,11 +132,15 @@ Session-Zustand).
 - **Artefakt-Hash** (Clean-Rebuild, SHA256 von `spike/src/wasm/numtype_core.wasm`):
   `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` (seit Kern 11; CI-Gate
   `check:freeze` mit plattform-gelabelter Pin-Menge).
-- **check:diag** Haupt-Pin **206,801 @ 140 Files** (nur Root-Korpus; seit der topk-Messung
-  2026-07-22, von 199,877 @ 139 — zerlegt: **+6,611 reines Order-Noise** durch die eine neue
-  Datei, **+313 echte Typkosten** des Bench-Skripts; die Zerlegung wurde im frischen Worktree
-  gemessen und im Haupt-Baum exakt reproduziert. Details docs/op-topk-selection-ergebnisse.md).
-  Vorheriger Stand: **199,877 @ 139** (seit der Scale-Probe, von
+- **check:diag** Haupt-Pin **206,854 @ 140 Files** (nur Root-Korpus; seit der topk-Umsetzung
+  2026-07-23, von 206,801 @ 140 — **Δ+53 reine Typkosten** des in-place-Heap-Körpertauschs plus
+  der Testdatei-Erweiterung, KEIN Order-Noise (Dateiset unverändert 140, keine neue Datei);
+  Baseline im frischen Worktree reproduziert, im Haupt-Baum bestätigt und von allen drei Verifiern
+  unabhängig nachgemessen. Details docs/op-topk-selection-ergebnisse.md, Phase-2-Abschnitt).
+  Vorheriger Stand: **206,801 @ 140** (seit der topk-Messung 2026-07-22, von 199,877 @ 139 —
+  zerlegt: **+6,611 reines Order-Noise** durch die eine neue Datei, **+313 echte Typkosten** des
+  Bench-Skripts; im frischen Worktree gemessen, im Haupt-Baum exakt reproduziert). Davor:
+  **199,877 @ 139** (seit der Scale-Probe, von
   201,455 @ 137 — die Dateizahl steigt um die zwei neuen bench-dx-Skripte, der WERT sinkt: per
   empty-then-fill zerlegt in −2,410 Order-Noise (zwei zusätzliche Dateien verschieben die
   Prüfreihenfolge) und +775 echte Typkosten, plus +57 aus der Hover-Gate-Reparatur; Baustein A
@@ -144,7 +153,7 @@ Session-Zustand).
   (seit W5, von 105,758 — Δ+640, ausschließlich aus den geteilten spike/src-Änderungen, kein
   stress-eigenes File berührt) · **check:diag:browser 2,142 @ 75** (unverändert seit W1,
   stress/browser ungated by design, `pnpm check` compoundet alle drei).
-- **Testzahlen:** test:core 1588 (1572 + 16 aus W5) · test:resident 4278+2 · test:threaded 69 ·
+- **Testzahlen:** test:core 1591 (1588 + 3 aus topk-Umsetzung) · test:resident 4278+2 · test:threaded 69 ·
   test:browser 4 · test:package 3 + Typ-Smoke · cargo 161 · test:example (Registry-Install +
   Example-Typcheck + 8 asserted Queries).
 - **Editor-Gate:** `bench:editor` W1–**W8** — Instantiation-Pins exact-match hart (seit **V0** neu

@@ -660,11 +660,31 @@ function topkCompareValues(a: number, b: number): number {
  * or negative), then `k` against the vector's length. `k = 0` and `k =
  * length` both succeed (an empty result / the whole vector, sorted).
  *
- * Selection order: every index is sorted by `topkCompareValues` (NaN first,
- * then descending value), ties broken by ascending index — the first `k`
- * entries of that order become the result. `values[i] = data[indices[i]]`
- * is a plain `Float64Array`-element read/copy (never routed through any
- * arithmetic), so a NaN's exact bit payload survives untouched.
+ * Selection: a size-`k` bounded max-heap of "badness" (the root holds the
+ * WORST of the `k` currently held elements under the total order below),
+ * O(n log k) — NOT a full O(n log n) sort of all `n` indices. See
+ * docs/op-topk-selection-spec.md v6 (Phase 2, outcome "reiner Heap", D8): the
+ * heap was measured against the former full sort over a 92-cell grid
+ * (docs/op-topk-selection-ergebnisse.md) and won unconditionally — e.g.
+ * n=1e6, k=1 from 280 ms to 3.8 ms (factor 74) — with no dual violation
+ * anywhere in the grid, so the whole vector's `k/n` range is safe and the
+ * replacement is branch-free (t* = 1.0). This body replaces the former full
+ * sort IN PLACE (a deviation from runtime.ts's append-only convention,
+ * pre-approved in the spec: see the "Vorab-Genehmigung der In-Place-Abweichung"
+ * paragraph before D8/D9). `topkCompareValues` is unchanged and reused here.
+ *
+ * Selection ORDER is unchanged from the former full sort and provably
+ * bit-identical to it: every index is ordered by `topkCompareValues` (NaN
+ * first, then descending value), ties broken by ascending index — and because
+ * that comparator combined with `|| (idxA - idxB)` is a STRICT TOTAL ORDER on
+ * the distinct indices `0..n-1`, there is exactly one correct top-`k` index
+ * set in exactly one order, so heap and full sort MUST agree (spec section
+ * "Die tragende Beobachtung"). `values[i] = data[indices[i]]` is a plain
+ * `Float64Array`-element read/copy (never routed through any arithmetic), so a
+ * NaN's exact bit payload survives untouched. The former full-sort form lives
+ * on verbatim as the test oracle `topkOracleFullSort`
+ * (spike/tests-runtime/argmax-topk.test.ts), diffed bit-for-bit against this
+ * function over NaN payloads, `+0`/`-0`, ties and edge cases (D11).
  */
 export function topkRuntime(
   shape: readonly number[],
@@ -681,13 +701,88 @@ export function topkRuntime(
   if (k > n) {
     throw new Error(`topk: k=${k} exceeds the vector length ${n}`);
   }
+  if (k === 0) {
+    return { values: new Float64Array(0), indices: new Float64Array(0) };
+  }
 
-  const order = Array.from({ length: n }, (_, i) => i);
-  order.sort((i, j) => topkCompareValues(data[i] ?? 0, data[j] ?? 0) || i - j);
+  // Size-`k` max-heap of "badness": the root holds the WORST of the `k`
+  // currently held elements under the shared total order, so a new candidate
+  // that ranks BEFORE the root evicts it and resifts. Two parallel typed
+  // arrays (values + source indices) rather than an object heap — the
+  // observable semantics (bit-identity) and complexity (O(n log k)) are the
+  // binding parts, not the representation (spec D2).
+  const heapVal = new Float64Array(k);
+  const heapIdx = new Float64Array(k);
+  let size = 0;
 
-  const values = new Float64Array(k);
-  const indices = new Float64Array(k);
-  for (let i = 0; i < k; i++) {
+  const cmp = (aVal: number, aIdx: number, bVal: number, bIdx: number): number =>
+    topkCompareValues(aVal, bVal) || aIdx - bIdx;
+
+  const siftUp = (start: number): void => {
+    let i = start;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      const pv = heapVal[parent] ?? 0;
+      const pi = heapIdx[parent] ?? 0;
+      const cv = heapVal[i] ?? 0;
+      const ci = heapIdx[i] ?? 0;
+      if (cmp(cv, ci, pv, pi) > 0) {
+        heapVal[i] = pv;
+        heapIdx[i] = pi;
+        heapVal[parent] = cv;
+        heapIdx[parent] = ci;
+        i = parent;
+      } else break;
+    }
+  };
+
+  const siftDown = (start: number): void => {
+    let i = start;
+    for (;;) {
+      const l = 2 * i + 1;
+      const r = 2 * i + 2;
+      let worst = i;
+      if (l < size && cmp(heapVal[l] ?? 0, heapIdx[l] ?? 0, heapVal[worst] ?? 0, heapIdx[worst] ?? 0) > 0) worst = l;
+      if (r < size && cmp(heapVal[r] ?? 0, heapIdx[r] ?? 0, heapVal[worst] ?? 0, heapIdx[worst] ?? 0) > 0) worst = r;
+      if (worst === i) break;
+      const iv = heapVal[i] ?? 0;
+      const ii = heapIdx[i] ?? 0;
+      heapVal[i] = heapVal[worst] ?? 0;
+      heapIdx[i] = heapIdx[worst] ?? 0;
+      heapVal[worst] = iv;
+      heapIdx[worst] = ii;
+      i = worst;
+    }
+  };
+
+  for (let i = 0; i < n; i++) {
+    const v = data[i] ?? 0;
+    if (size < k) {
+      heapVal[size] = v;
+      heapIdx[size] = i;
+      siftUp(size);
+      size++;
+    } else {
+      const rv = heapVal[0] ?? 0;
+      const ri = heapIdx[0] ?? 0;
+      if (cmp(v, i, rv, ri) < 0) {
+        heapVal[0] = v;
+        heapIdx[0] = i;
+        siftDown(0);
+      }
+    }
+  }
+
+  // Final O(k log k) sort of the held indices — SAME comparator expression as
+  // the former full sort, `values[i]` re-read from the ORIGINAL `data` array
+  // (never a cached heap value), so the data flow into `values`/`indices` is
+  // identical to the former code (spec D2 point 4).
+  const order = Array.from({ length: size }, (_, i) => heapIdx[i] ?? 0);
+  order.sort((ia, ib) => topkCompareValues(data[ia] ?? 0, data[ib] ?? 0) || ia - ib);
+
+  const values = new Float64Array(size);
+  const indices = new Float64Array(size);
+  for (let i = 0; i < size; i++) {
     const srcIdx = order[i] ?? 0;
     indices[i] = srcIdx;
     values[i] = data[srcIdx] ?? 0;

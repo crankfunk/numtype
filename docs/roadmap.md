@@ -273,3 +273,22 @@ gemessene Aussage statt des Vorbehalts, ausdrücklich auf die Konsumenten-Skala 
 API-Flächen-Skala bleibt als benannte offene Frage (FOLLOWUPS). Neuer Dauer-Wächter: Workload
 `w8` im harten `bench:editor`-Gate. Damit sind alle drei Punkte der Owner-Reihenfolge erledigt
 (Launch-Post streuen bleibt Owner-Aktion, Dogfooding-Scheibe und Scale-Probe sind durch).
+
+## Post-Roadmap: topk-Selektion (Messung 2026-07-22, Umsetzung ERLEDIGT 2026-07-23)
+
+Der in Verify-B der W1-Scheibe (F5) dokumentierte algorithmische Defekt — `topkRuntime` sortierte
+das GESAMTE Array (O(n log n)), um die k größten Elemente zu finden — ist behoben. Phase 1
+(bindende Mess-Spec docs/op-topk-selection-spec.md v6, vier Reparaturrunden der Entscheidungsregel
++ eine Frontier-Zweitmeinung) hat über ein 92-Zellen-Raster gemessen und mechanisch das Verdikt
+**reiner Heap** (t* = 1,0) berechnet. Phase 2 (docs/op-topk-selection-ergebnisse.md,
+Phase-2-Abschnitt) hat `topkRuntime` in-place durch den größenbeschränkten Max-Heap (O(n log k))
+ersetzt — bit-identisch zur alten Full-Sort (konstruktiv per Totalordnung + empirisch per
+Orakel-Differentialtest über 300+ Fälle inkl. exakter nicht-kanonischer NaN-Payload), voller
+Verify-Katalog A+B+C alle grün. Größenordnung: `n = 1e6, k = 1` von 280 ms auf 3,8 ms (Faktor 74);
+ehrliche Kehrseite sieben Zellen ab `k/n = 0,85` absolut langsamer (max. +13,95 ms bei `k = n`,
+relativ 5 %, dual bewusst akzeptiert). NDArray-only, kein WASM-Kernel (M1 bindet nicht); ein
+künftiger `nt_topk`-Kernel sollte den Heap spiegeln (FOLLOWUPS). Neuer Root-Pin 206.854 @ 140
+(Δ+53, reine Typkosten). Der wertvollere Ertrag der Scheibe war methodisch: wie brüchig
+vorregistrierte Entscheidungsregeln sind, wenn man sie nicht als Skript gegen synthetische Raster
+durchspielt (die Regel wurde viermal gebrochen, bevor sie messen durfte), und dass die auslösende
+informelle Sondage um mehr als eine Größenordnung danebenlag.

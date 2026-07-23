@@ -41,7 +41,7 @@ import {
   transposeRuntime,
   type SliceSpec,
 } from "../src/runtime.ts";
-import { assertShapeEqual, bitsOf } from "./assert-helpers.ts";
+import { assertDataBitIdentical, assertShapeEqual, bitsOf } from "./assert-helpers.ts";
 import { genData, genDataSpecial, makeRng, SPECIAL_VALUES, type Rng } from "./prng.ts";
 
 function genShape(rng: Rng, minRank: number, maxRank: number): number[] {
@@ -461,4 +461,150 @@ test("non-vacuity: SPECIAL_VALUES includes NaN, and genDataSpecial with specialP
     Array.from(data).some((v) => Number.isNaN(v)),
     "genDataSpecial(specialProb=1) over 200 draws must produce at least one NaN",
   );
+});
+
+// =============================================================================
+// topk: differential test vs the former full-sort form, kept verbatim as an
+// oracle (docs/op-topk-selection-spec.md v6, Phase 2 outcome "reiner Heap",
+// D8/D11). The production `topkRuntime` is now a size-bounded max-heap
+// (O(n log k)); the oracle below is a WORD-FOR-WORD copy of the FORMER
+// `topkRuntime`/`topkCompareValues` full sort (O(n log n)). This suite proves
+// the heap is bit-identical to that former semantics over NaN payloads,
+// `+0`/`-0`, ties and edge cases — the empirical layer over the constructive
+// total-order argument (both algorithms compute the SAME unique top-k set in
+// the SAME order, because the comparator `... || (i - j)` is a strict total
+// order on distinct indices). It is deliberately NOT an independently written
+// reference like `bruteTopk` above (which stays and keeps running) — the
+// oracle's whole job is to be the exact prior code, frozen in the test.
+// =============================================================================
+
+/** Verbatim copy of the FORMER `runtime.ts` `topkCompareValues` (its
+ * selection-order comparator), frozen here as the oracle's comparator. Must
+ * stay the exact prior semantics — never "improved". */
+function topkOracleCompareValues(a: number, b: number): number {
+  const aNaN = Number.isNaN(a);
+  const bNaN = Number.isNaN(b);
+  if (aNaN && bNaN) return 0;
+  if (aNaN) return -1;
+  if (bNaN) return 1;
+  if (a > b) return -1;
+  if (a < b) return 1;
+  return 0;
+}
+
+/** Verbatim copy of the FORMER `runtime.ts` `topkRuntime` body: an index
+ * array over ALL `n` elements, a full `order.sort(...)` (O(n log n)), keep the
+ * first `k`. Frozen here as the differential oracle. */
+function topkOracleFullSort(
+  shape: readonly number[],
+  data: Float64Array,
+  k: number,
+): { values: Float64Array; indices: Float64Array } {
+  if (shape.length !== 1) {
+    throw new Error(`topk: expected a 1-D vector (got shape [${shape.join(",")}])`);
+  }
+  if (!Number.isInteger(k) || k < 0) {
+    throw new Error(`topk: k must be a non-negative integer (got ${k})`);
+  }
+  const n = shape[0] ?? 0;
+  if (k > n) {
+    throw new Error(`topk: k=${k} exceeds the vector length ${n}`);
+  }
+
+  const order = Array.from({ length: n }, (_, i) => i);
+  order.sort((i, j) => topkOracleCompareValues(data[i] ?? 0, data[j] ?? 0) || i - j);
+
+  const values = new Float64Array(k);
+  const indices = new Float64Array(k);
+  for (let i = 0; i < k; i++) {
+    const srcIdx = order[i] ?? 0;
+    indices[i] = srcIdx;
+    values[i] = data[srcIdx] ?? 0;
+  }
+  return { values, indices };
+}
+
+/** Assert the real (heap) `topkRuntime` agrees with the full-sort oracle,
+ * bit-for-bit: indices deep-equal, values `Object.is`-identical (distinguishes
+ * `+0`/`-0`, NaN equal only as a value class — the exact-payload claim gets its
+ * own `bitsAt` test below). */
+function assertTopkMatchesOracle(shape: readonly number[], data: Float64Array, k: number, context: string): void {
+  const oracle = topkOracleFullSort(shape, data, k);
+  const real = topkRuntime(shape, data, k);
+  assert.deepStrictEqual(Array.from(real.indices), Array.from(oracle.indices), `${context}: indices`);
+  assertDataBitIdentical(oracle.values, real.values, `${context}: values`);
+}
+
+test("topk differential: fixed edge cases (n=0/1, all-NaN, all-equal, +0/-0 ties, infinities, k=0/n-1/n)", () => {
+  // n=0, k=0 (the only valid k for an empty vector).
+  assertTopkMatchesOracle([0], new Float64Array([]), 0, "n=0 k=0");
+  // n=1, k=0 and k=1.
+  assertTopkMatchesOracle([1], new Float64Array([42]), 0, "n=1 k=0");
+  assertTopkMatchesOracle([1], new Float64Array([42]), 1, "n=1 k=1");
+  // A vector of ALL NaN (canonical) — NaN-vs-NaN ties resolve by ascending index.
+  const allNaN = new Float64Array([Number.NaN, Number.NaN, Number.NaN, Number.NaN, Number.NaN, Number.NaN]);
+  for (const k of [0, 1, 3, 5, 6]) assertTopkMatchesOracle([6], allNaN, k, `all-NaN k=${k}`);
+  // A vector of ALL the same value — every element ties, so index order alone decides.
+  const allSame = new Float64Array([5, 5, 5, 5, 5, 5, 5, 5]);
+  for (const k of [0, 1, 4, 7, 8]) assertTopkMatchesOracle([8], allSame, k, `all-equal k=${k}`);
+  // A +0/-0 tie fixture: they compare EQUAL under `>`/`<`, so index order decides
+  // the placement, and each result value must carry the exact signed zero its
+  // index held (Object.is inside assertDataBitIdentical distinguishes them).
+  const signedZeros = new Float64Array([0, -0, 0, -0, 0]);
+  for (const k of [0, 1, 2, 3, 5]) assertTopkMatchesOracle([5], signedZeros, k, `signed-zeros k=${k}`);
+  // Infinities alongside finite values, across k.
+  const withInf = new Float64Array([1, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 2, Number.POSITIVE_INFINITY, 0]);
+  for (const k of [1, 2, 3, 6]) assertTopkMatchesOracle([6], withInf, k, `infinities k=${k}`);
+  // Mixed, hitting k=n-1 and k=n explicitly.
+  const mixed = new Float64Array([3, 1, 4, 1, 5, 9, 2, 6]);
+  assertTopkMatchesOracle([8], mixed, 7, "mixed k=n-1");
+  assertTopkMatchesOracle([8], mixed, 8, "mixed k=n");
+});
+
+test("topk differential: randomized vs full-sort oracle, incl. IEEE-754 special-value injection (NaN/±0/±Inf/subnormals)", () => {
+  const rng = makeRng(0x544f504b5f444946n); // "TOPK_DIF"
+  let sawNaN = false;
+  let sawTie = false;
+  for (let c = 0; c < 300; c++) {
+    const n = rng.nextInt(0, 40);
+    const data = genDataSpecial(rng, [n], 0.3);
+    const k = rng.nextInt(0, n); // uniform over 0..n, so k=0, k=n and interior are all reachable
+    assertTopkMatchesOracle([n], data, k, `case ${c} n=${n} k=${k}`);
+    const seen = new Set<number>();
+    for (const v of data) {
+      if (Number.isNaN(v)) sawNaN = true;
+      if (seen.has(v)) sawTie = true;
+      seen.add(v);
+    }
+  }
+  // Non-vacuity: the randomized corpus actually exercised the NaN and tiebreak paths.
+  assert.ok(sawNaN, "randomized corpus must include at least one NaN draw");
+  assert.ok(sawTie, "randomized corpus must include at least one value-tie");
+});
+
+test("topk differential: EXACT non-canonical NaN payload survives byte-identically through the heap (and equals the oracle's)", () => {
+  // Build a NaN with a deliberately non-canonical payload DIRECTLY in the
+  // backing buffer (never an array literal — the V8 JIT canonicalization trap
+  // documented above and mandated by D11's `bitsAt` rule). Placed among finite
+  // values so the NaN is one of several sorted entries, not a lone element.
+  const data = new Float64Array(5);
+  data[0] = 1;
+  data[2] = 3;
+  data[3] = 2;
+  data[4] = -7;
+  const dv = new DataView(data.buffer);
+  dv.setBigUint64(1 * 8, 0x7ff800000000beefn, true); // data[1] = weird NaN, little-endian like bitsAt
+  const weirdBits = bitsAt(data, 1);
+  assert.ok(Number.isNaN(data[1] ?? 0), "constructed data[1] must actually be NaN");
+  assert.notStrictEqual(weirdBits, 0x7ff8000000000000n, "payload must be non-canonical to make this test meaningful");
+
+  const oracle = topkOracleFullSort([5], data, 5);
+  const real = topkRuntime([5], data, 5);
+
+  assert.deepStrictEqual(Array.from(real.indices), Array.from(oracle.indices), "exact-NaN indices");
+  assert.strictEqual(real.indices[0], 1, "the lone NaN sorts first (index 1)");
+  // Both preserve the exact 64-bit payload, and agree with each other byte-for-byte.
+  assert.strictEqual(bitsAt(real.values, 0), weirdBits, "heap preserves the exact NaN payload");
+  assert.strictEqual(bitsAt(oracle.values, 0), weirdBits, "oracle preserves the exact NaN payload");
+  assert.strictEqual(bitsAt(real.values, 0), bitsAt(oracle.values, 0), "heap and oracle NaN payloads are byte-identical");
 });
