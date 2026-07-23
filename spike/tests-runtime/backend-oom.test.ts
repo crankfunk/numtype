@@ -112,6 +112,9 @@ function makeMockCore(failAtCall?: number): MockCore {
     nt_div_strided: notImplemented("nt_div_strided"),
     nt_dot_strided: notImplemented("nt_dot_strided"),
     nt_norm_sq_strided: notImplemented("nt_norm_sq_strided"),
+    // WASM parity S0 (docs/wasm-parity-sqrt-spec.md): not used by backend.ts's
+    // v1 ops either (sqrt only exists on the resident/threaded backends).
+    nt_sqrt_strided: notImplemented("nt_sqrt_strided"),
   };
 
   return { core, allocs, frees };

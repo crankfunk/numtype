@@ -19,7 +19,7 @@
 import assert from "node:assert";
 import { test } from "node:test";
 import { NDArray } from "../src/ndarray.ts";
-import { dotRuntime, elementwiseBinary, matmulRuntime, normSqRuntime, sumRuntime, transposeRuntime } from "../src/runtime.ts";
+import { dotRuntime, elementwiseBinary, matmulRuntime, normSqRuntime, sqrtRuntime, sumRuntime, transposeRuntime } from "../src/runtime.ts";
 import { wasmAdd, wasmMatmul, wasmSum, wasmTranspose } from "../src/wasm/backend.ts";
 import { initCore } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
@@ -698,3 +698,73 @@ test("transpose fixture: a non-canonical NaN payload survives naive/v1/resident 
     w.dispose();
   }
 });
+
+// =============================================================================
+// WASM parity S0 (docs/wasm-parity-sqrt-spec.md, D6(b)): sqrt special-value
+// coverage. (a) curated fixtures: sqrt(-0)===-0, sqrt(neg)->NaN,
+// sqrt(NaN)->NaN, sqrt(+Inf), sqrt(+0), a subnormal, MAX_VALUE — WNDArray vs
+// sqrtRuntime, bit-identical (NaN as a class). (b) randomized genDataSpecial
+// grid, same shape/structure as the `transpose` block above (rank 0..4,
+// ~60 cases) — unary, so a single genDataSpecial call (no broadcast
+// pairing). Deliberately NO byte-exact NaN-payload fixture (unlike
+// `transpose`): sqrt is arithmetic, and M1's own proviso permits
+// implementation-defined NaN payloads for arithmetic results — NaN stays
+// class-equality here, matching the discipline of the existing div/mul
+// special-value fixtures above.
+// =============================================================================
+
+test("sqrt fixture: [-0,-1,NaN,+Inf,+0,subnormal,MAX_VALUE] special-value edges, on naive/resident", () => {
+  const subnormal = Number.MIN_VALUE * 4; // a genuine subnormal (< 2.2250738585072014e-308)
+  const shape = [7];
+  const data = new Float64Array([-0, -1, Number.NaN, Number.POSITIVE_INFINITY, 0, subnormal, Number.MAX_VALUE]);
+  const ref = sqrtRuntime(data);
+
+  const naive = NDArray.fromArray(shape, data).sqrt();
+  assertDataBitIdentical(ref, naive.data, "sqrt special fixture [naive]");
+
+  const w = WNDArray.fromArray(core, shape, data);
+  try {
+    const got = w.sqrt();
+    try {
+      assertDataBitIdentical(ref, got.toArray(), "sqrt special fixture [resident]");
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+// -----------------------------------------------------------------------
+// D6(b): randomized SPECIAL_VALUES grid, ranks 0..4 — structurally the same
+// as the `transpose` block above, unary (one genDataSpecial call per case).
+// -----------------------------------------------------------------------
+{
+  const rng = makeRng(0x5351525f53504543n); // "SQR_SPEC"-ish
+  const CASE_COUNT = 60;
+  for (let c = 0; c < CASE_COUNT; c++) {
+    const shape = genShape(rng, 0, 4);
+    const data = genDataSpecial(rng, shape);
+
+    test(`sqrt special case ${c}: shape=[${shape.join(",")}]`, () => {
+      const ref = sqrtRuntime(data);
+      const ctx = `sqrt special case ${c} shape=[${shape.join(",")}]`;
+
+      const naive = NDArray.fromArray(shape, data).sqrt();
+      assertDataBitIdentical(ref, naive.data, `${ctx} [naive]`);
+
+      const w = WNDArray.fromArray(core, shape, data);
+      try {
+        const got = w.sqrt();
+        try {
+          assertShapeEqual(shape, got.shape as readonly number[], `${ctx} [resident]`);
+          assertDataBitIdentical(ref, got.toArray(), `${ctx} [resident]`);
+        } finally {
+          got.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}

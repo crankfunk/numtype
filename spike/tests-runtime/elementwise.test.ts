@@ -15,7 +15,8 @@
  */
 import assert from "node:assert";
 import { test } from "node:test";
-import { elementwiseBinary, transposeRuntime } from "../src/runtime.ts";
+import { NDArray } from "../src/ndarray.ts";
+import { elementwiseBinary, sqrtRuntime, transposeRuntime } from "../src/runtime.ts";
 import { initCore } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
 import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
@@ -208,5 +209,141 @@ test("div fixture: 0 / -2 -> -0 (signed zero, Object.is-distinguished) on the re
   } finally {
     a.dispose();
     b.dispose();
+  }
+});
+
+// =============================================================================
+// WASM parity S0 (docs/wasm-parity-sqrt-spec.md, D6): `WNDArray.sqrt()` M1
+// differential against the naive reference (`sqrtRuntime`/`NDArray.sqrt`) —
+// contiguous, a transposed view, a sliced view, an offset window, rank-0, and
+// a size-0 dim. View references are the view's own already-trusted logical
+// content (transpose via this file's own `makeView`/`transposeRuntime`
+// idiom above; slice via `NDArray.slice`, the naive backend's own
+// `sliceRuntime`-driven implementation — same "independent oracle" technique
+// keepdims.test.ts already uses for its offset-slice-view cases), never a
+// second read-back through the op under test.
+// =============================================================================
+
+test("sqrt: contiguous [2,3]", () => {
+  const shape = [2, 3];
+  const data = new Float64Array([1, 4, 9, 16, 25, 36]);
+  const ref = sqrtRuntime(data);
+  const w = WNDArray.fromArray(core, shape, data);
+  try {
+    const got = w.sqrt();
+    try {
+      assertShapeEqual(shape, got.shape as readonly number[], "sqrt contiguous");
+      assertDataBitIdentical(ref, got.toArray(), "sqrt contiguous");
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+test("sqrt: transposed view (non-natural strides)", () => {
+  const shape = [3, 2];
+  const refData = new Float64Array([1, 4, 9, 16, 25, 36]); // logical content of the view, by makeView's own construction
+  const { arr: view, owners } = makeView(shape, refData);
+  try {
+    const ref = sqrtRuntime(refData);
+    const got = view.sqrt();
+    try {
+      assertShapeEqual(shape, got.shape as readonly number[], "sqrt transposed view");
+      assertDataBitIdentical(ref, got.toArray(), "sqrt transposed view");
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    for (const h of owners) h.dispose();
+  }
+});
+
+test("sqrt: sliced view (step slice, non-contiguous strides, offset 0)", () => {
+  // [4,3] -> rows {0,2} via step 2 -> shape [2,3], strides [6,1] (non-natural).
+  const baseShape = [4, 3];
+  const baseData = Array.from({ length: 12 }, (_, i) => (i + 1) * (i + 1));
+  const refView = NDArray.fromArray(baseShape, baseData).slice({ step: 2 }, null); // trusted naive slice
+  const ref = refView.sqrt();
+
+  const w = WNDArray.fromArray(core, baseShape, baseData);
+  try {
+    const view = w.slice({ step: 2 }, null); // O(1) view, non-natural strides
+    try {
+      const got = view.sqrt();
+      try {
+        assertShapeEqual(ref.shape, got.shape as readonly number[], "sqrt sliced view");
+        assertDataBitIdentical(ref.data, got.toArray(), "sqrt sliced view");
+      } finally {
+        got.dispose();
+      }
+    } finally {
+      view.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+test("sqrt: offset window (1-D, nonzero base offset, natural stride)", () => {
+  // [6] -> rows 2.. -> shape [4], offset 2, stride 1 (natural, just shifted).
+  const baseShape = [6];
+  const baseData = [0, 1, 4, 9, 16, 25];
+  const refView = NDArray.fromArray(baseShape, baseData).slice({ start: 2 }); // trusted naive slice
+  const ref = refView.sqrt();
+
+  const w = WNDArray.fromArray(core, baseShape, baseData);
+  try {
+    const view = w.slice({ start: 2 }); // O(1) view, offset 2
+    try {
+      const got = view.sqrt();
+      try {
+        assertShapeEqual(ref.shape, got.shape as readonly number[], "sqrt offset window");
+        assertDataBitIdentical(ref.data, got.toArray(), "sqrt offset window");
+      } finally {
+        got.dispose();
+      }
+    } finally {
+      view.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+test("sqrt: rank-0 scalar", () => {
+  const shape: readonly number[] = [];
+  const data = new Float64Array([25]);
+  const ref = sqrtRuntime(data);
+  const w = WNDArray.fromArray(core, shape, data);
+  try {
+    const got = w.sqrt();
+    try {
+      assertShapeEqual(shape, got.shape as readonly number[], "sqrt rank-0");
+      assertDataBitIdentical(ref, got.toArray(), "sqrt rank-0");
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+test("sqrt: size-0 dim [0,3]", () => {
+  const shape = [0, 3];
+  const data = new Float64Array([]);
+  const ref = sqrtRuntime(data);
+  const w = WNDArray.fromArray(core, shape, data);
+  try {
+    const got = w.sqrt();
+    try {
+      assertShapeEqual(shape, got.shape as readonly number[], "sqrt size-0 dim");
+      assertDataBitIdentical(ref, got.toArray(), "sqrt size-0 dim");
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    w.dispose();
   }
 });

@@ -258,3 +258,26 @@ export interface CoreExports {
     outDataPtr: number,
   ): number;
 }
+
+// WASM parity S0 (docs/wasm-parity-sqrt-spec.md, D4): `nt_sqrt_strided`.
+// Declared as a THIRD `export interface CoreExports { ... }` block, appended
+// strictly after every pre-existing line in this file (freeze discipline,
+// same technique as the Kern-07 block above it — TypeScript merges
+// same-named interface declarations in the same module automatically, so
+// this augments `CoreExports` without touching a single pre-existing line).
+// `ThreadedCoreExports extends CoreExports` (threaded.ts) inherits this
+// declaration automatically.
+export interface CoreExports {
+  // sqrt: one strided-operand quadruple + out ptr/len — identical
+  // 8-argument convention to `nt_materialize`.
+  nt_sqrt_strided(
+    shapePtr: number,
+    rank: number,
+    stridesPtr: number,
+    offset: number,
+    dataPtr: number,
+    dataLen: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
+}

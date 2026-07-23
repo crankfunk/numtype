@@ -292,3 +292,20 @@ künftiger `nt_topk`-Kernel sollte den Heap spiegeln (FOLLOWUPS). Neuer Root-Pin
 vorregistrierte Entscheidungsregeln sind, wenn man sie nicht als Skript gegen synthetische Raster
 durchspielt (die Regel wurde viermal gebrochen, bevor sie messen durfte), und dass die auslösende
 informelle Sondage um mehr als eine Größenordnung danebenlag.
+
+## Post-Roadmap: WASM-Parität-Kampagne S0–S5 (Owner-entschieden 2026-07-23)
+
+Die W1–W5-Ops sind bewusst NDArray-only gelandet; diese Serie zieht `WNDArray`/threaded nach, damit
+beide Backends dasselbe können (Vollständigkeit/Symmetrie, kein gemessener Nutzerbedarf — ehrlich so
+benannt). Reihenfolge easy-first, dünne vertikale Scheibe zuerst: **S0 sqrt → S1 Skalar-Overloads →
+S2 mean → S3 item/stack → S4 argmax → S5 topk**. **S0 (sqrt): ERLEDIGT 2026-07-23**
+(docs/wasm-parity-sqrt-spec.md v3 /-ergebnisse.md): Rust/WASM-Kernel `nt_sqrt_strided` + niladische
+`WNDArray.sqrt()`, threaded-Parität automatisch (dasselbe Crate). M1 bindet erstmals für eine der
+neuen Ops und ist dreifach belegt (Baustein-0-Vorab-Probe 30.028 Fälle, committeter Differentialtest,
+Baustein-B-BigInt-Oracle über 102.281 Elemente — je 0 Abweichungen). Voller Verify-Katalog A+B+C alle
+grün, netto −4 check:diag, neuer Freeze-Hash. **Kampagnen-Gewinn (aus einem Umsetzungs-Befund):** ein
+`Omit<ThreadedCoreExports,"memory">`-Cast in threaded.ts verursachte pro `CoreExports`-Member +7
+Instantiations (`keyof`-getriebene Generic-Neuauflösung, kumulativ); der Fix (direkter Cast,
+laufzeit-identisch, vierfach belegt) beseitigt das an der Wurzel — jede Folge-Scheibe kostet auf
+diesem Mechanismus +0. S1–S5 folgen dem etablierten Workflow (Spec → Baustein 0 → Impl → Verify
+A+B+C → Freeze-Re-Pin).

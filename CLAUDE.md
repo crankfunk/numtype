@@ -101,6 +101,16 @@ voller Verify-Katalog A+B+C alle grün (Root-Pin 206.854 @ 140, Δ+53 reine Typk
 bench:editor Δ0). NDArray-only, kein WASM-Kernel (M1 bindet nicht); künftiger `nt_topk`-Kernel
 spiegelt den Heap (FOLLOWUPS). In-Place-Bruch der runtime.ts-Append-Konvention in der Spec vorab
 genehmigt.
+**WASM-Parität-Kampagne S0–S5 gestartet (Owner-entschieden 2026-07-23): `WNDArray`/threaded ziehen
+die W1–W5-Ops nach. S0 (sqrt) ERLEDIGT 2026-07-23** (docs/wasm-parity-sqrt-spec.md v3
+/-ergebnisse.md): Rust/WASM-Kernel `nt_sqrt_strided` + niladische `WNDArray.sqrt()`, threaded-Parität
+automatisch (dasselbe Crate); M1 bindet erstmals für eine der neuen Ops und ist dreifach belegt
+(Baustein-0-Vorab-Probe 30.028 Fälle, committeter Differentialtest, Baustein-B-BigInt-Oracle über
+102.281 Elemente — je 0 Abweichungen), voller Verify A+B+C grün, netto **−4** check:diag.
+Kampagnen-Gewinn aus einem Umsetzungs-Befund: der `Omit<ThreadedCoreExports,"memory">` →
+direkter-Cast-Fix in threaded.ts (D10, laufzeit-identisch, vierfach belegt) beseitigt die
+`keyof`-getriebene Generic-Neuauflösung an der Wurzel — jede Folge-Scheibe kostet auf diesem
+Mechanismus **+0 statt +7** (vierter Kostenmechanismus, s. Mess-Regeln). S1–S5 offen (FOLLOWUPS).
 **Zwei Prozess-Lehren, wertvoller als die Optimierung selbst:** (1) Die informelle Vorab-Sondage
 lag um mehr als eine Größenordnung daneben (0,60 gegen gemessene 1,050 bei `k = n`; bei `k = n/2`
 sogar mit falschem Vorzeichen) — live nachgestellt, Ursachen im Sondage-Quelltext belegt
@@ -130,9 +140,15 @@ Session-Zustand).
 ## Aktuelle Pins & Gates (IST-Zahlen; Historie im Projekt-Log)
 
 - **Artefakt-Hash** (Clean-Rebuild, SHA256 von `spike/src/wasm/numtype_core.wasm`):
-  `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` (seit Kern 11; CI-Gate
-  `check:freeze` mit plattform-gelabelter Pin-Menge).
-- **check:diag** Haupt-Pin **206,854 @ 140 Files** (nur Root-Korpus; seit der topk-Umsetzung
+  `24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2` (seit WASM-Parität S0/sqrt
+  2026-07-23, von `0b9df4f1…` Kern 11 — der neue `nt_sqrt_strided`-Kernel ändert den Hash legitim;
+  additive-only-Dekomposition, Baustein A hat den Pre-Edit-Rebuild == altem Pin selbst reproduziert.
+  Threads-Artefakt `9743338d…`, bewusst KEIN persistierter Pin — test:threaded beweist seine
+  Bit-Identität zum stable Core. CI-Gate `check:freeze` mit plattform-gelabelter Pin-Menge).
+- **check:diag** Haupt-Pin **206,850 @ 140 Files** (nur Root-Korpus; seit WASM-Parität S0/sqrt
+  2026-07-23, von 206,854 @ 140 — **Δ−4**: die sqrt-Typkosten minus der threaded.ts-Omit-Ersparnis
+  (D10), Dateiset unverändert 140, von allen drei Verifiern reproduziert; Details
+  docs/wasm-parity-sqrt-ergebnisse.md). **Vorheriger Stand: 206,854 @ 140** (seit der topk-Umsetzung
   2026-07-23, von 206,801 @ 140 — **Δ+53 reine Typkosten** des in-place-Heap-Körpertauschs plus
   der Testdatei-Erweiterung, KEIN Order-Noise (Dateiset unverändert 140, keine neue Datei);
   Baseline im frischen Worktree reproduziert, im Haupt-Baum bestätigt und von allen drei Verifiern
@@ -149,19 +165,21 @@ Session-Zustand).
   docs/scale-probe-ergebnisse.md). Historie: **201,455 @ 137** war der W5-Stand, von 195,481 —
   Δ+5,873, Aufschlüsselung in docs/op-w5-item-ergebnisse.md — davon nur +623 Quellcode, der Rest
   Test-/Typ-Pin-Kosten; enthält den D6-Befund „`Equal<ItemGuard<...>>`-Message-Pins sind pro
-  Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 106,398 @ 82**
-  (seit W5, von 105,758 — Δ+640, ausschließlich aus den geteilten spike/src-Änderungen, kein
+  Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 106,239 @ 82**
+  (seit WASM-Parität S0/sqrt 2026-07-23, Δ−159 aus der threaded.ts-Omit-Ersparnis, D10; davor
+  106,398 @ 82 seit W5, von 105,758 — Δ+640, ausschließlich aus den geteilten spike/src-Änderungen, kein
   stress-eigenes File berührt) · **check:diag:browser 2,142 @ 75** (unverändert seit W1,
   stress/browser ungated by design, `pnpm check` compoundet alle drei).
-- **Testzahlen:** test:core 1591 (1588 + 3 aus topk-Umsetzung) · test:resident 4278+2 · test:threaded 69 ·
-  test:browser 4 · test:package 3 + Typ-Smoke · cargo 161 · test:example (Registry-Install +
+- **Testzahlen:** test:core 1591 · test:resident 4345+2 · test:threaded 75 (+4 sqrt-Parität +2 Spezialwerte) ·
+  test:browser 4 · test:package 3 + Typ-Smoke · cargo 169 (+8 sqrt-Kernel) · test:example (Registry-Install +
   Example-Typcheck + 8 asserted Queries).
-- **Editor-Gate:** `bench:editor` W1–**W8** — Instantiation-Pins exact-match hart (seit **V0** neu
-  gesetzt: uniform **+135** über alle 7 Altworkloads = `{w1 27.904, w2 29.713, w3 60.853,
-  w4 28.067, w5 33.358, w6 34.528, w7 27.076}`; davor uniform +628 aus W5), dazu **w8 = 34.943**
-  als Scale-Sentinel (Rang 24 + item/slice/topk, mit Toggle-Ziel — er schützt die publizierte
-  Skalen-Aussage im Dauerbetrieb, weil der volle Sweep nur on-demand läuft), Latenz am
-  2x-Ceiling, Correctness wirft. **V0 (2026-07-21)** war eine Mess-BASIS-Reparatur, keine
+- **Editor-Gate:** `bench:editor` W1–**W8** — Instantiation-Pins exact-match hart (seit
+  **WASM-Parität S0/sqrt 2026-07-23** uniform **−159** neu gesetzt = `{w1 27.745, w2 29.554,
+  w3 60.694, w4 27.908, w5 33.199, w6 34.369, w7 26.917, w8 34.784}`; Grund ist der threaded.ts-Omit-Fix
+  (D10), der die `keyof`-getriebene Generic-Fixkosten aus JEDEM Workload entfernt — davor seit V0
+  uniform +135 über die 7 Altworkloads plus w8 als Scale-Sentinel (Rang 24 + item/slice/topk, mit
+  Toggle-Ziel — schützt die publizierte Skalen-Aussage im Dauerbetrieb, weil der volle Sweep nur
+  on-demand läuft)), Latenz am 2x-Ceiling, Correctness wirft. **V0 (2026-07-21)** war eine Mess-BASIS-Reparatur, keine
   Klassen-Surface-Änderung: `gen-workloads.ts` erzeugte tsconfigs ohne
   `spike/src/ambient.d.ts`, weshalb jedes Workload-Programm mit 7x TS2591 lief (das Repo hat
   bewusst kein `@types/node`); `enforceHardGate` liest `hadTypeErrors` nirgends, darum fiel es
@@ -176,6 +194,14 @@ Session-Zustand).
   dekomponieren; Datei-EDITS können echte Typkosten sein → bisektieren mit gleichlanger
   Kommentar-Kontrollprobe. Dritter Mechanismus (W1/W2): geteilte KLASSEN-SURFACE rippelt auch
   in Korpora mit unberührtem File-Set (generische Member/Overloads; niladische Member nicht).
+  **Vierter Mechanismus (WASM-Parität S0, 2026-07-23): `keyof`-getriebene Generic-Alias-Neuauflösung**
+  — ein zusätzliches Mitglied auf einer Schnittstelle, über die ein `Omit`/`Pick`/`Exclude`/Mapped-Type
+  `keyof` frisch auflöst (hier `Omit<ThreadedCoreExports,"memory">` in threaded.ts:413), kostet +N
+  Instantiations pro Member, fix (arity-unabhängig), kumulativ, uniform in JEDER Kompilation, die die
+  Schnittstelle kompiliert — sichtbar auch bei niladischen Membern (anders als der dritte Mechanismus).
+  Bei WASM-Parität war es +7/Member (`tsc --generateTrace` isoliert; kontrollierte Varianten:
+  0/1/8-Parameter alle +7, zwei Member +14, Member auf einem standalone-Interface +0). Reduzierbar/
+  vermeidbar durch Umgehen des `Omit` (S0/D10 tat das → +0/Member kampagnenweit).
   Nie über den Root/Stress-Split hinweg vergleichen. Baselines nur im frischen `git worktree`
   messen; immer Exit-Code + Fehlerausgabe prüfen.
 - **Harte Arbeitsregeln (aus der W-Serie, 2026-07-21):** (1) Mutanten-Revert im Haupt-Tree NUR
@@ -245,7 +271,7 @@ unregistrierten/doppelt gelisteten/fehlenden Dateien, Invariante (d) deckt auch
 
 ## Frozen-baseline discipline (hard, since Kern 06)
 
-New code in files shared with frozen kernels/entry points (abi.rs, matmul_blocked.rs, shape.rs) must be APPENDED strictly after all pre-existing content — mere line shifts change `#[track_caller]` panic-location metadata and thus the compiled bytes of UNTOUCHED functions. The binding freeze proof is the artifact hash from a clean rebuild (SHA256 of spike/src/wasm/numtype_core.wasm), not a plus-lines-only git diff. Current pin since Kern 11: `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` (Kern 11 added a genuine contiguous fast path INSIDE `add_strided`/`binary_strided` themselves — not just new exports like Kern 07 — so the hash legitimately changes again: proof decomposes into (1) pre-edit clean rebuild reproduced the prior Kern-07 pin `7a65d800…` exactly, (2) the new fast path is guarded by a post-validation, post-broadcast condition (`a_shape==b_shape && offsets==0 && both natural strides`) with the pre-existing general `unravel`-based loop otherwise byte-for-byte unchanged, (3) behavioral pins green (`test:core` 817, `test:resident` 4265+2, `cargo` 159 incl. 2 new fast-path-vs-general-path equivalence tests), (4) a mutation proof (`a[i].max(0.0)` in both fast paths) broke 3/159 cargo tests and 158/4267 TS tests, revert restored full green, (5) new hash becomes the pin — docs/kern-11-elementwise-fastpath-ergebnisse.md). Kern-07 lesson still applies generally: a phase that legitimately ADDS exports (not just kernel-body changes) also changes the hash by the same decomposition; append-only is an artifact-bytes argument — TS CLASS BODIES with private constructors take the intent-preserving equivalent instead: insertion-only diffs, zero edits to pre-existing members; specs should say which discipline applies to which file. Threads-path extras: env RUSTFLAGS REPLACES the config-file rustflags (always carry `+simd128`); the threads artifact builds via scripts/build-wasm-threads.sh on pinned nightly-2026-07-09 (+rust-src) with its own target-dir; `thread_local!` is forbidden in the crate (`__tls_base` only initializes in the winning instance); never cache memory.buffer/views — with shared memory this fails SILENTLY (stale length, no detach).
+New code in files shared with frozen kernels/entry points (abi.rs, matmul_blocked.rs, shape.rs) must be APPENDED strictly after all pre-existing content — mere line shifts change `#[track_caller]` panic-location metadata and thus the compiled bytes of UNTOUCHED functions. The binding freeze proof is the artifact hash from a clean rebuild (SHA256 of spike/src/wasm/numtype_core.wasm), not a plus-lines-only git diff. Pin from Kern 11 (superseded 2026-07-23 by WASM-parity S0/sqrt's `24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2` — the new `nt_sqrt_strided` kernel changes the hash via the same additive-only decomposition): `0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d` (Kern 11 added a genuine contiguous fast path INSIDE `add_strided`/`binary_strided` themselves — not just new exports like Kern 07 — so the hash legitimately changes again: proof decomposes into (1) pre-edit clean rebuild reproduced the prior Kern-07 pin `7a65d800…` exactly, (2) the new fast path is guarded by a post-validation, post-broadcast condition (`a_shape==b_shape && offsets==0 && both natural strides`) with the pre-existing general `unravel`-based loop otherwise byte-for-byte unchanged, (3) behavioral pins green (`test:core` 817, `test:resident` 4265+2, `cargo` 159 incl. 2 new fast-path-vs-general-path equivalence tests), (4) a mutation proof (`a[i].max(0.0)` in both fast paths) broke 3/159 cargo tests and 158/4267 TS tests, revert restored full green, (5) new hash becomes the pin — docs/kern-11-elementwise-fastpath-ergebnisse.md). Kern-07 lesson still applies generally: a phase that legitimately ADDS exports (not just kernel-body changes) also changes the hash by the same decomposition; append-only is an artifact-bytes argument — TS CLASS BODIES with private constructors take the intent-preserving equivalent instead: insertion-only diffs, zero edits to pre-existing members; specs should say which discipline applies to which file. Threads-path extras: env RUSTFLAGS REPLACES the config-file rustflags (always carry `+simd128`); the threads artifact builds via scripts/build-wasm-threads.sh on pinned nightly-2026-07-09 (+rust-src) with its own target-dir; `thread_local!` is forbidden in the crate (`__tls_base` only initializes in the winning instance); never cache memory.buffer/views — with shared memory this fails SILENTLY (stale length, no detach).
 
 ## Toolchain note (2026-07-09)
 

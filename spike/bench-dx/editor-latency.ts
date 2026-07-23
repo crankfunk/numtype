@@ -810,15 +810,21 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // there is no "before" value to diff against for a byte-identical-twice
 // check the way every re-measurement above did — the doubled-measurement
 // discipline instead applies to the T5 proof that w1-w7 stayed put).
+// Re-pinned uniformly -159 on 2026-07-23 (WASM-parity S0 / sqrt): dropping the
+// `Omit<ThreadedCoreExports, "memory">` in threaded.ts (-> direct cast) removed a
+// fixed per-compilation `keyof`-resolution cost from EVERY workload. The
+// sqrt-parity `CoreExports` member itself contributes +0 here (was +7 before the
+// Omit fix) -- so each future WASM-parity op adds 0 on this mechanism, not +7.
+// See docs/wasm-parity-sqrt-ergebnisse.md.
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 27904,
-  w2: 29713,
-  w3: 60853,
-  w4: 28067,
-  w5: 33358,
-  w6: 34528,
-  w7: 27076,
-  w8: 34943,
+  w1: 27745,
+  w2: 29554,
+  w3: 60694,
+  w4: 27908,
+  w5: 33199,
+  w6: 34369,
+  w7: 26917,
+  w8: 34784,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

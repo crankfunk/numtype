@@ -9,3 +9,6 @@ pub mod transpose;
 // Appended after all pre-existing module declarations (freeze discipline).
 pub mod elementwise;
 pub mod vector;
+// WASM parity S0 (docs/wasm-parity-sqrt-spec.md): sqrt kernel.
+// Appended after all pre-existing module declarations (freeze discipline).
+pub mod sqrt;

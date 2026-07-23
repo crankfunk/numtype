@@ -1206,6 +1206,50 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
     }
   }
 
+  /** WASM parity S0 (docs/wasm-parity-sqrt-spec.md, D5): elementwise square
+   * root, resident twin of `NDArray.sqrt()`/`sqrtRuntime`, routed through
+   * `nt_sqrt_strided` (contiguous handles pass natural strides — same
+   * one-code-path-for-everything convention as every other strided op
+   * here). Shape-preserving, no broadcast: `outShape === this.shape`,
+   * mechanically identical marshalling/lifecycle to `contiguous()` above
+   * (single strided operand, fresh output buffer, `nt_materialize`'s own
+   * 8-argument convention), just a different kernel entry point. Niladic,
+   * guard-less — no new type machinery (second call site of `NDArray.sqrt():
+   * NDArray<S>`'s already-shape-generic niladic form). */
+  sqrt(): WNDArray<S> {
+    this.assertLive("sqrt");
+    const outLen = product(this.shape);
+
+    const scratch: ScratchBuf[] = [];
+    try {
+      const shapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(shapeBuf);
+      const stridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(stridesBuf);
+      const outDataBuf = allocBytes(this.core, outLen * 8);
+
+      const status = this.core.nt_sqrt_strided(
+        shapeBuf.ptr,
+        this.shape.length,
+        stridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        outDataBuf.ptr,
+        outLen,
+      );
+      if (status !== 0) {
+        freeBuf(this.core, outDataBuf); // fresh output buffer never escapes on failure
+        throw new Error(`wasm resident nt_sqrt_strided: status ${status} for shape [${this.shape.join(",")}]`);
+      }
+      return WNDArray.fresh<S>(this.core, [...this.shape] as unknown as S, outDataBuf.ptr, outLen);
+    } finally {
+      // Ephemeral per-call scratch: always freed — success, kernel failure,
+      // or an OOM throw between the allocations above.
+      for (const buf of scratch) freeBuf(this.core, buf);
+    }
+  }
+
   /** Kern 06 addition: expose this handle's raw resident-buffer descriptor
    * (core/ptr/lenElems/shape/strides/offset) for the threaded runtime layer
    * (`threaded.ts`'s `threadedMatmul`), which must marshal these exact

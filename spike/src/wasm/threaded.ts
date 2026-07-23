@@ -410,7 +410,15 @@ export async function initThreadedCore(workers?: number, matmulTimeoutMs = DEFAU
         `if the module's own declared minimum grew past that, bump INITIAL_PAGES in threaded.ts. Original error: ${(e as Error).message}`,
     );
   }
-  const core: ThreadedCoreExports = { ...(instance.exports as unknown as Omit<ThreadedCoreExports, "memory">), memory } as ThreadedCoreExports;
+  // Cast straight to `ThreadedCoreExports` (deliberately NOT
+  // `Omit<ThreadedCoreExports, "memory">`): the trailing `memory` in the object
+  // literal already overrides whatever `memory` the spread carries, so this is
+  // runtime-identical to an Omit-based spread. `Omit<T,K>` = `Pick<T, Exclude<
+  // keyof T, K>>` re-walks `keyof ThreadedCoreExports` here, which measured at
+  // +7 type-instantiations in EVERY compilation for each `CoreExports` member
+  // added — a cost that compounds across the WASM-parity op campaign. The direct
+  // cast eliminates it (measured 2026-07-23, WASM-parity S0/sqrt investigation).
+  const core: ThreadedCoreExports = { ...(instance.exports as unknown as ThreadedCoreExports), memory } as ThreadedCoreExports;
 
   const poolSize = clampPoolSize(workers);
   const poolWorkers: PoolWorker[] = [];

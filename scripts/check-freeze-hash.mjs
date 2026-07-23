@@ -33,7 +33,7 @@ const WASM_PATH = join(fileURLToPath(new URL(".", import.meta.url)), "..", "spik
 // The CURRENT frozen-baseline hash, per platform. Replace wholesale on a
 // legitimate M4 change; never append stale entries.
 const KNOWN_PINS = [
-  { platform: "macos-arm64 / rustc 1.95.0", hash: "0b9df4f10961f94cc1e378801fe66f958306b5135859a4a9bf480e77b2519c7d" },
+  { platform: "macos-arm64 / rustc 1.95.0", hash: "24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2" },
 ];
 
 let bytes;

@@ -24,7 +24,7 @@
  */
 import assert from "node:assert";
 import { after, test } from "node:test";
-import { matmulRuntime, transposeRuntime } from "../src/runtime.ts";
+import { matmulRuntime, sqrtRuntime, transposeRuntime } from "../src/runtime.ts";
 import { initCore, type CoreExports } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
 import {
@@ -37,7 +37,7 @@ import {
   ThreadedPool,
 } from "../src/wasm/threaded.ts";
 import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
-import { genBroadcastShapes, genData, makeRng, type Rng } from "./prng.ts";
+import { genBroadcastShapes, genData, genDataSpecial, makeRng, type Rng } from "./prng.ts";
 
 const stableCore: CoreExports = await initCore();
 
@@ -873,4 +873,77 @@ test("auto-routing: a poisoned pool refuses even a small call the router would h
     await p.dispose();
   }
 });
+
+// ---------------------------------------------------------------------------
+// WASM parity S0 (docs/wasm-parity-sqrt-spec.md, D6): `WNDArray.sqrt()`
+// threaded-vs-stable parity. `sqrt` is NOT dispatched through the worker
+// pool (the pool only ever routes `threadedMatmul` — see the spec's
+// Nicht-Ziele); it runs directly on the resident core, on BOTH the stable
+// and threads artifacts, since they're the same crate. `pool.core` is a
+// real `CoreExports` for the threads-compiled artifact (see `dispatchAndRun`
+// in threaded.ts, and this file's own `makeOperand(pool.core, ...)` calls
+// above for matmul reference-building) — `WNDArray.sqrt()` runs on it
+// exactly like every other non-matmul resident op already does. Extends
+// the file's established threaded-vs-stable differential to `sqrt`,
+// reusing the persistent `pools`/`stableCore` already set up above.
+// ---------------------------------------------------------------------------
+
+function runSqrtCase(name: string, shape: number[], asView: boolean, rng: Rng, special = false): void {
+  test(name, () => {
+    const data = special ? genDataSpecial(rng, shape) : genData(rng, shape);
+    const ref = sqrtRuntime(data);
+
+    const stableOperand = makeOperand(stableCore, asView, shape, data);
+    let stableData: Float64Array;
+    try {
+      const got = stableOperand.arr.sqrt();
+      try {
+        // D-V2.3 fallout (see elementwise.test.ts's identical comment):
+        // `got: AnyWNDArray = WNDArray<any>`, so `.shape` is `Readonly<any>`
+        // — doesn't structurally collapse to `any`, so no longer matches
+        // `readonly number[]` (TS2740). Cast only; runtime value unaffected.
+        assertShapeEqual(shape, got.shape as readonly number[], `${name}: stable shape`);
+        stableData = got.toArray();
+      } finally {
+        got.dispose();
+      }
+    } finally {
+      disposeAll(stableOperand);
+    }
+    assertDataBitIdentical(ref, stableData, `${name}: runtime.ts vs stable resident`);
+
+    for (const wc of WORKER_COUNTS) {
+      const pool = pools.get(wc)!;
+      const operand = makeOperand(pool.core, asView, shape, data);
+      try {
+        const got = operand.arr.sqrt();
+        try {
+          assertShapeEqual(shape, got.shape as readonly number[], `${name} workers=${wc}`);
+          const gotData = got.toArray();
+          assertDataBitIdentical(ref, gotData, `${name} workers=${wc} vs runtime.ts`);
+          assertDataBitIdentical(stableData, gotData, `${name} workers=${wc} vs stable resident`);
+        } finally {
+          got.dispose();
+        }
+      } finally {
+        disposeAll(operand);
+      }
+    }
+  });
+}
+
+{
+  const rng = makeRng(0x5351525f5448524en); // "SQR_THRN"-ish
+  runSqrtCase("sqrt threaded parity: contiguous [2,3,4]", [2, 3, 4], false, rng);
+  // Pflicht view case (spec D6): a transposed view on every pool AND stable.
+  runSqrtCase("sqrt threaded parity: transposed view [4,3,2]", [4, 3, 2], true, rng);
+  runSqrtCase("sqrt threaded parity: rank-0 scalar", [], false, rng);
+  runSqrtCase("sqrt threaded parity: size-0 dim [0,5]", [0, 5], false, rng);
+  // C-2 (Baustein-C-Befund der Verify-Runde): prove the "bit-identical incl.
+  // IEEE special values" M1 claim ON the threads artifact directly, not only by
+  // the same-crate argument — NaN / +-0 / +-Inf / subnormals through the
+  // threaded resident core, contiguous AND on a transposed view.
+  runSqrtCase("sqrt threaded parity: special values, contiguous [2,3,4]", [2, 3, 4], false, rng, true);
+  runSqrtCase("sqrt threaded parity: special values, transposed view [4,3,2]", [4, 3, 2], true, rng, true);
+}
 

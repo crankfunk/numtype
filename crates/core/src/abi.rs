@@ -1340,3 +1340,61 @@ mod kern07_abi_tests {
     }
 }
 
+// ---------------------------------------------------------------------------
+// WASM parity S0 (docs/wasm-parity-sqrt-spec.md): `sqrt` on the resident/
+// threaded backends. Appended strictly after every pre-existing item in this
+// file (freeze discipline: `mod kern07_abi_tests` above is the last
+// pre-existing item; nothing above this comment is touched). NOT cfg-gated
+// (same reasoning as the Kern-07 block above it) — this op belongs in BOTH
+// the plain artifact (`pnpm build:wasm`) and the threads artifact, so the
+// plain artifact's hash legitimately changes again this phase.
+// ---------------------------------------------------------------------------
+
+/// WASM parity S0: elementwise square root over a strided view
+/// (shape-preserving, no broadcast). Identical 8-parameter operand
+/// convention and prevalidation order to `nt_materialize` (the nearest
+/// existing single-strided-operand entry point) — see that function's doc
+/// comment. `f64::sqrt` is the IEEE-754 correctly-rounded square root, so
+/// this is bit-identical to `Math.sqrt` (see `kernels::sqrt`'s module doc
+/// comment for the M1 argument).
+#[no_mangle]
+pub extern "C" fn nt_sqrt_strided(
+    shape_ptr: u32,
+    rank: u32,
+    strides_ptr: u32,
+    offset: u32,
+    data_ptr: u32,
+    data_len: u32,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    // Defense-in-depth prevalidation (see module doc).
+    if let Err(e) = validate_rank(rank) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(shape_ptr, rank, 4),
+        validate_region(strides_ptr, rank, 4),
+        validate_region(data_ptr, data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
+    let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
+    let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
+
+    match kernels::sqrt::sqrt_strided(shape, strides, offset, data) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
