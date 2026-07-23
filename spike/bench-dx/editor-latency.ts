@@ -832,15 +832,45 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // ReduceAxis/Guard/OkShape machinery -- the class-surface-ripple mechanism
 // W1/W2 already established, not the CoreExports mechanism). Measured twice
 // (byte-identical both times). See docs/wasm-parity-mean-ergebnisse.md.
+// Re-pinned on 2026-07-24 (WASM-parity S3 / item + stack): both ops add NO
+// CoreExports member (item is kernel-less by design -- a plain TS strided
+// read, never touches WASM; stack composes the already-proven `nt_materialize`
+// kernel, same "composed op" case as S2/mean) so the keyof-resolution
+// mechanism again contributes +0. The movement is the SAME third
+// mechanism as S1/S2: every workload instantiates WNDArray, and `item` (one
+// new instance method) plus `stack` (one new static method, PLUS the two
+// exported `StackRowsGuard`/`StackShapeOf` signature aliases and the two
+// facade `stack` methods on `WasmBackend`/`ThreadedBackend`) all land new
+// members/signatures across a total of THREE classes this time (not just
+// WNDArray) -- larger than S0/S1/S2's single-class ripples, and NOT
+// perfectly uniform across workloads (spread of 139) since w8 is the only
+// workload that already exercises `stack` itself (Scale-Probe sentinel,
+// D14/T5 above) and so pays a slightly different marginal cost than the
+// other workloads, which only pay for the class-surface growth, never a
+// call site.
+//
+// These pins were set TWICE in this slice. The first set (+2722..+2761 over
+// S2) belonged to a version whose three `stack` signatures returned the
+// alias `StackResultOf<Rows>` directly. Baustein B measured with an LSP
+// hover probe that a top-level alias in RETURN position is preserved by name
+// in quick info, so `backend.stack([a, b])` hovered as
+// `StackResultOf<readonly [WNDArray<[3]>, WNDArray<[3]>]>` rather than a
+// clean resolved tuple -- at the only surface a package consumer can reach.
+// The fix (alias the SHAPE, spell out the handle: `WNDArray<StackShapeOf<
+// Rows>>`) restores `WNDArray<readonly [2, 3]>` at all three call forms and
+// costs a further +5476..+5500 per workload, which is what these pins now
+// carry. Owner-approved trade-off (the slice's own check:diag gate was
+// raised from +8,000 to +13,000 for it, measured, not estimated). Measured
+// twice, byte-identical. See docs/wasm-parity-item-stack-ergebnisse.md.
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 28789,
-  w2: 30598,
-  w3: 61738,
-  w4: 28952,
-  w5: 34243,
-  w6: 35413,
-  w7: 27961,
-  w8: 35828,
+  w1: 37018,
+  w2: 38851,
+  w3: 69993,
+  w4: 37173,
+  w5: 42472,
+  w6: 43666,
+  w7: 36222,
+  w8: 43911,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

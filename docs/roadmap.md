@@ -325,5 +325,17 @@ Spezialwerten und Achsen-Fall), Determinismus-Pin (`sum/n`, nicht `sum*(1/n)`) n
 Leak-Non-Vakuität exakt belegt (`getResidentFreeCount()`-Delta = `2N` über 500 Aufrufe).
 check:diag-Root +1.500 (Δ deutlich unter dem +6.000-Gate; gestuft: Methode +333, Test-Anhänge
 +885, Typ-Pins +282), stress +323 (dieselbe Klassen-Surface-Ripple, kein Order-Noise), browser
-Δ0, bench:editor 8 Pins uniform +323 neu gesetzt (doppelt reproduziert). S3–S5 folgen dem
+Δ0, bench:editor 8 Pins uniform +323 neu gesetzt (doppelt reproduziert).
+
+**S3 (item + stack): ERLEDIGT 2026-07-24, dreifach verifiziert A+B+C.** Beide Ops kernel-los
+(Arbeitsregel 11): `item` als reiner strided TS-Lesezugriff auf die WASM-Memory — es läuft KEIN
+WASM-Code, ein vierter, im Vertragstext unbenannter M1-Fall; `stack` als N Aufrufe des
+eingefrorenen `nt_materialize` in je einen Sub-Slot EINES Ausgabepuffers, zweiter Präzedenzfall des
+S2-„komponierte Op"-Kandidaten. **Freeze-Hash unverändert** `8255821b…`, cargo unverändert, kein
+neuer `CoreExports`-Member. Erste STATISCHE Op der Kampagne, deshalb zusätzlich `stack` auf beiden
+Backend-Facaden (`WNDArray` ist nicht aus index.ts exportiert). check:diag 226.690 @ 140
+(Δ+12.986, Gate in Spec v3 Owner-abgenommen von +8.000 auf +13.000 angehoben), stress 115.498,
+browser Δ0, bench:editor 8 Pins ZWEIMAL neu gesetzt; test:resident 5497+2, test:threaded 114.
+Kernbefund der Verify-Runde: eine **M3-Verletzung an der Konsumenten-API**, die drei Leser
+übersahen und nur eine echte LSP-Messung fand (neue Arbeitsregel 13). **S4–S5** folgen dem
 etablierten Workflow (Spec → Baustein 0 → Impl → Verify A+B+C → Freeze-Re-Pin).

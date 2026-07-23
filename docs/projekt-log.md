@@ -746,3 +746,64 @@ Test-Wachstum: test:resident 4719→5024 (305 neue Fälle), test:threaded 91→1
 
 Details: docs/wasm-parity-mean-spec.md v2, docs/wasm-parity-mean-ergebnisse.md. Die Verify-Runde
 A+B+C dieser Scheibe steht zum Zeitpunkt dieses Eintrags noch aus.
+
+## WASM-Parität S3 — `item` + `stack` (2026-07-24, dreifach verifiziert A+B+C)
+
+Vierte Scheibe der Kampagne. `NDArray.item(...indices)` (W5) und `NDArray.stack(rows)` (W4) waren
+NDArray-only; `WNDArray` kann jetzt beides, threaded-Parität fällt automatisch mit.
+
+**Arbeitsregel 11 griff zum zweiten Mal in Folge, in zwei verschiedenen Ausprägungen.** `item` ist
+kernel-los per Design — ein Einzelwert-Lesezugriff hat keine Arithmetik, die ein Kernel beschleunigen
+könnte; Offset aus `(strides, offset)`, dann ein `f64`-Lesezugriff über eine frisch abgeleitete View,
+denselben Pfad benutzen `toArray()`s contiguous-Zweig und die Skalar-Rückgaben von `dot()`/`norm()`
+seit Kern 02/07. `stack` ist reine Datenbewegung über den seit Kern 03 eingefrorenen
+`nt_materialize`: N Aufrufe, jeder in den `i`-ten Sub-Slot EINES frisch allozierten Ausgabepuffers,
+zwei Scratch-Puffer insgesamt statt `2n`. Folge: **Freeze-Hash unverändert**, kein Rust, kein
+ABI-Eintrag, kein `CoreExports`-Member — Arbeitsregel 10 greift bestätigt nicht.
+
+**Baustein 0 fing zwei Verdrahtungs-Befunde vor der ersten Codezeile** und bestätigte das Kern-Design
+empirisch (Sub-Slot-`nt_materialize` über sechs Konfigurationen byte-exakt, `d === 0` ohne Gate, die
+zwei neuen Validierungs-Helfer über je 20.000 Zufallsfälle wortgleich zu den Orakeln, `item` auf Views
+über 15.000 Fälle abweichungsfrei). BLOCKER: `ThreadedBackend` hat kein `core`-Feld, der Core lebt auf
+`this.pool.core` — live als TS2339 reproduziert, exakt die Item-10-Fundklasse. MAJOR: die
+Facaden-Signaturen brauchten eine Typ-Verdrahtung, die die Änderungstabelle nicht nannte.
+
+Der wertvollste Baustein-0-Befund war eine **Bestätigung mit Zähnen**: `nt_materialize`s interne
+`Vec`-Allokation löst `memory.grow` wirklich aus (1,1 MB auf 130 MB über 40 Aufrufe), ein Wachstum
+detacht den alten `ArrayBuffer`, und ein Schreibversuch über die veraltete View ist ein stiller No-Op
+— der Kernel meldet danach `status === 0` bei komplett falschen Daten. Weder Statuscode noch
+Exception. Daraus wurde Pflicht-Mutant M-d plus die Auflage, dass ein Testfall das Wachstum
+nachweislich auslöst; das 60-Fälle-Zufallsraster fängt ihn nicht.
+
+**Die Verify-Runde schloss fünf Lücken, drei davon vakuöse Tests — alle drei nur per Mutant
+sichtbar.** Baustein A's eigener Mutant entfernte die beiden `scratch.push`-Aufrufe (echtes
+8-Byte-pro-Aufruf-Leck): der eigens dafür geschriebene Leck-Test blieb grün, weil 500 Iterationen
+ca. 4 KB ergeben und WASM in 64-KiB-Seiten wächst — ersetzt durch eine exakte Alloc/Free-Bilanz über
+den Zähl-Mock. Baustein B's Mutanten zeigten, dass die Liveness-Prüfung nur für Zeile 0 und die
+Core-Prüfung nur gegen `rows[0]` getestet waren; beide Lücken mit je einem Test geschlossen, je unter
+dem Original-Mutanten fallend. B's unabhängige Orakel fanden über 6.000 `item`-, 600 `stack`- und 837
+threaded-Fälle **0 Abweichungen**, und ein selbst gebauter `memory.grow`-Stresstest (30,2 MB auf
+49,9 MB während des Aufrufs) blieb über 2,4 Millionen Werte bit-identisch — gegen den Stale-View-
+Mutanten dagegen 1.199.980 Abweichungen ohne einen einzigen Throw.
+
+**Der teuerste Befund war eine M3-Verletzung, die drei Leser übersahen.** Der v2-Rückgabetyp-Alias
+`StackResultOf<Rows>` ließ `backend.stack([a, b])` — die einzige für Paketkonsumenten erreichbare
+Fläche — als `StackResultOf<readonly [WNDArray<[3]>, WNDArray<[3]>]>` hovern statt als sauberes
+Tupel. Ein Top-Level-Typ-Alias in RÜCKGABE-Position wird von der Quick Info namentlich erhalten; ein
+Alias in TYP-ARGUMENT-Position wird aufgelöst (`add`s `WNDArray<OkShape<Broadcast<S, B>>>` hovert
+sauber). Implementierer, Baustein A (alle Gates frisch) und Baustein C (erster Lauf) lasen denselben
+Quelltext und beanstandeten nichts; gefunden hat es nur der Verifier, der den echten
+`tsc --lsp --stdio` startete. C hat seinen Fehlschluss im zweiten Lauf unaufgefordert benannt und den
+Zwischenstand ausdrücklich als echten M3-Verstoß eingestuft — der Fix war Pflicht, nicht Kür. Daraus
+wurde Arbeitsregel 13.
+
+Der Fix (Alias trägt nur die SHAPE, das Handle wird ausgeschrieben) kostet +5.498 Instantiations.
+Drei billigere Wege wurden gemessen und verworfen: Typ-Pin-Konsolidierung trägt −21 bei, eine
+Zwei-Alias-Aufteilung ist teurer (227.020), und die Test-Aufrufstellen laufen bereits über dynamische
+Shapes. Die Abwägung ging mit den Zahlen an den Owner: Hover-Konformität schlägt Budget, das
+Scheiben-Gate wurde begründet von +8.000 auf +13.000 angehoben (Spec v3). Endstand check:diag
+226.690 @ 140 (Δ+12.986, Marge 14), stress 115.498 @ 82, browser 2.142 @ 75 unverändert,
+bench:editor in dieser Scheibe zweimal neu gesetzt, test:resident 5497+2, test:threaded 114, cargo
+und Freeze-Hash unverändert.
+
+Details: docs/wasm-parity-item-stack-spec.md v3, docs/wasm-parity-item-stack-ergebnisse.md.

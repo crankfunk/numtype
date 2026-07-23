@@ -19,7 +19,7 @@
 import assert from "node:assert";
 import { test } from "node:test";
 import { NDArray } from "../src/ndarray.ts";
-import { dotRuntime, elementwiseBinary, keepDimsShape, matmulRuntime, meanRuntime, normSqRuntime, scalarElementwiseRuntime, sqrtRuntime, sumRuntime, transposeRuntime } from "../src/runtime.ts";
+import { dotRuntime, elementwiseBinary, itemRuntime, keepDimsShape, matmulRuntime, meanRuntime, normSqRuntime, scalarElementwiseRuntime, sqrtRuntime, stackRuntime, sumRuntime, transposeRuntime } from "../src/runtime.ts";
 import { wasmAdd, wasmMatmul, wasmSum, wasmTranspose } from "../src/wasm/backend.ts";
 import { initCore } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
@@ -1044,3 +1044,154 @@ test("diagnostic quality (T4b/F1 pin, WASM parity S1): WNDArray broadcast mismat
     });
   }
 }
+
+// =============================================================================
+// WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D6(b)/T3b): `item`/
+// `stack` special-value coverage — randomized `genDataSpecial` grid, same
+// structure as the sqrt/scalar/mean blocks above (contiguous only, ranks
+// 0..4, ~60 cases each — VIEW coverage is resident.test.ts's/threaded.test.ts's
+// job per D7, not this file's, matching S0/S1/S2 precedent). Plus a
+// byte-exact NaN-payload fixture for `stack` (a pure data-movement op, same
+// discipline as the `transpose` fixture above) and the D3-mandated
+// "measured, not assumed" cross-surface equality check for `item`'s NaN
+// payload handling (item never moves data through arithmetic, but whether
+// the JS engine preserves a non-canonical payload through a bare indexed
+// `Float64Array` read is an engine property, not something this op
+// controls — see the spec's own honesty note).
+// =============================================================================
+
+// --- item: randomized SPECIAL_VALUES grid, ranks 0..4, contiguous ----------
+{
+  const rng = makeRng(0x4954454d5f53504543n); // "ITEM_SPEC"-ish
+  const CASE_COUNT = 60;
+  for (let c = 0; c < CASE_COUNT; c++) {
+    const shape = genShape(rng, 0, 4);
+    const data = genDataSpecial(rng, shape);
+    const indices = shape.map((d) => rng.nextInt(0, Math.max(d - 1, 0)));
+
+    test(`item special case ${c}: shape=[${shape.join(",")}] indices=[${indices.join(",")}]`, () => {
+      const ref = itemRuntime(shape, data, indices);
+      const ctx = `item special case ${c} shape=[${shape.join(",")}] indices=[${indices.join(",")}]`;
+
+      const naive = NDArray.fromArray(shape, data);
+      assertScalarBitIdentical(ref, naive.item(...indices), `${ctx} [naive]`);
+
+      const w = WNDArray.fromArray(core, shape, data);
+      try {
+        assertScalarBitIdentical(ref, w.item(...indices), `${ctx} [resident]`);
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}
+
+// --- stack: randomized SPECIAL_VALUES grid, N/D varied, contiguous ---------
+{
+  const rng = makeRng(0x5354434b5f53504543n); // "STCK_SPEC"-ish
+  const CASE_COUNT = 60;
+  for (let c = 0; c < CASE_COUNT; c++) {
+    const n = rng.nextInt(1, 6);
+    const d = rng.nextInt(0, 6);
+    const rowsData: Float64Array[] = [];
+    for (let i = 0; i < n; i++) rowsData.push(genDataSpecial(rng, [d]));
+
+    test(`stack special case ${c}: n=${n} d=${d}`, () => {
+      const ref = stackRuntime(rowsData.map((data) => ({ shape: [d], data })));
+      const ctx = `stack special case ${c} n=${n} d=${d}`;
+
+      const rowShape: number[] = [d]; // dynamic: avoids the literal-tuple type cost for a plain runtime test
+      const rows = rowsData.map((data) => WNDArray.fromArray(core, rowShape, data));
+      try {
+        const stacked = WNDArray.stack(core, rows);
+        try {
+          assertShapeEqual(ref.shape, stacked.shape as readonly number[], `${ctx} [resident]`);
+          assertDataBitIdentical(ref.data, stacked.toArray(), `${ctx} [resident]`);
+        } finally {
+          stacked.dispose();
+        }
+      } finally {
+        for (const r of rows) r.dispose();
+      }
+    });
+  }
+}
+
+// -----------------------------------------------------------------------
+// D3 movement-payload-sharpening fixture, `stack` variant: a NaN with a
+// NON-canonical payload (0x7ff8_0000_beef_f00d, distinct from the
+// `transpose` fixture's 0x7ff8_0000_dead_beef above and from
+// scalar-mean.test.ts's own W4 stack fixture's 0x7ff8_0000_cafe_babe) must
+// survive `stack`'s pure row-major gather BYTE-EXACT — checked via `bitsOf`,
+// not `Object.is`. `stack` is DATA MOVEMENT (D5: `nt_materialize` gathers
+// via `f64.load`/`f64.store`, never arithmetic), the same class of claim
+// the `transpose` fixture already establishes for a different op.
+// -----------------------------------------------------------------------
+function nonCanonicalNaNStack(): number {
+  const bits = new BigUint64Array([0x7ff8_0000_beef_f00dn]);
+  return new Float64Array(bits.buffer)[0] ?? Number.NaN;
+}
+
+test("stack fixture: a non-canonical NaN payload survives the row-major gather byte-exact (bitsOf, not Object.is)", () => {
+  const nan = nonCanonicalNaNStack();
+  assert.ok(Number.isNaN(nan), "sanity: constructed value must actually be NaN");
+  const nanBits = bitsOf(nan);
+  assert.strictEqual(nanBits, 0x7ff8_0000_beef_f00dn, "sanity: constructed NaN must carry the intended non-canonical payload bits");
+
+  const row0Data = new Float64Array([nan, 1, 2]);
+  const row1Data = new Float64Array([3, 4, 5]);
+  const ref = stackRuntime([
+    { shape: [3], data: row0Data },
+    { shape: [3], data: row1Data },
+  ]);
+  assert.strictEqual(bitsOf(ref.data[0] ?? 0), nanBits, "naive stackRuntime must preserve the exact NaN payload");
+
+  const row0 = WNDArray.fromArray(core, [3], row0Data);
+  const row1 = WNDArray.fromArray(core, [3], row1Data);
+  try {
+    const stacked = WNDArray.stack(core, [row0, row1]);
+    try {
+      const got = stacked.toArray();
+      assert.strictEqual(bitsOf(got[0] ?? 0), nanBits, "resident stack must preserve the exact NaN payload");
+    } finally {
+      stacked.dispose();
+    }
+  } finally {
+    row0.dispose();
+    row1.dispose();
+  }
+});
+
+// -----------------------------------------------------------------------
+// D3 honesty note: `item`'s NaN payload — the bound claim is CROSS-SURFACE
+// EQUALITY (measured), not payload preservation (assumed). Both surfaces
+// perform the exact same operation (a bare `Float64Array` indexed read, no
+// arithmetic in between) — this test MEASURES the actual result and
+// documents it via `bitsOf` equality between the two surfaces, rather than
+// asserting a specific payload value as a guaranteed contract.
+// -----------------------------------------------------------------------
+test("item: non-canonical NaN payload — measured cross-surface equality, not an assumed payload-preservation contract (D3 addendum)", () => {
+  const bits = new BigUint64Array([0x7ff8_0000_1234_5678n]);
+  const nan = new Float64Array(bits.buffer)[0] ?? Number.NaN;
+  assert.ok(Number.isNaN(nan), "sanity: constructed value must actually be NaN");
+
+  const shape = [3];
+  const data = new Float64Array([1, nan, 2]);
+
+  const naive = NDArray.fromArray(shape, data);
+  const naiveResult = naive.item(1);
+  assert.ok(Number.isNaN(naiveResult), "naive item must return a NaN-class value");
+
+  const w = WNDArray.fromArray(core, shape, data);
+  try {
+    const residentResult = w.item(1);
+    assert.ok(Number.isNaN(residentResult), "resident item must return a NaN-class value");
+    assert.strictEqual(
+      bitsOf(residentResult),
+      bitsOf(naiveResult),
+      `item's NaN payload handling must be cross-surface consistent (measured, not assumed): naive=0x${bitsOf(naiveResult).toString(16)} resident=0x${bitsOf(residentResult).toString(16)}`,
+    );
+  } finally {
+    w.dispose();
+  }
+});

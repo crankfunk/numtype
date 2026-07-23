@@ -71,10 +71,10 @@ import type { Guard, NDArrayView, OkShape } from "../ndarray.ts";
 import type { MatMul } from "../matmul.ts";
 import type { ReduceAxis, Transpose } from "../reduce.ts";
 import type { ReshapeCheck } from "../reshape.ts";
-import { assertReshapeArgs, assertVectorPair, computeStrides, keepDimsShape, normalizeSliceSpecs, product, runtimeBroadcastShape, type SliceSpec } from "../runtime.ts";
+import { assertReshapeArgs, assertVectorPair, computeStrides, itemOffsetStrided, keepDimsShape, normalizeSliceSpecs, product, runtimeBroadcastShape, stackValidateShapes, type SliceSpec } from "../runtime.ts";
 import type { LiteralShapeProduct } from "../literal-arithmetic.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "../slice.ts";
-import type { DotCheck } from "../vector.ts";
+import type { DotCheck, ItemGuard, StackCheck, StackShape } from "../vector.ts";
 import type { CoreExports } from "./loader.ts";
 
 interface ScratchBuf {
@@ -272,6 +272,64 @@ export function squeezeMatmulShape(plan: MatmulPlan): number[] {
 }
 
 /**
+ * WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D6): the `WNDArray`
+ * -> `Shape` unwrap `WNDArray.stack`'s own `Guard`/`OkShape` types need —
+ * structural mirror of `ndarray.ts`'s `UnwrapRow`/`RowShapesOf` (see that
+ * pair's own doc comment for the full empirical trace), carrying the SAME
+ * two load-bearing properties, re-verified to hold identically against
+ * `WNDArray`'s own `__variance` invariance marker (spec's Baustein-0
+ * addendum, finding g):
+ *  - **homomorphic** (`{ [I in keyof Rows]: ... }`), never `Rows[number]
+ *    extends WNDArray<infer S>` — the non-homomorphic form collapses to
+ *    `never` on a heterogeneous tuple (`ndarray.ts`'s F2, BLOCKER-class);
+ *  - **fresh nested generic** (`UnwrapWRow`), not an inline conditional —
+ *    an ARRAY whose element type is itself a union of shapes evaluates the
+ *    inline form non-distributively and silently collapses to `never`
+ *    (`ndarray.ts`'s F8).
+ * File-private, like its `ndarray.ts` counterparts (Baustein-0: `RowShapesOf`
+ * is not exported and referenced nowhere outside its own file) — only
+ * `WNDArray.stack`'s own signature below needs it directly; the two
+ * EXPORTED aliases further down (`StackRowsGuard`/`StackShapeOf`) are what
+ * the two backend facades actually import.
+ */
+type UnwrapWRow<R> = R extends WNDArray<infer S> ? S : never;
+type WRowShapesOf<Rows extends readonly WNDArray<any>[]> = { [I in keyof Rows]: UnwrapWRow<Rows[I]> };
+
+/**
+ * WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D6, v2 Baustein-0
+ * MAJOR fix): the two pieces of `WNDArray.stack`'s signature, EXPORTED so
+ * both backend facades (`backend-api.ts`'s `WasmBackend.stack`,
+ * `threaded.ts`'s `ThreadedBackend.stack`) can express the identical
+ * signature without a new import edge to `ndarray.ts`/`vector.ts` — both
+ * facades already import from this file. Solves two problems the spec's
+ * v1 draft missed (v2 addendum):
+ *  - **wiring**: `UnwrapWRow`/`WRowShapesOf` above stay file-private
+ *    (mirroring their `ndarray.ts` counterparts), so a facade could not
+ *    otherwise name this exact `Guard<StackCheck<...>, ...>` type;
+ *  - **budget**: `ndarray.ts`'s own `RowShapesOf` doc comment measures that
+ *    TWO textually-identical-but-separately-written mapped-type expressions
+ *    are NOT deduplicated by the checker (~1,428 vs ~801 instantiations for
+ *    two call sites) — at THREE call sites (this static method + two
+ *    facades) writing the mapped type out three times would be the most
+ *    expensive option available; one named, reused alias is not.
+ *
+ * `StackShapeOf` deliberately aliases only the SHAPE, never the finished
+ * `WNDArray<...>` handle (Baustein-B finding, verified by an LSP hover probe
+ * against the real `tsc --lsp` server): a top-level type alias in RETURN
+ * position is preserved by name in quick info, so declaring
+ * `stack(...): StackResultOf<Rows>` made the publicly reachable facades hover
+ * as `StackResultOf<readonly [WNDArray<[3]>, WNDArray<[3]>]>` instead of a
+ * clean resolved tuple — a direct violation of this project's own hover rule
+ * ("hovers must show clean resolved tuples like `NDArray<[2, 4]>`",
+ * CLAUDE.md). An alias in TYPE-ARGUMENT position does NOT have that effect:
+ * `add`'s own `WNDArray<OkShape<Broadcast<S, B>>>` hovers as
+ * `WNDArray<[2, 3]>` (same file, same class, measured precedent). Hence the
+ * split — alias the shape, spell out the handle.
+ */
+export type StackRowsGuard<Rows extends readonly WNDArray<any>[]> = Guard<StackCheck<WRowShapesOf<Rows>>, Rows>;
+export type StackShapeOf<Rows extends readonly WNDArray<any>[]> = OkShape<StackShape<WRowShapesOf<Rows>>>;
+
+/**
  * Resident twin of `NDArray<S>`. See module doc comment for the full
  * lifecycle contract. Surface mirrors `NDArray`: `zeros`/`ones`/`fromArray`,
  * `add`/`matmul`/`sum`/`transpose`, `toArray`/`toNestedArray`, plus the
@@ -447,6 +505,121 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
     const view = new Float64Array(core.memory.buffer, buf.ptr, len);
     view.set(values);
     return WNDArray.fresh<Mutable<S>>(core, [...shape] as Mutable<S>, buf.ptr, len);
+  }
+
+  /** WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D2/D5): stack N
+   * independently-built rank-1 rows into a rank-2 `[N, D]` matrix —
+   * resident twin of `NDArray.stack`. STATIC, not an instance method,
+   * inserted here right after `fromArray` for the same reason
+   * `NDArray.stack` sits right after ITS `fromArray` (D5's own doc
+   * comment): conceptually a constructor, never reads `this`. Unlike every
+   * op this campaign has added so far, this is the FIRST static op:
+   * `WNDArray` is not exported from `index.ts` (D2), so package consumers
+   * only ever reach this method through `WasmBackend.stack`/
+   * `ThreadedBackend.stack`, each a one-line delegation with the `core`
+   * they actually hold.
+   *
+   * `core` is the FIRST parameter, never derived from `rows[0]` — the same
+   * convention every other `WNDArray` static already follows
+   * (`fresh`/`zeros`/`ones`/`fromArray`); it keeps the empty-`rows` case
+   * well-defined, and it lets every row be checked against the SAME core
+   * the caller actually owns, so "a row from a foreign core" is caught with
+   * the existing cross-core message (D2) instead of silently picking
+   * `rows[0]`'s core as ground truth.
+   *
+   * **Kernel-less by design — the THIRD M1 case, the same one S2/`mean`
+   * already instantiates: a composed op over an already-proven kernel, not
+   * a new one.** `nt_materialize` (Kern 03) has been in continuous use
+   * since `toArray()`/`contiguous()`/`reshape()`/`flatten()` below — this
+   * method is N calls into it, each gathering one row directly into its
+   * own `D`-element slot of ONE freshly allocated output buffer
+   * (`outDataBuf.ptr + i * d * 8`), never allocating or copying through a
+   * per-row intermediate. Validation (liveness on every row, then core
+   * identity, then `stackValidateShapes`) runs BEFORE any allocation —
+   * this file's own convention (see e.g. `add`) — so a rejected call never
+   * leaks scratch, because none was ever allocated for it.
+   *
+   * Exactly TWO scratch allocations regardless of `n` (one shape cell for
+   * the shared `[d]`, one strides cell rewritten every iteration) — valid
+   * because every row has the SAME shape `[d]`; only the stride varies row
+   * to row.
+   *
+   * **The strides view inside the loop below MUST be re-derived every
+   * iteration — never hoisted out as an "optimization".** `nt_materialize`'s
+   * own internal scratch allocation can trigger `memory.grow` (spec
+   * addendum, empirically confirmed against the real artifact: ~1.1MB ->
+   * ~130MB over 40 calls), and a `memory.grow` silently DETACHES every
+   * pre-existing `ArrayBuffer` view — writing through a stale view is not a
+   * throw, it is a silent no-op, and the very next kernel call still
+   * reports `status === 0`, because it reads through its own
+   * freshly-resolved WASM-side pointer, not through this JS view. Hoisting
+   * this allocation+view out of the loop reintroduces exactly that bug
+   * (Pflicht-Mutant M-d): silently wrong row strides with a clean exit
+   * code and no diagnostic anywhere. */
+  static stack<const Rows extends readonly WNDArray<any>[]>(
+    core: CoreExports,
+    rows: StackRowsGuard<Rows>,
+  ): WNDArray<StackShapeOf<Rows>> {
+    const rs = rows as unknown as readonly AnyWNDArray[];
+    for (const r of rs) r.assertLive("stack");
+    for (const r of rs) {
+      if (r.core !== core) {
+        throw new Error(`WNDArray.stack: operands belong to different WASM core instances`);
+      }
+    }
+    const { n, d } = stackValidateShapes(rs.map((r) => r.shape as readonly number[]));
+
+    const outLen = n * d;
+    const scratch: ScratchBuf[] = [];
+    try {
+      const outDataBuf = allocBytes(core, outLen * 8); // fresh, never aliases a row
+      const shapeBuf = writeU32Array(core, [d]); // every row shares this ONE shape [d]
+      scratch.push(shapeBuf);
+      const stridesBuf = allocBytes(core, 4); // rewritten fresh each iteration below
+      scratch.push(stridesBuf);
+      for (let i = 0; i < n; i++) {
+        const r = rs[i]!; // i < n === rs.length, established by the loop bound
+        // Frische View VOR JEDEM Schreiben — MUSS, nicht Stilfrage (siehe
+        // Doc-Kommentar oben): ein vorheriger `nt_materialize`-Aufruf in
+        // dieser selben Schleife kann `memory.grow` ausgelöst und diese
+        // View bereits detacht haben; ein gecachter View schreibt dann
+        // still ins Leere (kein Throw), und der Kernel meldet trotzdem
+        // status 0 bei komplett falschen Daten (Pflicht-Mutant M-d).
+        new Uint32Array(core.memory.buffer, stridesBuf.ptr, 1)[0] = r.strides[0] ?? 0;
+        const status = core.nt_materialize(
+          shapeBuf.ptr,
+          1,
+          stridesBuf.ptr,
+          r.offset,
+          r.buf.ptr,
+          r.buf.lenElems,
+          outDataBuf.ptr + i * d * 8,
+          d,
+        );
+        if (status !== 0) {
+          freeBuf(core, outDataBuf); // fresh output buffer never escapes on failure
+          throw new Error(`wasm resident nt_materialize (stack): status ${status} for row ${i} with shape [${r.shape.join(",")}]`);
+        }
+      }
+      // `[n, d]` types as the fixed tuple `[number, number]`, which does not
+      // sufficiently overlap a literal `OkShape<...>` for a single-step
+      // `as` (unlike `add`/`sum`'s plain `number[]` shape arrays above) —
+      // same round trip through `unknown` `contiguous()` already uses for
+      // its own shape cast, and equally sound here: `n`/`d` ARE the same
+      // dims the guard already proved.
+      return WNDArray.fresh<OkShape<StackShape<WRowShapesOf<Rows>>>>(
+        core,
+        [n, d] as unknown as OkShape<StackShape<WRowShapesOf<Rows>>>,
+        outDataBuf.ptr,
+        outLen,
+      );
+    } finally {
+      // Ephemeral per-call scratch: always freed — success, kernel failure,
+      // or an OOM throw between the allocations above. `outDataBuf` is
+      // NEVER in this list — it is either returned (success) or explicitly
+      // freed above (failure), never both.
+      for (const buf of scratch) freeBuf(core, buf);
+    }
   }
 
   /** Broadcasting elementwise add — resident twin of `NDArray.add`/
@@ -1514,5 +1687,49 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
       return out;
     };
     return build(0, 0);
+  }
+
+  /** WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D3): the direct
+   * scalar read, resident twin of `NDArray.item` — NumPy's own
+   * `x.item(i, j, ...)`, full indexing only, rank 0 included (`item()`
+   * reads the sole element). `ItemGuard<S, Idx>` (vector.ts) is reused
+   * UNCHANGED as the rest-parameter's own declared type — the exact
+   * type-level reuse W5's own FOLLOWUPS entry predicted this class would
+   * need (D6: zero new type machinery, second call site).
+   *
+   * **Kernel-less by design — a FOURTH M1 case this campaign hasn't hit
+   * before (D3, spec's own M1-Einordnung section): unlike every arithmetic
+   * op above, this method never calls into WASM at all.** The offset
+   * arithmetic runs entirely in plain TS (`itemOffsetStrided`, runtime.ts);
+   * the read itself is a single `Float64Array` index. There is no
+   * arithmetic here a kernel could make faster, and the strided-read
+   * mechanics this needs already exist — `toArray()`'s contiguous fast
+   * path above reads WASM memory through a freshly derived view the exact
+   * same way.
+   *
+   * **Strided, never contiguous — the actual reason this can't just
+   * delegate to `itemRuntime`.** The flat offset is computed from THIS
+   * handle's own `strides`/`offset`, never `computeStrides(shape)` (which
+   * is what `itemRuntime` assumes of its always-contiguous `Float64Array`
+   * argument). A view (`transpose()`/`slice()`) has non-natural strides
+   * and/or a nonzero `offset` — reading it as if contiguous would silently
+   * return the WRONG element. `itemOffsetStrided` exists in `runtime.ts`
+   * specifically so this method and `itemRuntime` share stems/order
+   * without sharing that (deliberately different) stride source (D4).
+   * Pflicht-Mutant M-a targets exactly this: substituting
+   * `computeStrides(this.shape)`/`0` here must be caught by the View cases
+   * in the differential suite, not the contiguous ones.
+   *
+   * **No allocation, no scratch, nothing to free.** The view below is
+   * derived fresh, immediately before the read (memory rule: never cache a
+   * typed-array view across a call boundary — `memory.grow` silently
+   * detaches it). `?? NaN` mirrors `itemRuntime`'s own fallback verbatim —
+   * structurally unreachable once the bounds check inside
+   * `itemOffsetStrided` has already held. */
+  item<const Idx extends readonly number[]>(...indices: ItemGuard<S, Idx>): number {
+    this.assertLive("item");
+    const flat = itemOffsetStrided(this.shape, this.strides, this.offset, indices as unknown as readonly number[]);
+    const view = new Float64Array(this.core.memory.buffer, this.buf.ptr, this.buf.lenElems);
+    return view[flat] ?? NaN;
   }
 }

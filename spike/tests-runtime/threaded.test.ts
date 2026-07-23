@@ -24,7 +24,7 @@
  */
 import assert from "node:assert";
 import { after, test } from "node:test";
-import { keepDimsShape, matmulRuntime, meanRuntime, scalarElementwiseRuntime, sqrtRuntime, transposeRuntime } from "../src/runtime.ts";
+import { itemRuntime, keepDimsShape, matmulRuntime, meanRuntime, scalarElementwiseRuntime, sqrtRuntime, stackRuntime, transposeRuntime } from "../src/runtime.ts";
 import { initCore, type CoreExports } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
 import {
@@ -1096,5 +1096,145 @@ function runMeanCase(name: string, shape: number[], axis: number | undefined, ke
   runMeanCase("mean() threaded parity: special values, contiguous [2,3,4]", [2, 3, 4], undefined, false, false, rng, true);
   runMeanCase("mean() threaded parity: special values, transposed view [4,3,2]", [4, 3, 2], undefined, false, true, rng, true);
   runMeanCase("mean(axis) threaded parity: special values, contiguous [2,3,4]", [2, 3, 4], 1, false, false, rng, true);
+}
+
+// ---------------------------------------------------------------------------
+// WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D6/T8): `WNDArray.item`
+// threaded-vs-stable parity. `item` runs NO WASM code at all (D3: a plain
+// strided TS read over `core.memory.buffer` — the fourth M1 case this
+// campaign has hit) — it works identically on BOTH the stable and threads
+// artifacts, since it never touches a kernel export. Extends the file's
+// established threaded-vs-stable differential to `item`, reusing the
+// persistent `pools`/`stableCore` set up above.
+// ---------------------------------------------------------------------------
+
+function runItemCase(name: string, shape: number[], asView: boolean, rng: Rng, special = false): void {
+  test(name, () => {
+    const data = special ? genDataSpecial(rng, shape) : genData(rng, shape);
+    const indices = shape.map((d) => rng.nextInt(0, Math.max(d - 1, 0)));
+    const ref = itemRuntime(shape, data, indices);
+
+    const stableOperand = makeOperand(stableCore, asView, shape, data);
+    let stableResult: number;
+    try {
+      stableResult = stableOperand.arr.item(...indices);
+    } finally {
+      disposeAll(stableOperand);
+    }
+    assert.ok(Object.is(ref, stableResult), `${name}: stable expected ${ref}, got ${stableResult}`);
+
+    for (const wc of WORKER_COUNTS) {
+      const pool = pools.get(wc)!;
+      const operand = makeOperand(pool.core, asView, shape, data);
+      try {
+        const got = operand.arr.item(...indices);
+        assert.ok(Object.is(ref, got), `${name} workers=${wc}: expected ${ref} (runtime.ts), got ${got}`);
+        assert.ok(Object.is(stableResult, got), `${name} workers=${wc}: expected ${stableResult} (stable), got ${got}`);
+      } finally {
+        disposeAll(operand);
+      }
+    }
+  });
+}
+
+{
+  const rng = makeRng(0x4954454d5f5448524en); // "ITEM_THRN"-ish
+  runItemCase("item threaded parity: contiguous [2,3,4]", [2, 3, 4], false, rng);
+  // Pflicht view case (spec D6/T8): a transposed view on every pool AND stable.
+  runItemCase("item threaded parity: transposed view [4,3,2]", [4, 3, 2], true, rng);
+  runItemCase("item threaded parity: rank-0 scalar", [], false, rng);
+  // C-2 lesson (from the S0/sqrt verify round): at least one genDataSpecial
+  // case, contiguous AND view, directly on the threads artifact.
+  runItemCase("item threaded parity: special values, contiguous [2,3,4]", [2, 3, 4], false, rng, true);
+  runItemCase("item threaded parity: special values, transposed view [4,3,2]", [4, 3, 2], true, rng, true);
+}
+
+// ---------------------------------------------------------------------------
+// WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D6/T8): `WNDArray.stack`
+// threaded-vs-stable parity. `stack` is NOT dispatched through the worker
+// pool (spec's Nicht-Ziele: the pool only ever routes `threadedMatmul`) —
+// each row's `nt_materialize` call runs directly against the resident core,
+// on BOTH the stable and threads artifacts, since they're the same crate.
+// Extends the file's established threaded-vs-stable differential to `stack`,
+// reusing the persistent `pools`/`stableCore` set up above.
+// ---------------------------------------------------------------------------
+
+/** Builds `rowsData.length` `WNDArray` rows on `core`: contiguous where
+ * `asView[i]` is false, else a `[d,2]` base's column-0 integer-index view
+ * (non-natural stride, the "geschnittene Zeile" D7 requires) — same
+ * technique `resident.test.ts`'s own randomized stack grid uses. */
+function buildStackRows(core: CoreExports, rowsData: readonly Float64Array[], asView: readonly boolean[]): { rows: AnyWNDArray[]; owners: AnyWNDArray[] } {
+  const rows: AnyWNDArray[] = [];
+  const owners: AnyWNDArray[] = [];
+  const d = rowsData[0]?.length ?? 0;
+  const rowShape: number[] = [d]; // dynamic: a plain runtime test, no need to pay the literal-tuple type cost
+  const baseShape: number[] = [d, 2];
+  for (let i = 0; i < rowsData.length; i++) {
+    const data = rowsData[i]!;
+    if (asView[i]) {
+      const baseData: number[] = [];
+      for (let k = 0; k < d; k++) baseData.push(data[k]!, 0);
+      const base = WNDArray.fromArray(core, baseShape, baseData);
+      owners.push(base);
+      rows.push(base.slice(null, 0));
+    } else {
+      rows.push(WNDArray.fromArray(core, rowShape, data));
+    }
+  }
+  return { rows, owners };
+}
+
+function runStackCase(name: string, n: number, d: number, asView: boolean[], rng: Rng, special = false): void {
+  test(name, () => {
+    const rowsData: Float64Array[] = [];
+    for (let i = 0; i < n; i++) rowsData.push(special ? genDataSpecial(rng, [d]) : genData(rng, [d]));
+    const ref = stackRuntime(rowsData.map((data) => ({ shape: [d], data })));
+
+    const { rows: stableRows, owners: stableOwners } = buildStackRows(stableCore, rowsData, asView);
+    let stableData: Float64Array;
+    try {
+      const stacked = WNDArray.stack(stableCore, stableRows);
+      try {
+        stableData = stacked.toArray();
+      } finally {
+        stacked.dispose();
+      }
+    } finally {
+      for (const r of stableRows) r.dispose();
+      for (const o of stableOwners) o.dispose();
+    }
+    assertDataBitIdentical(ref.data, stableData, `${name}: runtime.ts vs stable resident`);
+
+    for (const wc of WORKER_COUNTS) {
+      const pool = pools.get(wc)!;
+      const { rows, owners } = buildStackRows(pool.core, rowsData, asView);
+      try {
+        const stacked = WNDArray.stack(pool.core, rows);
+        try {
+          const gotData = stacked.toArray();
+          assertDataBitIdentical(ref.data, gotData, `${name} workers=${wc} vs runtime.ts`);
+          assertDataBitIdentical(stableData, gotData, `${name} workers=${wc} vs stable resident`);
+        } finally {
+          stacked.dispose();
+        }
+      } finally {
+        for (const r of rows) r.dispose();
+        for (const o of owners) o.dispose();
+      }
+    }
+  });
+}
+
+{
+  const rng = makeRng(0x5354434b5f5448524en); // "STCK_THRN"-ish
+  runStackCase("stack threaded parity: contiguous rows, n=4 d=5", 4, 5, [false, false, false, false], rng);
+  // Pflicht view case (spec D6/T8): at least one view row on every pool AND stable.
+  runStackCase("stack threaded parity: mixed contiguous+view rows, n=4 d=5", 4, 5, [false, true, false, true], rng);
+  runStackCase("stack threaded parity: n=1", 1, 5, [false], rng);
+  runStackCase("stack threaded parity: d=0", 3, 0, [false, false, false], rng);
+  // C-2 lesson (from the S0/sqrt verify round): at least one genDataSpecial
+  // case, contiguous AND view, directly on the threads artifact.
+  runStackCase("stack threaded parity: special values, contiguous rows, n=4 d=5", 4, 5, [false, false, false, false], rng, true);
+  runStackCase("stack threaded parity: special values, mixed contiguous+view rows, n=4 d=5", 4, 5, [false, true, false, true], rng, true);
 }
 

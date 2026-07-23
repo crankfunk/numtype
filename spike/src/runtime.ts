@@ -1036,3 +1036,90 @@ export function itemRuntime(shape: readonly number[], data: Float64Array, indice
   }
   return data[offset] ?? NaN;
 }
+
+/**
+ * WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D4): the
+ * validation-and-offset half of `itemRuntime`'s own logic above, split out
+ * so `WNDArray.item` (resident.ts) can reuse the identical arity/integer/
+ * bounds checks and stem wording WITHOUT going through `itemRuntime`
+ * itself. `itemRuntime` always derives its own strides via
+ * `computeStrides(shape)` and reads from offset 0 — correct for its
+ * contiguous `Float64Array` callers, but wrong for a resident VIEW (strided,
+ * arbitrary `offset`, Kern 03). This helper takes `strides`/`base` directly
+ * from the caller instead of deriving them, so the SAME three checks work
+ * for both a contiguous handle (natural strides, offset 0 — passes through
+ * identically to `itemRuntime`) and an arbitrary strided view.
+ *
+ * Deliberately a DUPLICATE of `itemRuntime`'s three checks (arity -> per-axis
+ * integer -> per-axis bounds, same stems, same order) rather than a
+ * refactor that routes `itemRuntime` through this helper — `itemRuntime`
+ * stays this scheibe's Orakel, byte-unchanged (D4: a proof that rewrites
+ * its own reference in the same commit proves less; the `runtime.ts`
+ * append-only convention). Cross-surface message equality between
+ * `itemRuntime` and this helper is a TEST obligation (T4), not a
+ * structural guarantee — the price of duplication, paid off mechanically.
+ */
+export function itemOffsetStrided(
+  shape: readonly number[],
+  strides: readonly number[],
+  base: number,
+  indices: readonly number[],
+): number {
+  if (indices.length !== shape.length) {
+    throw new Error(`item: expected ${shape.length} indices (got ${indices.length})`);
+  }
+  let offset = base;
+  for (let axis = 0; axis < shape.length; axis++) {
+    const raw = indices[axis] ?? 0;
+    if (!Number.isInteger(raw)) {
+      throw new Error(`item: index ${raw} for axis ${axis} is not an integer`);
+    }
+    const d = shape[axis] ?? 0;
+    const i = raw < 0 ? raw + d : raw;
+    if (i < 0 || i >= d) {
+      throw new Error(`item: index ${raw} is out of bounds for axis ${axis} with dim ${d}`);
+    }
+    offset += i * (strides[axis] ?? 0);
+  }
+  return offset;
+}
+
+/**
+ * WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D4): the validation
+ * half of `stackRuntime`'s own logic above, split out so `WNDArray.stack`
+ * (resident.ts) can reuse the identical empty/rank/length-mismatch checks
+ * and stem wording without also inheriting `stackRuntime`'s own
+ * `Float64Array`-copying data movement — `WNDArray.stack` replaces that
+ * movement with N `nt_materialize` calls into one WASM output buffer (D5),
+ * so only the VALIDATION half is shared logic here. Returns the row count
+ * and the shared row length so the caller can size its output buffer
+ * BEFORE touching any WASM memory — mirrors `stackRuntime`'s own
+ * "validate everything, then allocate" order, and this codebase's own
+ * "shape computation before any allocation" convention (see e.g.
+ * `WNDArray.add`).
+ *
+ * Deliberately a DUPLICATE of `stackRuntime`'s three checks (empty -> per-row
+ * rank -> per-row length-vs-first, same stems, same order) rather than a
+ * refactor of `stackRuntime` itself — same D4 rationale (and the same T4
+ * cross-surface message-equality test obligation) as `itemOffsetStrided`
+ * above.
+ */
+export function stackValidateShapes(shapes: readonly (readonly number[])[]): { n: number; d: number } {
+  if (shapes.length === 0) {
+    throw new Error("stack: expected at least one row");
+  }
+  let d: number | undefined;
+  for (let i = 0; i < shapes.length; i++) {
+    const shape = shapes[i] ?? [];
+    if (shape.length !== 1) {
+      throw new Error(`stack: expected 1-D rows (got shape [${shape.join(",")}] at index ${i})`);
+    }
+    const di = shape[0] ?? 0;
+    if (d === undefined) {
+      d = di;
+    } else if (di !== d) {
+      throw new Error(`stack: row length mismatch (expected ${d}, got ${di} at index ${i})`);
+    }
+  }
+  return { n: shapes.length, d: d ?? 0 };
+}

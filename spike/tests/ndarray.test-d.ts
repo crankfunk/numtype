@@ -3,7 +3,8 @@ import type { Shape } from "../src/dim.ts";
 import { type AnyNDArray, type Guard, NDArray, type NDArrayView } from "../src/ndarray.ts";
 import type { ReduceAxis } from "../src/reduce.ts";
 import type { ItemGuard, StackCheck, TopkCheck } from "../src/vector.ts";
-import type { WNDArray } from "../src/wasm/resident.ts";
+import type { CoreExports } from "../src/wasm/loader.ts";
+import { WNDArray } from "../src/wasm/resident.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
 // --- const type params: callers never write `as const` ------------------
@@ -1222,3 +1223,139 @@ type WMEAN_KEEP_UNION = Expect<Equal<(typeof wMeanKeepUnion)["shape"], readonly 
 // `sum`'s own throw, M3).
 // @ts-expect-error - axis 5 is out of range for rank-3 shape [2,3,4]: error stays at the argument (ReduceAxis reused unmodified from sum, verbatim message — same Guard the MEAN_AXIS_OOB_MSG pin above already checks)
 rw.mean(5);
+
+// =============================================================================
+// WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D6/T6): WNDArray.item
+// type pins — second call site of the UNCHANGED `ItemGuard<S, Idx>` (vector.ts;
+// W5's own FOLLOWUPS entry predicted exactly this), mirrors the NDArray-side
+// W5 pins above (ITEM_RETURNS_NUMBER etc.). Budget-Disziplin (W5-D6-Lektion):
+// `ItemGuard`'s own message-equality content is ALREADY pinned bit-for-bit by
+// the NDArray-side IG1 pin above (the type is UNCHANGED, D6: "null new type
+// machinery") — re-running the same ~1,700-instantiation `Equal<>` structural
+// comparison here would cost budget for zero new information, so this
+// section proves the WIRING (return type, arity, rejection-at-the-argument,
+// degradation) via cheap `@ts-expect-error`/`Equal<>`-on-a-`number`
+// comparisons only, not a second copy of the message-content proof.
+// =============================================================================
+
+declare const witemM: WNDArray<[2, 3]>;
+const witemResult = witemM.item(0, 0);
+type WITEM_RETURNS_NUMBER = Expect<Equal<typeof witemResult, number>>;
+
+// A valid NEGATIVE literal index compiles too (NumPy-parity, Spike 03).
+const witemNegResult = witemM.item(-1, -1);
+type WITEM_NEGATIVE_LITERAL_OK = Expect<Equal<typeof witemNegResult, number>>;
+
+// Rank 0: item() (zero arguments) compiles, returns `number`.
+declare const witemR0: WNDArray<[]>;
+const witemR0Result = witemR0.item();
+type WITEM_RANK0_OK = Expect<Equal<typeof witemR0Result, number>>;
+
+// --- arity errors, BOTH directions — native TS2554 (F3), not a custom message ---
+
+// @ts-expect-error - too few indices for rank-2 shape [2,3]: native TS2554
+witemM.item(0);
+
+// @ts-expect-error - too many indices for rank-2 shape [2,3]: native TS2554
+witemM.item(0, 0, 0);
+
+// @ts-expect-error - rank-0 receiver called with an index: native TS2554
+witemR0.item(0);
+
+// --- rejection AT the offending argument (both custom stems) ----------------
+
+// @ts-expect-error - index 2 out of bounds for axis 0 with dim 2 (positive)
+witemM.item(2, 0);
+
+// @ts-expect-error - index -3 out of bounds for axis 0 with dim 2 (negative, past the front)
+witemM.item(-3, 0);
+
+// @ts-expect-error - index 0.5 for axis 0 is not an integer (dot-form)
+witemM.item(0.5, 0);
+
+// --- no-claim degrades: wide rank, union index, dynamic spread --------------
+
+declare const witemWideRankNd: WNDArray<number[]>;
+const witemWideRankResult = witemWideRankNd.item(0, 1, 2); // wide rank: IsDynamicRank<S> -> RankUnknowable -> Idx passed through unchanged
+type WITEM_WIDE_RANK_OK = Expect<Equal<typeof witemWideRankResult, number>>;
+
+declare const witemUnionIdx: 1 | 5;
+witemM.item(witemUnionIdx, 0); // union index: IsUnion pre-gate in ItemMark -> no-claim, compiles
+
+declare const witemDynIndices: number[];
+witemM.item(...witemDynIndices); // F4: dynamic-length spread on a fixed-rank receiver compiles
+
+// =============================================================================
+// WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D6/T6): WNDArray.stack
+// type pins — second call site of the UNCHANGED `StackCheck`/`StackShape`
+// (vector.ts), routed through the two NEW resident.ts-private mirrors
+// `UnwrapWRow`/`WRowShapesOf`. The F2 (homomorphic, not non-homomorphic) and
+// F8 (fresh nested generic, not inline) properties are pinned HERE via the
+// REAL `WNDArray.stack(...)` call path (not by referencing the file-private
+// `UnwrapWRow`/`WRowShapesOf` directly, which are inaccessible from this
+// file by design, D6) — a regression in resident.ts's OWN mirror would not
+// be caught by the NDArray-side STACK_* pins above, which exercise
+// `ndarray.ts`'s `RowShapesOf` instead.
+// =============================================================================
+
+declare const wcore: CoreExports;
+
+// --- exact tuple shape: [2,3] (two [3] rows) --------------------------------
+
+declare const wstackA: WNDArray<[3]>;
+declare const wstackB: WNDArray<[3]>;
+const wstacked23 = WNDArray.stack(wcore, [wstackA, wstackB]);
+type WSTACK_23 = Expect<Equal<(typeof wstacked23)["shape"], readonly [2, 3]>>;
+
+// --- empty tuple literal -> rejected AT the argument (F3) -------------------
+
+// @ts-expect-error - empty tuple literal must be rejected (F3): a `[]` call is a guaranteed runtime throw ("expected at least one row")
+WNDArray.stack(wcore, []);
+
+// --- array input: honest [number, D] (F5) -----------------------------------
+
+declare const wstackArr3: readonly WNDArray<[3]>[];
+const wstackedArr3 = WNDArray.stack(wcore, wstackArr3);
+type WSTACK_ARRAY_D = Expect<Equal<(typeof wstackedArr3)["shape"], readonly [number, 3]>>;
+
+// --- D=0 rows are valid ------------------------------------------------------
+
+declare const wstackZero1: WNDArray<[0]>;
+declare const wstackZero2: WNDArray<[0]>;
+const wstackedZero = WNDArray.stack(wcore, [wstackZero1, wstackZero2]);
+type WSTACK_D0 = Expect<Equal<(typeof wstackedZero)["shape"], readonly [2, 0]>>;
+
+// --- F2 pin: heterogeneous tuple rejected AT the argument, through the REAL
+// WNDArray.stack call path (proves WRowShapesOf resolves each row's OWN
+// shape individually — a non-homomorphic collapse to `never` would surface
+// as a DIFFERENT, generic rejection instead of this specific one). --------
+
+declare const wstackMismatchA: WNDArray<[3]>;
+declare const wstackMismatchB: WNDArray<[4]>;
+// @ts-expect-error - [3] vs [4] row length mismatch: error stays at the rows argument (F2 pin, length axis)
+WNDArray.stack(wcore, [wstackMismatchA, wstackMismatchB]);
+
+declare const wstackRank2: WNDArray<[2, 3]>;
+declare const wstackRank1: WNDArray<[3]>;
+// @ts-expect-error - rank-2 member at index 0: error stays at the rows argument (F2 pin, rank axis)
+WNDArray.stack(wcore, [wstackRank2, wstackRank1]);
+
+// --- F2 pin, positive form: an unknowable-rank row mixed with a known-shape
+// row widens HONESTLY to [2, number] — never collapses to `never`, never a
+// wrongly-confident literal. Direct WNDArray-side mirror of the NDArray-side
+// STACK_UNKNOWABLE_RANK pin above. -------------------------------------------
+
+declare const wstackDynRankRow: WNDArray<number[]>;
+declare const wstackKnownRow: WNDArray<[3]>;
+const wstackedUnknowableRank = WNDArray.stack(wcore, [wstackDynRankRow, wstackKnownRow]);
+type WSTACK_UNKNOWABLE_RANK = Expect<Equal<(typeof wstackedUnknowableRank)["shape"], readonly [2, number]>>;
+
+// --- F8 pin: an ARRAY whose ELEMENT type is itself a union of DIFFERENT
+// shapes widens to [number, number] — never collapses to `never`. Direct
+// WNDArray-side mirror of the NDArray-side STACK_ARRAY_UNION pin above,
+// proving `UnwrapWRow`'s fresh-nested-generic fix specifically on the
+// resident.ts mirror (not merely re-exercising ndarray.ts's own). ----------
+
+declare const wstackArrUnion: readonly (WNDArray<[3]> | WNDArray<[4]>)[];
+const wstackedArrUnion = WNDArray.stack(wcore, wstackArrUnion);
+type WSTACK_ARRAY_UNION = Expect<Equal<(typeof wstackedArrUnion)["shape"], readonly [number, number]>>;

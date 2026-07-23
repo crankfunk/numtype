@@ -258,3 +258,53 @@ test("Cross-Backend-Guard: an op mixing WNDArrays from two separate WasmBackend 
     b.dispose();
   }
 });
+
+// =============================================================================
+// WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D2): `WasmBackend.stack`
+// reachability. `stack` is the campaign's first STATIC op — `WNDArray` is not
+// exported from `index.ts`, so this facade is the ONLY way a package
+// consumer reaches `WNDArray.stack` (besides `ThreadedBackend.stack`, tested
+// separately in `backend-api-threaded.test.ts`).
+// =============================================================================
+
+test("WasmBackend.stack: bit-identical to direct WNDArray.stack(core, ...) and the naive NDArray.stack reference", async () => {
+  const backend = await NDArray.backend("wasm");
+  const core = await initCore();
+  const rowsData = [
+    [1, 2, 3],
+    [4, 5, 6],
+    [7, 8, 9],
+  ];
+
+  const backendRows = rowsData.map((d) => backend.fromArray([3], d));
+  const stackedViaBackend = backend.stack(backendRows);
+
+  const directRows = rowsData.map((d) => WNDArray.fromArray(core, [3], d));
+  const stackedDirect = WNDArray.stack(core, directRows);
+
+  const naiveRows = rowsData.map((d) => NDArray.fromArray([3], d));
+  const naiveStacked = NDArray.stack(naiveRows);
+
+  try {
+    assertShapeEqual([3, 3], stackedViaBackend.shape as readonly number[], "WasmBackend.stack shape");
+    assertShapeEqual(stackedDirect.shape as readonly number[], stackedViaBackend.shape as readonly number[], "WasmBackend.stack vs direct shape");
+    assertDataBitIdentical(stackedDirect.toArray(), stackedViaBackend.toArray(), "WasmBackend.stack vs direct WNDArray.stack");
+    assertDataBitIdentical(naiveStacked.data, stackedViaBackend.toArray(), "WasmBackend.stack vs naive NDArray.stack");
+  } finally {
+    stackedViaBackend.dispose();
+    stackedDirect.dispose();
+    for (const r of backendRows) r.dispose();
+    for (const r of directRows) r.dispose();
+  }
+});
+
+test("WasmBackend.stack: disposed backend throws naming itself", async () => {
+  const backend = await NDArray.backend("wasm");
+  const shape: number[] = [3]; // dynamic shape: a plain runtime test, no need to pay the literal-tuple StackFold cost
+  const a = backend.fromArray(shape, [1, 2, 3]);
+  const b = backend.fromArray(shape, [4, 5, 6]);
+  backend.dispose();
+  assert.throws(() => backend.stack([a, b]), /WasmBackend\.stack: backend has been disposed/);
+  a.dispose();
+  b.dispose();
+});

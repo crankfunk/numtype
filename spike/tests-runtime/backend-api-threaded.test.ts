@@ -19,7 +19,8 @@
 import assert from "node:assert";
 import { test } from "node:test";
 import { NDArray } from "../src/ndarray.ts";
-import { matmulRuntime } from "../src/runtime.ts";
+import { matmulRuntime, stackRuntime } from "../src/runtime.ts";
+import { WNDArray } from "../src/wasm/resident.ts";
 import { getThreadedPoolFreeCount } from "../src/wasm/threaded.ts";
 import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
 
@@ -148,4 +149,54 @@ test("Cross-Pool-Guard: matmul mixing WNDArrays from two separate ThreadedBacken
     await backendA.dispose();
     await backendB.dispose();
   }
+});
+
+// =============================================================================
+// WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D2, v2 Baustein-0
+// BLOCKER fix): `ThreadedBackend.stack` reachability. The core lives on
+// `this.pool.core`, not `this.core` (`ThreadedBackend` has no such field —
+// v1's draft assumed the two facades were structurally identical, a
+// TS2339 live-reproduced by Baustein 0). `stack` is NOT dispatched through
+// the worker pool (spec's Nicht-Ziele: the pool only ever routes
+// `threadedMatmul`) — it runs `nt_materialize` directly against the
+// resident core, exactly like every other non-matmul op on this backend.
+// =============================================================================
+
+test("ThreadedBackend.stack: bit-identical to direct WNDArray.stack(pool.core, ...) and the naive runtime.ts reference", async () => {
+  const backend = await NDArray.backend("threaded", { workers: 1 });
+  const rowsData = [
+    [1, 2, 3],
+    [4, 5, 6],
+  ];
+  const backendRows = rowsData.map((d) => backend.fromArray([3], d));
+  const stackedViaBackend = backend.stack(backendRows);
+
+  const directRows = rowsData.map((d) => WNDArray.fromArray(backend.pool.core, [3], d));
+  const stackedDirect = WNDArray.stack(backend.pool.core, directRows);
+
+  const ref = stackRuntime(rowsData.map((d) => ({ shape: [3], data: new Float64Array(d) })));
+
+  try {
+    assertShapeEqual(ref.shape, stackedViaBackend.shape as readonly number[], "ThreadedBackend.stack vs runtime.ts shape");
+    assertDataBitIdentical(ref.data, stackedViaBackend.toArray(), "ThreadedBackend.stack vs runtime.ts");
+    assertShapeEqual(stackedDirect.shape as readonly number[], stackedViaBackend.shape as readonly number[], "ThreadedBackend.stack vs direct shape");
+    assertDataBitIdentical(stackedDirect.toArray(), stackedViaBackend.toArray(), "ThreadedBackend.stack vs direct WNDArray.stack");
+  } finally {
+    stackedViaBackend.dispose();
+    stackedDirect.dispose();
+    for (const r of backendRows) r.dispose();
+    for (const r of directRows) r.dispose();
+    await backend.dispose();
+  }
+});
+
+test("ThreadedBackend.stack: disposed backend throws naming itself", async () => {
+  const backend = await NDArray.backend("threaded", { workers: 1 });
+  const shape: number[] = [3]; // dynamic shape: a plain runtime test, no need to pay the literal-tuple StackFold cost
+  const a = backend.fromArray(shape, [1, 2, 3]);
+  const b = backend.fromArray(shape, [4, 5, 6]);
+  await backend.dispose();
+  assert.throws(() => backend.stack([a, b]), /ThreadedBackend\.stack: backend has been disposed/);
+  a.dispose();
+  b.dispose();
 });

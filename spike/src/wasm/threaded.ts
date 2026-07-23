@@ -86,7 +86,7 @@ import { type Guard, type OkShape } from "../ndarray.ts";
 import { type Mutable, type Shape } from "../dim.ts";
 import type { MatMul } from "../matmul.ts";
 import type { CoreExports } from "./loader.ts";
-import { planMatmul, squeezeMatmulShape, WNDArray, type WNDArrayDescriptor } from "./resident.ts";
+import { planMatmul, squeezeMatmulShape, WNDArray, type StackRowsGuard, type StackShapeOf, type WNDArrayDescriptor } from "./resident.ts";
 import {
   CB_A_DATA_LEN,
   CB_A_DATA_PTR,
@@ -822,6 +822,22 @@ export class ThreadedBackend {
   ones<const S extends Shape>(shape: S): WNDArray<Mutable<S>> {
     this.assertLive("ones");
     return WNDArray.ones(this.pool.core, shape);
+  }
+
+  /** WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D2, v2
+   * Baustein-0 BLOCKER fix): reachability for `WNDArray.stack` on the
+   * threaded facade. `stack` is NOT dispatched through the worker pool
+   * (spec's Nicht-Ziele: the pool only ever routes `threadedMatmul`) — it
+   * runs `nt_materialize` directly against the resident core, on the SAME
+   * `pool.core` `fromArray`/`zeros`/`ones` above already use. `this.core`
+   * does not exist on `ThreadedBackend` (unlike `WasmBackend`, which has
+   * its own private `core` field) — the core lives on `this.pool.core`,
+   * exactly as every other creation method here already reads it; v1's
+   * draft assumed the two facades were structurally identical and named
+   * `this.core`, which is a TS2339 here (live-reproduced, spec addendum). */
+  stack<const Rows extends readonly WNDArray<any>[]>(rows: StackRowsGuard<Rows>): WNDArray<StackShapeOf<Rows>> {
+    this.assertLive("stack");
+    return WNDArray.stack(this.pool.core, rows);
   }
 
   /** Parallel matmul (D2): delegates to `threadedMatmul(this.pool, a, b,

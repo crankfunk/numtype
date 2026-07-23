@@ -58,3 +58,30 @@ const threadedAsView: NDArrayView<[2, 3]> = threadedArr;
 const threadedAsWidenedView: NDArrayView<Shape> = threadedArr;
 void threadedAsView;
 void threadedAsWidenedView;
+
+// =============================================================================
+// WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D2/D6): `stack`
+// reachability + type wiring on BOTH facades — the campaign's first STATIC
+// op, and the reason the two exported `StackRowsGuard`/`StackResultOf`
+// aliases (resident.ts, D6 v2) exist: three call sites (the static + these
+// two facades) need the IDENTICAL signature without a new import edge to
+// ndarray.ts/vector.ts. `WasmBackend.stack` uses its own private `core`;
+// `ThreadedBackend.stack` routes through `this.pool.core` (v2 Baustein-0
+// BLOCKER fix — `ThreadedBackend` has no `core` field of its own).
+// =============================================================================
+
+declare const wsA: WNDArray<[3]>;
+declare const wsB: WNDArray<[3]>;
+
+const wasmStacked = wasmBackend.stack([wsA, wsB]);
+type T6 = Expect<Equal<(typeof wasmStacked)["shape"], readonly [2, 3]>>;
+
+declare const badWsB: WNDArray<[4]>;
+// @ts-expect-error - [3] vs [4] row length mismatch: error stays at the rows argument, same guard as WNDArray.stack's own
+wasmBackend.stack([wsA, badWsB]);
+
+const threadedStacked = threadedBackend.stack([wsA, wsB]);
+type T7 = Expect<Equal<(typeof threadedStacked)["shape"], readonly [2, 3]>>;
+
+// @ts-expect-error - same rejection, through ThreadedBackend.stack's own copy of the identical signature
+threadedBackend.stack([wsA, badWsB]);

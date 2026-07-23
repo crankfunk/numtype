@@ -15,7 +15,7 @@
  */
 import type { Mutable, Shape } from "../dim.ts";
 import type { CoreExports } from "./loader.ts";
-import { WNDArray } from "./resident.ts";
+import { WNDArray, type StackRowsGuard, type StackShapeOf } from "./resident.ts";
 
 export type BackendKind = "wasm" | "threaded";
 
@@ -93,6 +93,17 @@ export class WasmBackend {
   ones<const S extends Shape>(shape: S): WNDArray<Mutable<S>> {
     this.assertLive("ones");
     return WNDArray.ones(this.core, shape);
+  }
+
+  /** WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D2): reachability
+   * for `WNDArray.stack` — the campaign's first STATIC op. `WNDArray` is
+   * not exported from `index.ts`, so a package consumer can only reach
+   * `stack` through this facade (or `ThreadedBackend`'s own copy); this
+   * method is a pure one-line delegation with the `core` this backend
+   * already holds, exactly like `fromArray`/`zeros`/`ones` above. */
+  stack<const Rows extends readonly WNDArray<any>[]>(rows: StackRowsGuard<Rows>): WNDArray<StackShapeOf<Rows>> {
+    this.assertLive("stack");
+    return WNDArray.stack(this.core, rows);
   }
 
   dispose(): void {

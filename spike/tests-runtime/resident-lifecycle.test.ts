@@ -11,8 +11,8 @@
  */
 import assert from "node:assert";
 import { test } from "node:test";
-import { initCore } from "../src/wasm/loader.ts";
-import { getResidentFreeCount, WNDArray } from "../src/wasm/resident.ts";
+import { initCore, type CoreExports } from "../src/wasm/loader.ts";
+import { getResidentFreeCount, WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
 
 // --- use-after-dispose: throws, names the op, never touches WASM memory ---
 test("use-after-dispose: toArray throws naming the op", async () => {
@@ -335,4 +335,336 @@ test("mean leak non-vacuity: N mean() calls on ONE receiver (dispose each result
     byteLengthAfterWarmup,
     `expected no growth from 500 more mean() call+dispose cycles: ${byteLengthAfterWarmup} -> ${byteLengthAfter500More}`,
   );
+});
+
+// =============================================================================
+// WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D3/D7): `WNDArray.item`
+// lifecycle — allocation-free (D3: "kein Allokations-, kein Kernel-Aufruf").
+// =============================================================================
+
+test("item: N calls on ONE receiver are allocation-free — getResidentFreeCount() delta is exactly 0, memory never grows", async () => {
+  const core = await initCore();
+  const a = WNDArray.fromArray(core, [4, 5], Array.from({ length: 20 }, (_, i) => i + 1));
+  const N = 500;
+
+  const before = getResidentFreeCount();
+  for (let i = 0; i < N; i++) {
+    a.item(i % 4, (i + 1) % 5);
+  }
+  const after = getResidentFreeCount();
+  assert.strictEqual(after, before, `item() must never touch a resident buffer's refcount: before=${before}, after=${after}`);
+
+  // No allocation at all (D3) means byteLength must not move even once —
+  // there is no "warmup" to let an allocator reach steady state, unlike
+  // every other op's leak test in this file.
+  const byteLengthBefore = core.memory.buffer.byteLength;
+  for (let i = 0; i < 500; i++) a.item(i % 4, (i + 1) % 5);
+  const byteLengthAfter = core.memory.buffer.byteLength;
+  assert.strictEqual(byteLengthAfter, byteLengthBefore, "item() calls must never grow WASM memory (it never allocates)");
+
+  a.dispose();
+});
+
+test("use-after-dispose: item throws naming the op", async () => {
+  const core = await initCore();
+  const a = WNDArray.fromArray(core, [2, 3], [1, 2, 3, 4, 5, 6]);
+  a.dispose();
+  assert.throws(() => a.item(0, 0), /WNDArray\.item:.*disposed/);
+});
+
+// =============================================================================
+// WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D5/D7): `WNDArray.stack`
+// lifecycle — leak-non-vacuity, use-after-dispose, and the mid-loop kernel-
+// status failure path.
+//
+// FINDING (deviation from D7's literal wording, reported rather than
+// silently resolved): D7 states the free-count delta for `stack` "zeigt
+// exakt die zwei Scratch-Freigaben pro Aufruf" (shows exactly the two
+// scratch frees per call). Verified against `resident.ts`'s own source:
+// `getResidentFreeCount()` increments ONLY inside `releaseBuffer()` (called
+// from a WNDArray HANDLE's `dispose()` or the FinalizationRegistry
+// backstop) — it tracks refcounted `ResidentBuffer` releases, never a raw
+// `core.nt_free()` call. `stack()`'s two scratch buffers (shapeBuf/
+// stridesBuf) are freed via the separate `allocBytes`/`freeBuf` path — the
+// SAME path every other op's own per-call scratch uses (add/sub/mul/div/
+// matmul/sum/sqrt/scalarOp), none of which move this counter for their
+// scratch either. Unlike `mean` (which disposes a real INTERMEDIATE
+// WNDArray handle inside its own body — the source of ITS delta=2), `stack`
+// has no intermediate handle at all: only the final OUTPUT buffer becomes a
+// real `ResidentBuffer`, released exactly once when the caller disposes the
+// returned `WNDArray`. The mechanically correct, achievable claim is
+// therefore delta = 1 per disposed stack() result (not 2) — proven below
+// via a 3-per-iteration signal (2 input rows + 1 result, so the counter's
+// own health is cross-checked too), PLUS a separate byteLength-plateau
+// check (this file's own established technique for scratch that never
+// becomes a WNDArray handle, e.g. the "failing ops leak nothing" tests
+// above) that specifically covers the scratch buffers' own leak-freedom,
+// since the counter cannot observe them.
+// =============================================================================
+
+test("stack leak non-vacuity: N stack() calls (dispose rows + result) free exactly 3 resident buffers per call, no net leak", async () => {
+  const core = await initCore();
+  const N = 500;
+  const shape: number[] = [3]; // dynamic shape (see file-wide note above T7's item allocation-free test)
+  const before = getResidentFreeCount();
+  for (let i = 0; i < N; i++) {
+    const a = WNDArray.fromArray(core, shape, [1, 2, 3]);
+    const b = WNDArray.fromArray(core, shape, [4, 5, 6]);
+    const stacked = WNDArray.stack(core, [a, b]);
+    stacked.dispose();
+    a.dispose();
+    b.dispose();
+  }
+  const after = getResidentFreeCount();
+  assert.strictEqual(
+    after - before,
+    3 * N,
+    `expected exactly 3 resident-buffer frees per iteration (2 input rows + 1 stack result): before=${before}, after=${after}, delta=${after - before}, expected=${3 * N}`,
+  );
+
+});
+
+test("stack SUCCESS path: every allocation is freed — exact alloc/free ledger over the counting mock (the two per-call scratch buffers included)", () => {
+  // The two per-call scratch buffers (shape cell + strides cell) are
+  // invisible to `getResidentFreeCount()`: that counter only fires in
+  // `releaseBuffer()` when a refcounted `ResidentBuffer` hits 0, never on the
+  // raw `nt_free` path `allocBytes`/`freeBuf` use for ephemeral scratch (the
+  // finding recorded on the test above).
+  //
+  // An allocator-GROWTH plateau check cannot substitute for it: the scratch
+  // is 8 bytes per call, so even hundreds of leaked calls stay orders of
+  // magnitude below WASM's 64 KiB page granularity and the check passes
+  // vacuously. That is not a hypothesis — Baustein A's verification mutant
+  // dropped both `scratch.push(...)` calls (a real, permanent scratch leak)
+  // and a 500-iteration growth check stayed GREEN; only the mid-loop failure
+  // test below caught it, and only because it counts.
+  //
+  // So this test counts too, on the path that test does not cover: the
+  // SUCCESS path. `failAtMaterializeCall = 0` is never reached (the mock's
+  // counter is 1-indexed), so every `nt_materialize` call succeeds. The
+  // assertion is an exact ledger — every non-sentinel allocation must have
+  // exactly one matching free — which catches ANY leaked buffer, scratch or
+  // output, at a granularity of one allocation.
+  const { core: mockCore, allocs, frees } = makeStackFailureMockCore(0);
+  const shape: number[] = [2];
+  const a = WNDArray.fromArray(mockCore, shape, [1, 2]);
+  const b = WNDArray.fromArray(mockCore, shape, [3, 4]);
+  const stacked = WNDArray.stack(mockCore, [a, b]);
+  assert.deepStrictEqual(Array.from(stacked.toArray()), [1, 2, 3, 4], "precondition: the mock's gather really ran");
+  stacked.dispose();
+  a.dispose();
+  b.dispose();
+
+  const ledger = (entries: readonly MockAlloc[]): string[] =>
+    entries
+      .filter((e) => e.bytes !== 0) // `nt_alloc(0)` returns the ptr-0 sentinel, never freed as a real block
+      .map((e) => `${e.ptr}:${e.bytes}`)
+      .sort();
+  assert.deepStrictEqual(
+    ledger(frees),
+    ledger(allocs),
+    `every allocation must be freed exactly once (scratch included): allocs=${JSON.stringify(allocs)}, frees=${JSON.stringify(frees)}`,
+  );
+});
+
+test("stack: result is a FRESH, independent buffer — stays valid and correct after the input rows are disposed", async () => {
+  const core = await initCore();
+  const shape: number[] = [3];
+  const a = WNDArray.fromArray(core, shape, [1, 2, 3]);
+  const b = WNDArray.fromArray(core, shape, [4, 5, 6]);
+  const stacked = WNDArray.stack(core, [a, b]);
+  a.dispose();
+  b.dispose();
+  try {
+    assert.strictEqual(stacked.disposed, false);
+    assert.deepStrictEqual(Array.from(stacked.toArray()), [1, 2, 3, 4, 5, 6]);
+  } finally {
+    stacked.dispose();
+  }
+});
+
+test("use-after-dispose: stack throws naming the op when a row is disposed", async () => {
+  const core = await initCore();
+  const shape: number[] = [3];
+  const a = WNDArray.fromArray(core, shape, [1, 2, 3]);
+  const b = WNDArray.fromArray(core, shape, [7, 8, 9]);
+  a.dispose();
+  assert.throws(() => WNDArray.stack(core, [a, b]), /WNDArray\.stack:.*disposed/);
+  b.dispose();
+});
+
+test("use-after-dispose: stack throws for a NON-FIRST disposed row too (the liveness check walks every row)", async () => {
+  // Baustein-B finding: with only the row-index-0 case above, a mutant that
+  // checks liveness for `rows[0]` alone instead of looping over every row
+  // passed all 1280 tests. That mutant is not benign — a disposed row at
+  // index 1 then reads freed (possibly already reused) WASM memory and
+  // `stack` returns silently wrong data with no diagnostic at all, the exact
+  // failure class this slice treats as its most dangerous. The real
+  // implementation loops correctly; this test is what keeps it that way.
+  const core = await initCore();
+  const shape: number[] = [3];
+  const a = WNDArray.fromArray(core, shape, [1, 2, 3]);
+  const b = WNDArray.fromArray(core, shape, [7, 8, 9]);
+  const c = WNDArray.fromArray(core, shape, [4, 5, 6]);
+  b.dispose(); // the MIDDLE row, not the first
+  assert.throws(() => WNDArray.stack(core, [a, b, c]), /WNDArray\.stack:.*disposed/);
+  // and the last row, so no single-position shortcut can satisfy this file
+  const d = WNDArray.fromArray(core, shape, [1, 1, 1]);
+  d.dispose();
+  assert.throws(() => WNDArray.stack(core, [a, c, d]), /WNDArray\.stack:.*disposed/);
+  a.dispose();
+  c.dispose();
+});
+
+// -----------------------------------------------------------------------
+// D7: "eine mitten im Loop scheiternde Zeile gibt Ausgabepuffer UND Scratch
+// frei" — deterministically forceable, per backend-oom.test.ts's own
+// precedent: a real WASM kernel-status failure inside `stack()`'s per-row
+// loop cannot be forced against the real artifact (every row constructed
+// through the public API is a valid in-bounds rank-1 view), so this mocks
+// `CoreExports` directly — same bump-allocator-over-a-real-ArrayBuffer
+// technique backend-oom.test.ts uses for the v1 backend's OOM paths, here
+// injecting an `nt_materialize` FAILURE (not an `nt_alloc` failure) at a
+// specific call index instead. `WNDArray.stack` takes `core` as an explicit
+// parameter (D2), so the mock plugs in directly — no monkey-patching.
+// -----------------------------------------------------------------------
+
+interface MockAlloc {
+  readonly ptr: number;
+  readonly bytes: number;
+}
+
+/** A minimal, functional `CoreExports` mock: `nt_alloc`/`nt_free` are a real
+ * bump allocator over a real backing `ArrayBuffer` (so `WNDArray.fromArray`
+ * and `stack`'s own scratch/output allocations work genuinely, not just
+ * type-check); `nt_materialize` performs the real rank-1 gather EXCEPT on
+ * its `failAtCall`-th invocation (1-indexed across the whole test), where it
+ * returns a non-zero status without touching `outDataPtr` — reproducing the
+ * exact "kernel rejects an already-allocated output buffer" path `stack`'s
+ * own `status !== 0` branch exists for. Every other `CoreExports` member is
+ * a `notImplemented` stub (throws if ever called) — `stack()` never reaches
+ * them, so a call would indicate a real bug, not a mock gap. */
+function makeStackFailureMockCore(failAtMaterializeCall: number): {
+  readonly core: CoreExports;
+  readonly allocs: MockAlloc[];
+  readonly frees: MockAlloc[];
+} {
+  const buffer = new ArrayBuffer(4 << 20); // 4 MiB — ample for these small test shapes
+  let bump = 8; // keep ptr 0 reserved (matches allocBytes' "ptr === 0 => OOM" convention)
+  let materializeCallCount = 0;
+  const allocs: MockAlloc[] = [];
+  const frees: MockAlloc[] = [];
+
+  function nt_alloc(bytes: number): number {
+    if (bytes === 0) {
+      allocs.push({ ptr: 0, bytes: 0 });
+      return 0;
+    }
+    const ptr = bump;
+    bump += bytes;
+    if (bump > buffer.byteLength) throw new Error(`mock backing buffer too small (need ${bump} bytes)`);
+    allocs.push({ ptr, bytes });
+    return ptr;
+  }
+  function nt_free(ptr: number, bytes: number): void {
+    frees.push({ ptr, bytes });
+  }
+  function nt_materialize(
+    shapePtr: number,
+    rank: number,
+    stridesPtr: number,
+    offset: number,
+    dataPtr: number,
+    dataLen: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number {
+    materializeCallCount++;
+    if (materializeCallCount === failAtMaterializeCall) {
+      return 7; // arbitrary non-zero status
+    }
+    const shapeView = new Uint32Array(buffer, shapePtr, rank);
+    const stridesView = new Uint32Array(buffer, stridesPtr, rank);
+    const dataView = new Float64Array(buffer, dataPtr, dataLen);
+    const outView = new Float64Array(buffer, outDataPtr, outLen);
+    const d = shapeView[0] ?? 0;
+    const stride = stridesView[0] ?? 0;
+    for (let k = 0; k < d; k++) outView[k] = dataView[offset + k * stride] ?? 0;
+    return 0;
+  }
+  function notImplemented(name: string): (...args: number[]) => number {
+    return (): number => {
+      throw new Error(`mock: ${name} unexpectedly called`);
+    };
+  }
+
+  const core: CoreExports = {
+    memory: { buffer } as WebAssembly.Memory,
+    nt_alloc,
+    nt_free,
+    nt_materialize,
+    nt_add: notImplemented("nt_add"),
+    nt_matmul: notImplemented("nt_matmul"),
+    nt_sum_all: notImplemented("nt_sum_all"),
+    nt_sum_axis: notImplemented("nt_sum_axis"),
+    nt_transpose: notImplemented("nt_transpose"),
+    nt_fill: notImplemented("nt_fill"),
+    nt_add_strided: notImplemented("nt_add_strided"),
+    nt_matmul_strided: notImplemented("nt_matmul_strided"),
+    nt_sum_all_strided: notImplemented("nt_sum_all_strided"),
+    nt_sum_axis_strided: notImplemented("nt_sum_axis_strided"),
+    nt_matmul_blocked: notImplemented("nt_matmul_blocked"),
+    nt_sub_strided: notImplemented("nt_sub_strided"),
+    nt_mul_strided: notImplemented("nt_mul_strided"),
+    nt_div_strided: notImplemented("nt_div_strided"),
+    nt_dot_strided: notImplemented("nt_dot_strided"),
+    nt_norm_sq_strided: notImplemented("nt_norm_sq_strided"),
+    nt_sqrt_strided: notImplemented("nt_sqrt_strided"),
+    nt_scalar_add_strided: notImplemented("nt_scalar_add_strided"),
+    nt_scalar_sub_strided: notImplemented("nt_scalar_sub_strided"),
+    nt_scalar_mul_strided: notImplemented("nt_scalar_mul_strided"),
+    nt_scalar_div_strided: notImplemented("nt_scalar_div_strided"),
+  };
+
+  return { core, allocs, frees };
+}
+
+test("stack: a row that fails mid-loop (kernel status != 0) frees BOTH the output buffer and the two scratch buffers, leaves every input row untouched", () => {
+  const d = 4;
+  const { core: mockCore, allocs, frees } = makeStackFailureMockCore(2); // fail on the 2nd nt_materialize call (row index 1)
+
+  const rows: AnyWNDArray[] = [];
+  for (let i = 0; i < 3; i++) {
+    rows.push(WNDArray.fromArray(mockCore, [d], new Array(d).fill(i + 1)));
+  }
+
+  const allocsBefore = allocs.length;
+  const freesBefore = frees.length;
+
+  assert.throws(() => WNDArray.stack(mockCore, rows), /wasm resident nt_materialize \(stack\): status 7 for row 1/);
+
+  const stackAllocs = allocs.slice(allocsBefore);
+  const stackFrees = frees.slice(freesBefore);
+
+  // stack() itself makes exactly 3 allocations: outDataBuf, shapeBuf, stridesBuf.
+  assert.strictEqual(stackAllocs.length, 3, `expected exactly 3 allocations from stack() itself, got ${stackAllocs.length}`);
+  // ALL three must be freed on the failure path: the output buffer via the
+  // explicit `status !== 0` branch, shapeBuf/stridesBuf via `finally`.
+  assert.strictEqual(stackFrees.length, 3, `expected exactly 3 frees on the failure path (output + 2 scratch), got ${stackFrees.length}`);
+  const remaining = [...stackFrees];
+  for (const a of stackAllocs) {
+    const idx = remaining.findIndex((f) => f.ptr === a.ptr && f.bytes === a.bytes);
+    assert.ok(idx !== -1, `allocation {ptr:${a.ptr}, bytes:${a.bytes}} was never freed on the failure path`);
+    remaining.splice(idx, 1);
+  }
+  assert.strictEqual(remaining.length, 0, `unexpected/extra frees on the failure path: ${JSON.stringify(remaining)}`);
+
+  // A failing op never touches ANY input row (same contract as add/sub/mul/
+  // div/matmul above) — row 0 (already gathered before the failure) and the
+  // never-reached rows 1/2 are all still fully live and usable.
+  for (const r of rows) {
+    assert.strictEqual(r.disposed, false);
+  }
+  assert.deepStrictEqual(Array.from(rows[0]!.toArray()), [1, 1, 1, 1]);
+  for (const r of rows) r.dispose();
 });

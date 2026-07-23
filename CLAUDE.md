@@ -141,7 +141,26 @@ Determinismus-Pins, per Backup-Kopie revertiert (SHA-256-Beweis, kein `git check
 Root **+1.500** (gestuft: `mean`-Methode +333, Test-Anhänge +885, Typ-Pins +282 — Absolut-Gate
 ≤+6.000 klar eingehalten, kleiner als S1s +1.165 wie erwartet), stress +323, browser Δ0,
 bench:editor 8 Pins uniform +323 neu gesetzt (doppelt reproduziert); test:resident 5022+2
-(Δ+305), test:threaded 101 (Δ+10). **S3–S5 offen** (FOLLOWUPS).
+(Δ+305), test:threaded 101 (Δ+10).
+**S3 (item + stack): ERLEDIGT 2026-07-24, dreifach verifiziert A+B+C** (docs/wasm-parity-item-stack-
+spec.md v3 /-ergebnisse.md): beide Ops KERNEL-LOS nach Arbeitsregel 11 — `item` ist ein reiner
+strided TS-Lesezugriff auf `core.memory.buffer` (es läuft KEIN WASM-Code; vierter, im Vertragstext
+unbenannter M1-Fall → v6-Kandidat), `stack` ist N Aufrufe des eingefrorenen `nt_materialize` in je
+einen Sub-Slot EINES Ausgabepuffers (zweiter Präzedenzfall des S2-„komponierte Op"-Kandidaten).
+**Freeze-Hash UNVERÄNDERT** `8255821b…`, cargo unverändert 184+1, kein neuer `CoreExports`-Member
+(Regel 10 greift bestätigt nicht). Erste STATISCHE Op der Kampagne, deshalb zusätzlich `stack` auf
+`WasmBackend`/`ThreadedBackend` — `WNDArray` ist nicht aus index.ts exportiert, ein Static wäre sonst
+für Paketkonsumenten unerreichbar (D2; Baustein-0-BLOCKER: `ThreadedBackend` hat kein `core`-Feld,
+der Core lebt auf `this.pool.core`). **Der teuerste Befund war eine M3-Verletzung, die drei Leser
+übersahen:** der v2-Rückgabetyp-Alias `StackResultOf<Rows>` ließ die Konsumenten-API als
+`StackResultOf<readonly [WNDArray<[3]>, …]>` hovern statt als sauberes Tupel — gefunden nur von dem
+Verifier, der den echten LSP-Server startete; Baustein C hatte die Fassung im ersten Lauf ausdrücklich
+als M3-konform durchgewinkt und den Fehlschluss später selbst benannt. Fix: Alias trägt nur die SHAPE
+(`StackShapeOf`), das Handle wird ausgeschrieben; Kosten +5.498, dafür wurde das Scheiben-Gate
+Owner-abgenommen von +8.000 auf +13.000 angehoben (v3). Verify schloss fünf Lücken, drei davon
+vakuöse Tests (Leck-Test zu grobkörnig für 8-Byte-Scratch-Lecks; Liveness nur für Zeile 0 getestet;
+Core-Prüfung von der `rows[0]`-Variante ununterscheidbar) — alle drei nur per Mutant sichtbar.
+**S4–S5 offen** (FOLLOWUPS).
 **Zwei Prozess-Lehren, wertvoller als die Optimierung selbst:** (1) Die informelle Vorab-Sondage
 lag um mehr als eine Größenordnung daneben (0,60 gegen gemessene 1,050 bei `k = n`; bei `k = n/2`
 sogar mit falschem Vorzeichen) — live nachgestellt, Ursachen im Sondage-Quelltext belegt
@@ -182,14 +201,24 @@ Session-Zustand).
   Pin — test:threaded beweist seine Bit-Identität zum stable Core. CI-Gate `check:freeze` mit
   plattform-gelabelter Pin-Menge. **Vorheriger Stand:** `24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2`
   (seit WASM-Parität S0/sqrt 2026-07-23, von `0b9df4f1…` Kern 11).
-- **check:diag** Haupt-Pin **213,704 @ 140 Files** (nur Root-Korpus; seit dem View-Coverage-
+- **check:diag** Haupt-Pin **226,690 @ 140 Files** (nur Root-Korpus; seit WASM-Parität S3/item+stack
+  2026-07-24, von 213,704 @ 140 — **Δ+12,986**, Dateiset unverändert 140 (kein neues File, kein
+  Order-Noise), in sieben Stufen dekomponiert: ① runtime.ts-Helfer Δ0, ② resident.ts +1,111,
+  ③ Facaden +1,632, ④ Test-Anhänge +3,834 (Erstmessung +6,705 — literal-typisierte
+  `WNDArray.stack`-Aufrufstellen zahlen die volle `StackFold`-Maschinerie PRO Aufrufstelle, über
+  dynamische Shapes nehmen sie den No-Claim-Pfad), ⑤ Typ-Pins +800, ⑥ Verify-Fixes +111,
+  ⑦ **Hover-Fix +5,498**. Das Absolut-Gate wurde für ⑦ Owner-abgenommen von ≤+8,000 auf ≤+13,000
+  angehoben (Marge 14) — Begründung: der v2-Rückgabetyp-Alias verletzte M3 an der Konsumenten-API,
+  drei billigere Alternativen wurden gemessen und verworfen (Typ-Pin-Konsolidierung −21,
+  Zwei-Alias-Aufteilung 227,020 = teurer, Test-Aufrufstellen laufen schon dynamisch). Details
+  docs/wasm-parity-item-stack-ergebnisse.md). **Vorheriger Stand: 213,704 @ 140** (seit dem View-Coverage-
   Nachtrag zu WASM-Parität S2/mean 2026-07-23 (Verify-B-Befund — resident.test.ts bekam 26 neue
   `mean`-Fälle auf nicht-kontiguierten Empfängern: transponiert, geschnitten, offset-verschoben,
   zusammengesetzt), von 209,515 @ 140 — **Δ+4,189**, Dateiset unverändert 140 (kein neues File,
   kein Order-Noise), reine Testinhalts-/Typ-Pin-Kosten der neuen View-Fälle plus des
   `assertMeanViewMatches`-Helpers. Gesamtdelta gegen die S2-Vor-Baseline 208,015: **Δ+5,689**,
   Absolut-Gate ≤+6,000 weiterhin eingehalten. Details docs/wasm-parity-mean-ergebnisse.md, Stufe
-  4). **Vorheriger Stand: 209,515 @ 140** (seit WASM-Parität S2/mean
+  4). **Davor: 209,515 @ 140** (seit WASM-Parität S2/mean
   2026-07-23, von 208,015 @ 140 — **Δ+1,500**, dekomponiert in drei Stufen (Dateiset unverändert
   140, kein Order-Noise, kein neuer `CoreExports`-Member also auch kein `keyof`-Mechanismus): die
   `mean`-Methode selbst (dritte Call-Site der `ReduceAxis`-Maschinerie) Δ+333, Test-Anhänge Δ+885,
@@ -220,8 +249,10 @@ Session-Zustand).
   docs/scale-probe-ergebnisse.md). Historie: **201,455 @ 137** war der W5-Stand, von 195,481 —
   Δ+5,873, Aufschlüsselung in docs/op-w5-item-ergebnisse.md — davon nur +623 Quellcode, der Rest
   Test-/Typ-Pin-Kosten; enthält den D6-Befund „`Equal<ItemGuard<...>>`-Message-Pins sind pro
-  Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 107,283 @ 82**
-  (unverändert seit WASM-Parität S2/mean 2026-07-23 — der View-Coverage-Nachtrag berührt nur
+  Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 115,498 @ 82**
+  (seit WASM-Parität S3/item+stack 2026-07-24, von 107,283 @ 82 — **Δ+8,215**, Klassen-Surface-Ripple
+  über drei Klassen statt einer; davon +5,453 allein aus dem Hover-Fix (Stufe ⑦), Dateiset
+  unverändert. Davor 107,283 @ 82, unverändert seit WASM-Parität S2/mean 2026-07-23 — der View-Coverage-Nachtrag berührt nur
   `spike/tests-runtime/resident.test.ts`, das stress nicht importiert, Δ0, gemessen; davor Δ+323
   aus der neuen `mean`-Methode auf `resident.ts` — stress importiert `spike/src` direkt; davor
   106,960 @ 82 seit S1/Skalar-Overloads, Δ+721 aus dem WNDArray-Klassen-Surface-Umbau; davor
@@ -231,17 +262,27 @@ Session-Zustand).
   noch der View-Coverage-Nachtrag rühren es (browser kompiliert weder threaded.ts noch die
   Test-Runtime-/Typ-Pin-Dateien, in denen `mean`s Anhänge landen), Δ0, gemessen; stress/browser
   ungated by design, `pnpm check` compoundet alle drei).
-- **Testzahlen:** test:core 1591 · test:resident 5048+2 (+26 View-Coverage-Nachtrag zu S2/mean,
+- **Testzahlen:** test:core 1591 · test:resident **5497+2** (+449 aus WASM-Parität S3/item+stack
+  2026-07-24: item-Differential über contiguous + vier View-Klassen + rank 0 + size-0-Achse,
+  stack-Differential inkl. N=1/D=0/Aliasing/memory-grow-Fall, sechs Cross-Surface-Message-Paritäts-
+  Tests, Lifecycle inkl. exakter Alloc/Free-Bilanz, Facaden-Erreichbarkeit; davor 5048+2
+  (+26 View-Coverage-Nachtrag zu S2/mean,
   Verify-B-Befund: transponierte/geschnittene/offset-verschobene/zusammengesetzte Empfänger je
   niladisch/positive-/negative-Achse × keepdims true/false, in resident.test.ts; davor 5022+2
   (+305 S2-mean-Tests: 244 M1-Differential in resident.test.ts inkl. Determinismus-/size-0-Pins +
   60 randomisierte Spezialwert-Fälle + 1 Leak-Non-Vakuitäts-Test, davor 4717+2 seit S1)) ·
-  test:threaded 101 (+10 S2-mean-Parität, davor
+  test:threaded **114** (+13 S3-item/stack-Parität, davor 101 = +10 S2-mean-Parität, davor
   91 = +16 S1-Skalar-Parität, davor 75 = +4 sqrt-Parität +2 Spezialwerte) · test:browser 4 ·
   test:package 3 + Typ-Smoke · cargo 184 (+1 zero_alloc = 185, UNVERÄNDERT seit S1 — S2 berührt
   kein Rust) · test:example (Registry-Install + Example-Typcheck + 8 asserted Queries, unberührt).
 - **Editor-Gate:** `bench:editor` W1–**W8** — Instantiation-Pins exact-match hart (seit
-  **WASM-Parität S2/mean 2026-07-23** uniform **+323** neu gesetzt = `{w1 28.789, w2 30.598,
+  **WASM-Parität S3/item+stack 2026-07-24** = `{w1 37.018, w2 38.851, w3 69.993, w4 37.173,
+  w5 42.472, w6 43.666, w7 36.222, w8 43.911}`. In DIESER Scheibe zweimal gesetzt: erst +2.722 bis
+  +2.761 (Spanne 39) für item/stack selbst, dann nach dem Hover-Fix nochmals +5.361 bis +5.500
+  (Spanne 139); beide Runden zweifach gemessen, je byte-identisch. Nicht perfekt uniform, weil w8 als
+  einziger Workload eine eigene `stack`-Aufrufstelle hat — die Richtung des Effekts (w8 bewegt sich am
+  WENIGSTEN) ist belegt, aber nicht hergeleitet, offener Genauigkeitsmangel. Davor seit
+  **WASM-Parität S2/mean 2026-07-23** uniform **+323** = `{w1 28.789, w2 30.598,
   w3 61.738, w4 28.952, w5 34.243, w6 35.413, w7 27.961, w8 35.828}`; Grund ist dieselbe
   WNDArray-Klassen-Surface-Ripple wie beim Root-/Stress-check:diag (jeder Workload instanziiert
   WNDArray mindestens einmal, `mean` fügt drei neue Overload-Signaturen auf der Klasse hinzu),
@@ -339,7 +380,16 @@ Session-Zustand).
   `fromArray`-contiguous.** Die S2-Erst-Fassung prüfte `mean` ausschließlich contiguous (Offset 0,
   natürliche Strides); der interessante Fall eines residenten Ops ist die transponierte/geslicte/
   offset/komponierte View. Verify-B fand die Lücke (0 Mismatches, also Coverage-Claim statt Live-Bug)
-  — die Spec muss View-Fälle explizit fordern, sonst fallen sie weg.
+  — die Spec muss View-Fälle explizit fordern, sonst fallen sie weg. (13) **Eine Hover-/Diagnose-Norm
+  wird GEMESSEN, nicht gelesen.** M3 verlangt saubere Klassen-Hover; S3 verletzte das an der einzigen
+  konsumentenseitig erreichbaren Fläche, weil ein Top-Level-Typ-Alias in RÜCKGABE-Position von der
+  Quick Info namentlich erhalten wird (ein Alias in TYP-ARGUMENT-Position dagegen aufgelöst — `add`s
+  `WNDArray<OkShape<Broadcast<S, B>>>` hovert sauber). Drei Instanzen lasen denselben Quelltext ohne
+  Beanstandung: Implementierer, Baustein A (alle Gates frisch) und Baustein C (erster Lauf, hat die
+  Fassung ausdrücklich als M3-konform durchgewinkt und den Fehlschluss später selbst benannt).
+  Gefunden hat es nur der Verifier, der den echten `tsc --lsp --stdio` startete — mit einer
+  Bestandsmethode als Kontrollpunkt. Berührt eine Scheibe eine Hover- oder Diagnose-Norm, gehört eine
+  LSP-Messung in den Verify-Katalog; die Harness existiert seit Spike 02.
 
 ## Commands
 
