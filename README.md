@@ -180,9 +180,11 @@ a.slice(9);                      // ❌ compile error: index 9 out of bounds for
 ### New in 0.2.0: the ops the demo asked for
 
 The five ops added in 0.2.0 all came from one place: the friction log of the RAG example below,
-built against 0.1.1. These are TypeScript-runtime surface only for now (no WASM kernel yet — see
-[What's implemented](#whats-implemented)), so they are shown here rather than in the
-bit-for-bit block above:
+built against 0.1.1. They shipped as TypeScript-runtime surface only (no WASM kernel), which is why
+they are shown here rather than in the bit-for-bit block above. Since then the WASM-resident twin
+has caught up for three of them — `sqrt`, the scalar overloads, and `mean` now run in WASM too, each
+proven bit-identical to the TypeScript reference by differential tests; `argmax`/`topk`, `stack` and
+`item` remain TypeScript-runtime only (see [What's implemented](#whats-implemented)):
 
 ```ts
 const scores = NDArray.fromArray([4], [0.2, 0.9, 0.1, 0.7]);
@@ -320,17 +322,17 @@ asymmetry, not an oversight.
 also available: `x.div(2)` reads as "divide by 2" (shape-preserving, no `[1]`-wrap needed, even at
 rank 0), `mean` composes `sum` with one division per output element, and `sqrt` is elementwise
 `Math.sqrt` (shape-preserving at every rank — IEEE 754 requires correct rounding for square root,
-same as `+`/`-`/`*`/`/`, so this stays exact, unlike a true transcendental op). Like `argmax`/`topk`
-above, the new surface is **TypeScript-runtime only, no WASM kernel yet** — the existing
-`NDArray`-argument forms of `add`/`sub`/`mul`/`div` keep their full WASM-backed bit-for-bit
-guarantee unchanged; only the new scalar overload, `mean`, and `sqrt` are the disclosed asymmetry.
+same as `+`/`-`/`*`/`/`, so this stays exact, unlike a true transcendental op). Unlike `argmax`/`topk`
+above, these three are **no longer TypeScript-only**: the WASM-resident twin `WNDArray` now carries
+all of them — `sqrt` and the four scalar ops through their own from-scratch Rust kernels, `mean` by
+composing the existing `sum` and scalar-division kernels rather than adding one — each proven
+bit-identical to the TypeScript reference by differential tests, on the threaded backend as well.
 
 **`NDArray.stack(rows)`** builds a `[N, D]` matrix from N independently-computed 1-D row
 vectors — the `np.stack`/`np.array([...])` reflex, and a statically-shaped one: stacking two
 literal `[3]` rows infers `NDArray<[2, 3]>`, a mismatched row length is a compile error at the
 `rows` argument, and an array of unknown length degrades honestly to `NDArray<[number, D]>`.
-Same disclosed asymmetry as `argmax`/`topk`/the scalar overloads/`mean`/`sqrt` above:
-**TypeScript-runtime only, no WASM kernel yet**.
+Same disclosed asymmetry as `argmax`/`topk` above: **TypeScript-runtime only, no WASM kernel yet**.
 
 **`x.item(...indices)`** is the direct scalar read — NumPy's own `x.item(i, j, ...)` — full
 indexing only (exactly one index per axis, rank 0 included: `x.item()` reads the sole element).

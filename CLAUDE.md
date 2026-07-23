@@ -322,6 +322,24 @@ Session-Zustand).
   einer Session passiert). Die Befunde existieren dann, sind aber unberichtet. Entweder den Lauf
   selbst im Haupt-Loop überwachen oder den Agenten per SendMessage gezielt zum Nachbericht
   auffordern — nie annehmen, dass ein gestarteter Lauf auch dokumentiert wurde.
+- **Arbeitsregeln aus der WASM-Parität-Kampagne (2026-07-23, gelten für S3–S5):** (10) **Jeder neue
+  `CoreExports`-Member braucht einen `notImplemented(...)`-Stub im hand-getippten Mock in
+  `spike/tests-runtime/backend-oom.test.ts`** (das EINZIGE strukturell getippte `CoreExports`-Literal
+  im Repo). Fehlt er, scheitert `pnpm check`/`check:diag` mit **TS2739** — druckt aber weiterhin eine
+  plausibel aussehende Instantiations-Zeile (Spezialfall von Regel 6; S0 fügte den Stub still hinzu,
+  S1/Baustein 0 fand die Falle empirisch). (11) **Vor jedem neuen Kernel prüfen, ob die Op
+  definitorisch eine KOMPOSITION bereits verifizierter Kernel ist.** Dann als Komposition bauen: der
+  Freeze-Hash bleibt unberührt (der Beweis kippt in eine billige NEGATIVE Assertion „darf sich nicht
+  bewegen"), die Beweislast schrumpft auf einen Kompositions-Differentialtest, und gepinnte
+  Determinismus-Entscheidungen erbt man gratis (S2/mean: `sum/n` kam über den wiederverwendeten
+  `scalar_div`-Kernel mit). Preis und neue Testpflicht ist der Lebenszyklus des Zwischenergebnisses —
+  der Leck-Mutant („`dispose()` entfernt") fällt NUR einem expliziten Ressourcen-Test auf, alle
+  Korrektheits-Assertions sind dafür blind. Gegenanzeige: nur wenn Performance ein Ziel wäre (in
+  dieser Kampagne ist sie es nicht). (12) **Residente Op-Tests müssen VIEWS treffen, nicht nur
+  `fromArray`-contiguous.** Die S2-Erst-Fassung prüfte `mean` ausschließlich contiguous (Offset 0,
+  natürliche Strides); der interessante Fall eines residenten Ops ist die transponierte/geslicte/
+  offset/komponierte View. Verify-B fand die Lücke (0 Mismatches, also Coverage-Claim statt Live-Bug)
+  — die Spec muss View-Fälle explizit fordern, sonst fallen sie weg.
 
 ## Commands
 
