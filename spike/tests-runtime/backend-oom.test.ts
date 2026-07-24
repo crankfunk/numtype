@@ -129,6 +129,10 @@ function makeMockCore(failAtCall?: number): MockCore {
     // printing a plausible `Instantiations:` line.
     nt_argmax_all_strided: notImplemented("nt_argmax_all_strided"),
     nt_argmax_axis_strided: notImplemented("nt_argmax_axis_strided"),
+    // WASM parity S5 (docs/wasm-parity-topk-spec.md): not used by backend.ts's
+    // v1 ops either (topk only exists on the resident/threaded backends).
+    // Arbeitsregel 10 again — see the S4 note above.
+    nt_topk_strided: notImplemented("nt_topk_strided"),
   };
 
   return { core, allocs, frees };

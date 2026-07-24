@@ -1731,3 +1731,130 @@ mod s4_argmax_abi_tests {
         assert_eq!(nt_argmax_axis_strided(0, 0, 0, 0, 0, u32::MAX, 0, 0, 0), KernelError::SizeOverflow.status());
     }
 }
+
+// ---------------------------------------------------------------------------
+// WASM parity S5 (docs/wasm-parity-topk-spec.md, D3/D6): `topk` on the
+// resident/threaded backends — the LAST slice of the S0-S5 parity campaign.
+// Appended strictly after every pre-existing item in this file (freeze
+// discipline). Note the append POINT (spec D6 v2, a Baustein-0 correction):
+// this file's last pre-existing item is `mod s4_argmax_abi_tests`, a TEST
+// module — not the last real function — and every phase before this one
+// appended its real code after the then-current file END and its own test
+// module after that. This block keeps that pattern: real code here, then
+// `mod s5_topk_abi_tests` below it. `#[cfg(test)]` modules are compiled out
+// of the `--release --target wasm32-unknown-unknown` artifact entirely, so
+// they shift no artifact bytes either way.
+//
+// NOT cfg-gated (same reasoning as the Kern-07/S0/S1/S4 blocks above it) —
+// this op belongs in BOTH the plain artifact (`pnpm build:wasm`) and the
+// threads artifact, so the plain artifact's hash legitimately changes again
+// this phase.
+// ---------------------------------------------------------------------------
+
+/// WASM parity S5: top-`k` values + indices of a rank-1 strided view, in the
+/// total order pinned in `kernels::topk`'s module doc (NaN first, then
+/// descending value, ties by ascending LOGICAL index). Two output buffers of
+/// `out_len` f64 each — `out_values_ptr` and `out_indices_ptr` — which the
+/// caller allocates and which must never alias. `out_len` is `k`; a `k` of 0
+/// is valid and writes nothing.
+///
+/// Fallible: a rank other than 1, or `k > n`, is `ShapeIncompatible`.
+/// `WNDArray.topk` prevalidates both in TS so the thrown message stems match
+/// `topkRuntime`'s word for word; these statuses are defense in depth.
+#[no_mangle]
+pub extern "C" fn nt_topk_strided(
+    shape_ptr: u32,
+    rank: u32,
+    strides_ptr: u32,
+    offset: u32,
+    data_ptr: u32,
+    data_len: u32,
+    k: u32,
+    out_values_ptr: u32,
+    out_indices_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    // Defense-in-depth prevalidation (see the block comment above). BOTH
+    // output regions are validated, each `out_len` f64 wide.
+    if let Err(e) = validate_rank(rank) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(shape_ptr, rank, 4),
+        validate_region(strides_ptr, rank, 4),
+        validate_region(data_ptr, data_len, 8),
+        validate_region(out_values_ptr, out_len, 8),
+        validate_region(out_indices_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
+    let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
+    let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
+
+    match kernels::topk::topk_strided(shape, strides, offset, data, k) {
+        Ok((out_values, out_indices)) => {
+            if out_values.len() as u32 != out_len || out_indices.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst_values: &mut [f64] = unsafe { read_slice_mut(out_values_ptr, out_len) };
+            dst_values.copy_from_slice(&out_values);
+            let dst_indices: &mut [f64] = unsafe { read_slice_mut(out_indices_ptr, out_len) };
+            dst_indices.copy_from_slice(&out_indices);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// New test module for this phase (WASM parity S5) — deliberately SEPARATE
+/// from every pre-existing test module in this file (freeze discipline: never
+/// insert into an existing one). Same garbage-rank/garbage-len prevalidation
+/// pattern as `mod s4_argmax_abi_tests` above.
+#[cfg(test)]
+mod s5_topk_abi_tests {
+    use super::*;
+
+    #[test]
+    fn topk_strided_garbage_rank_is_status_2() {
+        assert_eq!(nt_topk_strided(0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0), KernelError::RankTooLarge.status());
+    }
+
+    #[test]
+    fn topk_strided_garbage_len_is_status_3() {
+        assert_eq!(nt_topk_strided(0, 0, 0, 0, 0, u32::MAX, 0, 0, 0, 0), KernelError::SizeOverflow.status());
+    }
+
+    /// A garbage `out_len` shared by both output buffers is rejected — but
+    /// note this alone does NOT prove the SECOND `validate_region` call (the
+    /// indices buffer) does anything: both `out_values_ptr` and
+    /// `out_indices_ptr` are `0` here, and `out_len` is the same value for
+    /// both regions, so the byte-size overflow already trips on the FIRST
+    /// region check in the list (values) — the second call is never reached.
+    /// See `topk_strided_garbage_out_indices_ptr_is_status_3` below for a
+    /// test that isolates rejection to the indices region specifically.
+    #[test]
+    fn topk_strided_garbage_out_len_is_status_3() {
+        assert_eq!(nt_topk_strided(0, 0, 0, 0, 0, 0, 0, 0, 0, u32::MAX), KernelError::SizeOverflow.status());
+    }
+
+    /// Discriminating test (verify-round finding, S5): a valid values region
+    /// (`out_values_ptr = 0`, `out_len = 2`) paired with an indices pointer
+    /// that only wraps the 32-bit address space when combined with that same
+    /// `out_len` (`out_indices_ptr = u32::MAX - 8`, so `ptr + bytes` lands 8
+    /// bytes past `2^32`). The values region's own `validate_region` call
+    /// passes (`0 + 16 <= 2^32`), so the indices region's OWN call is the
+    /// only thing that can reject this. Mutant proof: replacing the second
+    /// `validate_region(out_indices_ptr, out_len, 8)` entry in
+    /// `nt_topk_strided`'s check list with `Ok(())` fails only this test —
+    /// `topk_strided_garbage_out_len_is_status_3` above stays green because
+    /// it never depends on the second check.
+    #[test]
+    fn topk_strided_garbage_out_indices_ptr_is_status_3() {
+        assert_eq!(
+            nt_topk_strided(0, 0, 0, 0, 0, 0, 0, 0, u32::MAX - 8, 2),
+            KernelError::SizeOverflow.status()
+        );
+    }
+}

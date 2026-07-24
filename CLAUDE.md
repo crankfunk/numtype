@@ -178,7 +178,26 @@ reale Lücke, die alle Gates grün ließ: der Kernel-Fehlerpfad (`status != 0` �
 0/334 Op-, 0/7 Lifecycle- und 0/1 threaded-Tests abgedeckt, mit nachgewiesenem 16-Byte-Leck —
 geschlossen, je Zweig getrennt mutations-bewiesen. check:diag **229,828 @ 140** (Δ+3,138 gegen ein
 VOR der Messung von +6.000 auf +8.000 angehobenes Gate, Herleitung offengelegt), null Order-Noise.
-**S5 (topk) offen** (FOLLOWUPS).
+**S5 (topk): ERLEDIGT 2026-07-25, dreifach verifiziert A+B+C — DIE KAMPAGNE S0–S5 IST
+ABGESCHLOSSEN** (docs/wasm-parity-topk-spec.md v2 /-ergebnisse.md): neuer Kernel
+`nt_topk_strided` + `WNDArray.topk` (eine Signatur, Instanz-Methode, keine Facaden-Änderung),
+`TopkCheck`/`TopkShape` als zweite Call-Site unverändert wiederverwendet. Freeze-Hash
+`eba6ba7a…` → `146afdf6…`, dreiteilig bewiesen, von A UND B je in beide Richtungen
+nachgestellt. **Der tragende Befund kehrt eine geerbte Projekt-Annahme um:** FOLLOWUPS/
+CLAUDE.md sagten, ein `nt_topk`-Kernel müsse den JS-Heap SPIEGELN und S5 sei die härteste
+M1 — falsch. Komparator + Indextiebreak bilden eine STRIKTE TOTALORDNUNG auf `0..n-1`, es
+gibt also genau eine korrekte Ausgabe, und Bit-Identität hängt NICHT vom Algorithmus ab,
+sondern nur von der Prädikat-Transliteration und davon, dass `values[i] = data[indices[i]]`
+ein reiner Kopiervorgang bleibt (bei `topk` läuft KEINE Gleitkomma-Arithmetik — kategorial
+anders als `sum`). Konsequenz, bindend: Tests dürfen sich nicht auf Heap-Interna festlegen.
+Der ECHTE M1-Risikopunkt war stattdessen der **NaN-Payload** — erster Fall der Kampagne mit
+echten Datenwerten durch einen neuen Kernel; byte-exakt bewiesen (zwei nicht-kanonische
+Muster, contiguous + gestridet + threaded + cargo). check:diag **237.379 @ 140** (Δ+7.551
+gegen ≤+8.000, **nur 449 Marge** — engster Stand der Kampagne), null Order-Noise.
+**Kostenbefund, dreifach unabhängig bestätigt:** der Treiber ist NICHT `topk` (+130), sondern
+der Vier-View-Klassen-Block mit **+3.926** (52 % der Scheibe), getrieben von
+literal-argumentigen `.slice()`-Aufrufstellen, die je die volle `SliceSpecsGuard`-Maschinerie
+zahlen — FOLLOWUPS-Hebel für künftige Arbeitsregel-12-Blöcke.
 **Zwei Prozess-Lehren, wertvoller als die Optimierung selbst:** (1) Die informelle Vorab-Sondage
 lag um mehr als eine Größenordnung daneben (0,60 gegen gemessene 1,050 bei `k = n`; bei `k = n/2`
 sogar mit falschem Vorzeichen) — live nachgestellt, Ursachen im Sondage-Quelltext belegt
@@ -188,11 +207,21 @@ VIERMAL gebrochen, bevor sie messen durfte — zwei der Fassungen stammten vom O
 gefunden ausnahmslos dadurch, dass Verifier sie als Skript nachbauten und gegen tausende
 synthetische Raster laufen ließen statt sie zu lesen.
 FOLLOWUPS-Minis nebenher; Trusted Publishing optional (Fakten in FOLLOWUPS). **COVENANT-v6-Bündel
-steht bei acht Kandidaten** — reif für eine eigene kleine Vertrags-Scheibe. S4 fügte KEINEN neunten
-hinzu, präzisierte aber einen bestehenden: der NaN-Payload-Vorbehalt an M1 kann für `argmax`
-strukturell nicht greifen (die Ausgabe ist stets ein ganzzahliger Index, nie ein kopierter
-Datenwert) — er beißt erst bei S5/`topk`, wo `values[i] === data[indices[i]]` byte-exakt gilt
-(Baustein-C-Befund).
+steht bei ZEHN Kandidaten** — überfällig für eine eigene kleine Vertrags-Scheibe, zwei davon
+mit fertigem Wortlaut aus Baustein C. S4 fügte keinen hinzu, präzisierte aber einen: der
+NaN-Payload-Vorbehalt an M1 kann für `argmax` strukturell nicht greifen (die Ausgabe ist stets
+ein ganzzahliger Index) — er beißt erst bei `topk`. **S5 fügte zwei hinzu und schärfte den
+NaN-Kandidaten, statt ihn zu schließen** (Baustein-C-Korrektur einer Orchestrator-Annahme):
+`topk` liegt auf der GEGENÜBERLIEGENDEN Seite des Vorbehalts (keine Arithmetik,
+Payload-Erhaltung bewiesen) und liefert damit den fehlenden Gegenfall, der die Scope-Grenze
+erst sichtbar macht — ohne ihn läse ein v6-Leser „NaN nur als Wert-Klasse" für ALLE Kernel.
+Die zwei neuen: **M3 vs. Methoden-Rückgabetypen** — der Wortlaut (COVENANT.md:70,
+„Klassen-Hover" = Typ-Parameter-Anzeige der Klasse) deckt sie NICHT, aber S3 hat ein
+strukturell identisches Problem als echte M3-Verletzung gewertet, für +5.498 gefixt und dafür
+das Gate von +8.000 auf +13.000 angehoben; entweder war S3 zu weit gefasst oder M3 muss den
+Fall decken — Owner-Entscheidung. Und: **die TS-Insertion-only-Disziplin hat keine
+vertragliche Ankerdeckung** (M4 nennt nur drei Rust-Dateien, die `resident.ts`-Regel lebt nur
+in CLAUDE.md).
 Repo-Härtung aktiv seit 2026-07-20: Rulesets `protect-main` (kein Force-Push/Delete auf main —
 gilt auch für den Owner; bewusste Ausnahme nur via Ruleset-Deaktivierung) +
 `protect-release-tags` (`v*` unverrückbar). README trägt seit 2026-07-20 eine
@@ -212,8 +241,17 @@ Session-Zustand).
 ## Aktuelle Pins & Gates (IST-Zahlen; Historie im Projekt-Log)
 
 - **Artefakt-Hash** (Clean-Rebuild, SHA256 von `spike/src/wasm/numtype_core.wasm`):
-  `eba6ba7ac85d15a814fd027392a81c7450d885d2048d7efd6694b7e8370988bb` — **NEU seit WASM-Parität
-  S4/argmax 2026-07-24**, von `8255821b…`. Die zwei neuen `nt_argmax_{all,axis}_strided`-Kernel
+  `146afdf629694318a5dcca87c5bb980ae6280e875ae5d9b5ddef045a00c0c324` — **NEU seit WASM-Parität
+  S5/topk 2026-07-25**, von `eba6ba7a…`. Der neue `nt_topk_strided`-Kernel ändert den Hash
+  legitim; additive-only-Dekomposition (neues File `kernels/topk.rs`, EIN abi.rs-Anhang strikt
+  ans tatsächliche Dateiende — nach dem Testmodul `mod s4_argmax_abi_tests`, nicht nach der
+  letzten realen Funktion; ein `kernels/mod.rs`-Anhang; `shape.rs`/`matmul_blocked.rs`/`sum.rs`/
+  `sqrt.rs`/`argmax.rs`/`scalar.rs`/`vector.rs` byte-unverändert). Dreiteiliger Beweis,
+  **von Baustein A UND Baustein B je unabhängig in beide Richtungen nachgestellt**.
+  Threads-Artefakt bewusst KEIN persistierter Pin — test:threaded beweist die Bit-Identität.
+  **Vorheriger Stand:**
+  `eba6ba7ac85d15a814fd027392a81c7450d885d2048d7efd6694b7e8370988bb` (seit WASM-Parität
+  S4/argmax 2026-07-24, von `8255821b…`). Die zwei `nt_argmax_{all,axis}_strided`-Kernel
   ändern den Hash legitim; additive-only-Dekomposition (neues File `kernels/argmax.rs`, zwei
   abi.rs-Anhänge strikt ans Dateiende, ein `kernels/mod.rs`-Anhang; `shape.rs`/`matmul_blocked.rs`/
   `sum.rs` byte-unverändert). Dreiteiliger Beweis: Pre-Edit-Clean-Rebuild reproduzierte den ALTEN
@@ -232,8 +270,19 @@ Session-Zustand).
   Pin — test:threaded beweist seine Bit-Identität zum stable Core. CI-Gate `check:freeze` mit
   plattform-gelabelter Pin-Menge. **Vorheriger Stand:** `24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2`
   (seit WASM-Parität S0/sqrt 2026-07-23, von `0b9df4f1…` Kern 11).
-- **check:diag** Haupt-Pin **229,828 @ 140 Files** (nur Root-Korpus; seit WASM-Parität S4/argmax
-  2026-07-24, von 226,690 @ 140 — **Δ+3,138**, Dateiset unverändert 140 (kein neues File, **null
+- **check:diag** Haupt-Pin **237,379 @ 140 Files** (nur Root-Korpus; seit WASM-Parität S5/topk
+  2026-07-25, von 229,828 @ 140 — **Δ+7,551** gegen ein vorregistriertes ≤+8,000, also nur
+  **449 Marge — der engste Stand der Kampagne**. Dateiset unverändert 140, null Order-Noise,
+  in vier Stufen dekomponiert: ① CoreExports-Member + beide Mock-Stubs **Δ0** (fünfte
+  Bestätigung des S0/D10-Gewinns), ② `WNDArray.topk` +130, ③ Test-Anhänge +6,958,
+  ④ Typ-Pins +463. **Der Kostentreiber ist NICHT die Op** (+130), sondern der
+  Vier-View-Klassen-Block mit **+3,926** = 52 % der Scheibe — getrieben von
+  literal-argumentigen `.slice()`-Aufrufstellen, die je die volle `SliceSpecsGuard`/
+  `SliceShape`-Maschinerie zahlen; dreifach unabhängig durch Ausbau des Blocks gemessen
+  (Implementierer, Baustein A, Baustein B — alle exakt 233,453 @ 140 ohne ihn). Für
+  Laufzeittests kauft ein literales Slice-Spec nichts → FOLLOWUPS-Hebel.
+  Details docs/wasm-parity-topk-ergebnisse.md. **Vorheriger Stand: 229,828 @ 140** (seit
+  WASM-Parität S4/argmax 2026-07-24, von 226,690 @ 140 — **Δ+3,138**, Dateiset unverändert 140 (kein neues File, **null
   Order-Noise**), in fünf Stufen dekomponiert: ① CoreExports-Member + beide Mock-Stubs **Δ0**
   (dritte Bestätigung des S0/D10-Gewinns: ein neuer Member kostet +0 statt +7, nach n=4 in S1 und
   n=0 in S2 jetzt n=2), ② `WNDArray.argmax` + privater Helfer +458, ③ Test-Anhänge +2,117,
@@ -289,8 +338,12 @@ Session-Zustand).
   docs/scale-probe-ergebnisse.md). Historie: **201,455 @ 137** war der W5-Stand, von 195,481 —
   Δ+5,873, Aufschlüsselung in docs/op-w5-item-ergebnisse.md — davon nur +623 Quellcode, der Rest
   Test-/Typ-Pin-Kosten; enthält den D6-Befund „`Equal<ItemGuard<...>>`-Message-Pins sind pro
-  Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 115,934 @ 82**
-  (seit WASM-Parität S4/argmax 2026-07-24, von 115,498 @ 82 — **Δ+436**, reine
+  Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 116,053 @ 82**
+  (seit WASM-Parität S5/topk 2026-07-25, von 115,934 @ 82 — **Δ+119**, reine
+  WNDArray-Klassen-Surface-Ripple aus EINER neuen Signatur, entsprechend kleiner als S4s +436
+  aus drei Overloads; identisch zum uniformen bench:editor-Delta, was die Attribution
+  unabhängig bestätigt. Davor 115,934 @ 82 seit WASM-Parität S4/argmax 2026-07-24, von
+  115,498 @ 82 — **Δ+436**, reine
   WNDArray-Klassen-Surface-Ripple aus den drei neuen Overloads; identisch zum uniformen
   bench:editor-Delta, was die Attribution unabhängig bestätigt — stress kompiliert `spike/src`
   direkt. Davor 115,498 @ 82 seit WASM-Parität S3/item+stack 2026-07-24, von 107,283 @ 82 —
@@ -306,7 +359,13 @@ Session-Zustand).
   noch der View-Coverage-Nachtrag rühren es (browser kompiliert weder threaded.ts noch die
   Test-Runtime-/Typ-Pin-Dateien, in denen `mean`s Anhänge landen), Δ0, gemessen; stress/browser
   ungated by design, `pnpm check` compoundet alle drei).
-- **Testzahlen:** test:core 1591 · test:resident **5866+2** (+369 aus WASM-Parität S4/argmax
+- **Testzahlen:** test:core 1591 · test:resident **6122+2** (+256 aus WASM-Parität S5/topk
+  2026-07-25: 529 volle Differential-Vergleiche über contiguous + vier View-Klassen ×
+  k-Raster {0,1,n/2,n} + Spezialwert-Raster + **konstruiertes Gleichstands-Raster**,
+  11 Hand-Referenz-Pins, 24 orakelfreie Cross-Surface-Vergleiche, NaN-Payload byte-exakt
+  (contiguous UND gestridet), Cross-Surface-Stämme inkl. `k = Infinity`, beide
+  D5-Fehlerpfade mit exakter Ledger-Bilanz, memory-grow-Regression, real-tsc-Diagnose-Pin;
+  davor 5866+2 (+369 aus WASM-Parität S4/argmax
   2026-07-24: M1-Differential über contiguous + alle vier View-Klassen × drei Formen ×
   keepdims, Spezialwert-Raster, Rang 0, size-0-Ausgabe ohne Throw, zwei size-0-Throws,
   Cross-Surface-Message-Parität, orakelfreie Cross-Surface-Shape-Pins, real-tsc-Diagnose-Pin,
@@ -321,14 +380,24 @@ Session-Zustand).
   niladisch/positive-/negative-Achse × keepdims true/false, in resident.test.ts; davor 5022+2
   (+305 S2-mean-Tests: 244 M1-Differential in resident.test.ts inkl. Determinismus-/size-0-Pins +
   60 randomisierte Spezialwert-Fälle + 1 Leak-Non-Vakuitäts-Test, davor 4717+2 seit S1)) ·
-  test:threaded **127** (+13 S4-argmax-Parität, davor 114 = +13 S3-item/stack, davor 101 = +10
+  test:threaded **139** (+12 S5-topk-Parität, davor 127 = +13 S4-argmax, davor 114 = +13
+  S3-item/stack, davor 101 = +10
   S2-mean-Parität, davor
   91 = +16 S1-Skalar-Parität, davor 75 = +4 sqrt-Parität +2 Spezialwerte) · test:browser 4 ·
-  test:package 3 + Typ-Smoke · cargo **204** (+1 zero_alloc = 205; +20 aus S4/argmax: 16 in
+  test:package 3 + Typ-Smoke · cargo **222** (+1 zero_alloc = 223; +18 aus S5/topk: 15 in
+  `kernels/topk.rs` inkl. der Nicht-Vakuitäts-Assertion für den logischen Index und einem
+  NaN-Payload-Test, 3+1 abi.rs-Prävalidierungs-Tests — der letzte aus der Verify-Runde, weil
+  der ursprüngliche den zweiten Ausgabe-Regionscheck nicht diskriminierte. Davor 204 (+1 =
+  205); +20 aus S4/argmax: 16 in
   `kernels/argmax.rs` inkl. der Nicht-Vakuitäts-Assertion für den transponierten View + 4
   abi.rs-Prävalidierungs-Tests. Davor 184+1, unverändert seit S1 — S2 und S3 berührten kein
   Rust) · test:example (Registry-Install + Example-Typcheck + 8 asserted Queries, unberührt).
 - **Editor-Gate:** `bench:editor` W1–**W8** — Instantiation-Pins exact-match hart (seit
+  **WASM-Parität S5/topk 2026-07-25** uniform **+119** = `{w1 37.573, w2 39.406, w3 70.548,
+  w4 37.728, w5 43.027, w6 44.221, w7 36.777, w8 44.466}`; zweifach gemessen, byte-identisch.
+  Perfekt uniform wie bei S4 (kein Workload hat eine `topk`-Aufrufstelle); der Betrag ist
+  kleiner, weil `topk` EINE Signatur beiträgt statt S4s drei Overloads. Der identische Wert
+  +119 auf `check:diag:stress` bestätigt die Attribution unabhängig. Davor seit
   **WASM-Parität S4/argmax 2026-07-24** uniform **+436** = `{w1 37.454, w2 39.287, w3 70.429,
   w4 37.609, w5 42.908, w6 44.102, w7 36.658, w8 44.347}`; zweifach gemessen, byte-identisch.
   Diesmal **perfekt uniform** — anders als S3, wo w8 als einziger Workload eine eigene

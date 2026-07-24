@@ -18,3 +18,6 @@ pub mod scalar;
 // WASM parity S4 (docs/wasm-parity-argmax-spec.md): argmax reductions.
 // Appended after all pre-existing module declarations (freeze discipline).
 pub mod argmax;
+// WASM parity S5 (docs/wasm-parity-topk-spec.md): top-k selection.
+// Appended after all pre-existing module declarations (freeze discipline).
+pub mod topk;

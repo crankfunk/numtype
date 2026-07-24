@@ -74,7 +74,7 @@ import type { ReshapeCheck } from "../reshape.ts";
 import { assertReshapeArgs, assertVectorPair, computeStrides, itemOffsetStrided, keepDimsShape, normalizeSliceSpecs, product, runtimeBroadcastShape, stackValidateShapes, type SliceSpec } from "../runtime.ts";
 import type { LiteralShapeProduct } from "../literal-arithmetic.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "../slice.ts";
-import type { DotCheck, ItemGuard, StackCheck, StackShape } from "../vector.ts";
+import type { DotCheck, ItemGuard, StackCheck, StackShape, TopkCheck, TopkShape } from "../vector.ts";
 import type { CoreExports } from "./loader.ts";
 
 interface ScratchBuf {
@@ -1913,6 +1913,110 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
         outDataBuf.ptr,
         outLen,
       );
+    } finally {
+      for (const buf of scratch) freeBuf(this.core, buf);
+    }
+  }
+
+  /** Top-`k` values + indices along a rank-1 receiver — resident twin of
+   * `NDArray.topk` (WASM parity S5, docs/wasm-parity-topk-spec.md), routed
+   * through the new `nt_topk_strided` kernel. Exactly `NDArray.topk`'s
+   * signature (a single signature, no overloads), reusing the SAME
+   * `TopkCheck`/`TopkShape` machinery unchanged (`vector.ts` is not touched
+   * by this slice — this is its second call site).
+   *
+   * Rank-1-only, `DotCheck`-family precedent for WHERE the error surfaces: a
+   * receiver-rank problem is reported AT THE `k` ARGUMENT, because a
+   * niladic-style rank check has nowhere else to attach. `k = 0` and
+   * `k = length` are both valid (an empty result / the whole vector, sorted).
+   *
+   * Total order (pinned in docs/op-w1-argmax-topk-spec.md D4, shared with
+   * `topkRuntime`'s `topkCompareValues` + index tiebreak): NaN entries first
+   * (by ascending index among themselves), then descending by value, ties
+   * (`0`/`-0` included, compared with plain `>`/`<`, never `Object.is`)
+   * broken by ascending index. That comparator is a STRICT TOTAL ORDER on the
+   * distinct indices `0..n-1`, so there is exactly ONE correct answer and the
+   * kernel's selection ALGORITHM is free (kernel doc,
+   * `crates/core/src/kernels/topk.rs`). `values[i] === data[indices[i]]`
+   * byte-exactly — a plain element copy, so a NaN's exact bit payload
+   * survives. `indices` carries f64-encoded LOGICAL indices into THIS VIEW's
+   * flattening (this codebase is f64-only throughout), never memory offsets:
+   * on a strided or offset receiver the two genuinely differ.
+   *
+   * **Two independent resident handles** come back from one call, and the
+   * caller owns BOTH — this is the only op in the library that hands out two
+   * (D5). They never share or alias a buffer. Dispose them separately, or let
+   * the `FinalizationRegistry` backstop collect them.
+   *
+   * Error paths are prevalidated in TS, before any allocation, in exactly
+   * `topkRuntime`'s order (rank, then `k`'s own validity, then `k` against
+   * the length) so the thrown stems are word-for-word its own (M3,
+   * cross-surface parity). The order is load-bearing: a call violating two
+   * conditions at once must report the same one on both surfaces. */
+  topk<const K extends number>(
+    k: Guard<TopkCheck<S, K>, K>,
+  ): { values: WNDArray<OkShape<TopkShape<S, K>>>; indices: WNDArray<OkShape<TopkShape<S, K>>> } {
+    this.assertLive("topk");
+    const kNum = k as unknown as number;
+
+    // D4: same three checks, same ORDER, same stems as `topkRuntime`
+    // (runtime.ts) — all before any allocation and before the kernel call.
+    if (this.shape.length !== 1) {
+      throw new Error(`topk: expected a 1-D vector (got shape [${this.shape.join(",")}])`);
+    }
+    if (!Number.isInteger(kNum) || kNum < 0) {
+      throw new Error(`topk: k must be a non-negative integer (got ${kNum})`);
+    }
+    const n = this.shape[0] ?? 0;
+    if (kNum > n) {
+      throw new Error(`topk: k=${kNum} exceeds the vector length ${n}`);
+    }
+
+    const scratch: ScratchBuf[] = [];
+    try {
+      const shapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(shapeBuf);
+      const stridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(stridesBuf);
+
+      // D5: two output buffers, allocated BEFORE the kernel runs. If the
+      // SECOND allocation fails (OOM), the FIRST must not leak — the only
+      // place in this class where one output buffer has to be unwound for
+      // another's sake. `allocBytes(core, 0)` is legal and returns the ptr-0
+      // sentinel, so `k = 0` needs no special case here.
+      const outValuesBuf = allocBytes(this.core, kNum * 8);
+      let outIndicesBuf: ScratchBuf;
+      try {
+        outIndicesBuf = allocBytes(this.core, kNum * 8);
+      } catch (e) {
+        freeBuf(this.core, outValuesBuf);
+        throw e;
+      }
+
+      const status = this.core.nt_topk_strided(
+        shapeBuf.ptr,
+        this.shape.length,
+        stridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        kNum,
+        outValuesBuf.ptr,
+        outIndicesBuf.ptr,
+        kNum,
+      );
+      if (status !== 0) {
+        // D5: BOTH fresh output buffers are freed — neither ever escapes on
+        // a failure. (Scratch goes in the `finally` below, as everywhere.)
+        freeBuf(this.core, outValuesBuf);
+        freeBuf(this.core, outIndicesBuf);
+        throw new Error(`wasm resident nt_topk_strided: status ${status} for shape [${this.shape.join(",")}] k ${kNum}`);
+      }
+
+      return {
+        values: WNDArray.fresh<OkShape<TopkShape<S, K>>>(this.core, [kNum] as unknown as OkShape<TopkShape<S, K>>, outValuesBuf.ptr, kNum),
+        indices: WNDArray.fresh<OkShape<TopkShape<S, K>>>(this.core, [kNum] as unknown as OkShape<TopkShape<S, K>>, outIndicesBuf.ptr, kNum),
+      };
     } finally {
       for (const buf of scratch) freeBuf(this.core, buf);
     }

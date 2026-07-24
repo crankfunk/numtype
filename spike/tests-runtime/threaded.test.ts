@@ -1383,3 +1383,209 @@ test("argmax threaded parity: the empty-reduction throws carry the SAME stem on 
     }
   }
 });
+
+// =============================================================================
+// WASM parity S5 (docs/wasm-parity-topk-spec.md, D1/D7): `WNDArray.topk`
+// threaded-vs-stable parity — the last op of the S0-S5 campaign. `topk` adds
+// ONE real kernel (`nt_topk_strided`), and the threads artifact is built from
+// the same crate, so parity is expected by construction; this block PROVES it
+// rather than asserting it, on every pool in `WORKER_COUNTS`.
+//
+// Two things make this block stricter than the argmax one above it:
+//  - `topk` returns real DATA VALUES, so the comparison is over raw 64-bit
+//    patterns (`assertDataBitIdentical`'s `Object.is` cannot tell two NaN
+//    payloads apart);
+//  - the receiver is exercised as a genuinely STRIDED rank-1 view, which
+//    `makeView`'s transpose-involution cannot produce at rank 1 (transposing
+//    a vector is a no-op).
+// =============================================================================
+
+import { topkRuntime } from "../src/runtime.ts";
+
+/** Raw 64-bit read from a `Float64Array`'s own buffer — payload-preserving
+ * (never the `new Float64Array([x])` round trip). */
+function topkBitsAt(a: Float64Array, i: number): bigint {
+  return new DataView(a.buffer, a.byteOffset, a.byteLength).getBigUint64(i * 8, true);
+}
+
+function assertTopkBitsIdentical(expected: Float64Array, actual: Float64Array, ctx: string): void {
+  assert.strictEqual(actual.length, expected.length, `${ctx}: length`);
+  for (let i = 0; i < expected.length; i++) {
+    assert.strictEqual(topkBitsAt(actual, i), topkBitsAt(expected, i), `${ctx}: bits differ at ${i}: reference=${expected[i]} wasm=${actual[i]}`);
+  }
+}
+
+/** A rank-1 operand: either contiguous, or a genuine stride-3 view over a
+ * padded buffer whose LOGICAL content is exactly `refData`. */
+function makeTopkOperand(core: CoreExports, asView: boolean, refData: Float64Array): Operand {
+  if (!asView) {
+    const arr = WNDArray.fromArray(core, [refData.length], refData);
+    return { arr, owners: [arr] };
+  }
+  const padded = new Float64Array(refData.length * 3);
+  for (let i = 0; i < padded.length; i++) padded[i] = -12345.5;
+  for (let i = 0; i < refData.length; i++) padded[i * 3] = refData[i] ?? 0;
+  const base = WNDArray.fromArray(core, [refData.length * 3], padded);
+  const view = base.slice({ step: 3 }) as AnyWNDArray;
+  return { arr: view, owners: [base, view] };
+}
+
+function runTopkCase(name: string, n: number, k: number, asView: boolean, rng: Rng, special = false): void {
+  test(name, () => {
+    const data = special ? genDataSpecial(rng, [n]) : genData(rng, [n]);
+    const ref = topkRuntime([n], data, k);
+
+    const stableOperand = makeTopkOperand(stableCore, asView, data);
+    let stableValues: Float64Array;
+    let stableIndices: Float64Array;
+    try {
+      const got = stableOperand.arr.topk(k as never);
+      try {
+        assertShapeEqual([k], got.values.shape as readonly number[], `${name}: stable values shape`);
+        assertShapeEqual([k], got.indices.shape as readonly number[], `${name}: stable indices shape`);
+        stableValues = got.values.toArray();
+        stableIndices = got.indices.toArray();
+      } finally {
+        got.values.dispose();
+        got.indices.dispose();
+      }
+    } finally {
+      disposeAll(stableOperand);
+    }
+    assertTopkBitsIdentical(ref.values, stableValues, `${name}: runtime.ts vs stable resident (values)`);
+    assertTopkBitsIdentical(ref.indices, stableIndices, `${name}: runtime.ts vs stable resident (indices)`);
+
+    for (const wc of WORKER_COUNTS) {
+      const pool = pools.get(wc)!;
+      const operand = makeTopkOperand(pool.core, asView, data);
+      try {
+        const got = operand.arr.topk(k as never);
+        try {
+          assertShapeEqual([k], got.values.shape as readonly number[], `${name} workers=${wc}: values shape`);
+          const gotValues = got.values.toArray();
+          const gotIndices = got.indices.toArray();
+          assertTopkBitsIdentical(ref.values, gotValues, `${name} workers=${wc} values vs runtime.ts`);
+          assertTopkBitsIdentical(ref.indices, gotIndices, `${name} workers=${wc} indices vs runtime.ts`);
+          assertTopkBitsIdentical(stableValues, gotValues, `${name} workers=${wc} values vs stable resident`);
+          assertTopkBitsIdentical(stableIndices, gotIndices, `${name} workers=${wc} indices vs stable resident`);
+        } finally {
+          got.values.dispose();
+          got.indices.dispose();
+        }
+      } finally {
+        disposeAll(operand);
+      }
+    }
+  });
+}
+
+{
+  const rng = makeRng(0x544f504b_5f544852n); // "TOPK_THR"
+  runTopkCase("topk threaded parity: contiguous n=12 k=4", 12, 4, false, rng);
+  // Pflicht view case (spec D7): a genuinely strided rank-1 receiver on every
+  // pool AND stable — where the LOGICAL index provably differs from the
+  // memory offset, and a confusion would corrupt the VALUES too.
+  runTopkCase("topk threaded parity: strided view n=12 k=4", 12, 4, true, rng);
+  runTopkCase("topk threaded parity: k = 0 (empty result)", 8, 0, false, rng);
+  runTopkCase("topk threaded parity: k = 1", 8, 1, false, rng);
+  runTopkCase("topk threaded parity: k = n (whole vector, sorted)", 8, 8, false, rng);
+  runTopkCase("topk threaded parity: k = n on a strided view", 8, 8, true, rng);
+  // C-2 lesson (from the S0/sqrt verify round): at least one genDataSpecial
+  // case, contiguous AND view, directly on the threads artifact. For `topk`
+  // the special values are not decoration — the total order is DEFINED on
+  // them (NaN first, ties by ascending index, +0/-0 equal).
+  runTopkCase("topk threaded parity: special values, contiguous n=10 k=5", 10, 5, false, rng, true);
+  runTopkCase("topk threaded parity: special values, strided view n=10 k=5", 10, 5, true, rng, true);
+  runTopkCase("topk threaded parity: special values, k = n", 9, 9, false, rng, true);
+}
+
+test("topk threaded parity: a CONSTRUCTED tie raster agrees on every pool (randomized data cannot reach these branches)", () => {
+  const NAN = Number.NaN;
+  const CASES: readonly { data: number[]; k: number }[] = [
+    { data: [5, 5, 5, 5, 5], k: 3 },
+    { data: [NAN, NAN, NAN, NAN], k: 2 },
+    { data: [1, NAN, 2, NAN, 3, NAN], k: 2 },
+    { data: [-0, 0, -0, 0, -1], k: 2 },
+    { data: [3, NAN, 3, -0, 0, NAN, 3], k: 5 },
+  ];
+  for (const c of CASES) {
+    const ref = topkRuntime([c.data.length], Float64Array.from(c.data), c.k);
+    for (const wc of WORKER_COUNTS) {
+      const pool = pools.get(wc)!;
+      const a = WNDArray.fromArray(pool.core, [c.data.length], c.data);
+      try {
+        const got = a.topk(c.k as never);
+        try {
+          assertTopkBitsIdentical(ref.values, got.values.toArray(), `tie raster [${c.data.join(",")}] k=${c.k} workers=${wc}: values`);
+          assertTopkBitsIdentical(ref.indices, got.indices.toArray(), `tie raster [${c.data.join(",")}] k=${c.k} workers=${wc}: indices`);
+        } finally {
+          got.values.dispose();
+          got.indices.dispose();
+        }
+      } finally {
+        a.dispose();
+      }
+    }
+  }
+});
+
+test("topk threaded parity: a NON-CANONICAL NaN payload survives byte-identically on every pool", () => {
+  const data = new Float64Array(4);
+  data[0] = 1;
+  data[2] = Number.POSITIVE_INFINITY;
+  data[3] = -7;
+  new DataView(data.buffer).setBigUint64(1 * 8, 0x7ff8_0000_cafe_baben, true);
+  const ref = topkRuntime([4], data, 4);
+  for (const wc of WORKER_COUNTS) {
+    const pool = pools.get(wc)!;
+    const a = WNDArray.fromArray(pool.core, [4], data);
+    try {
+      const got = a.topk(4 as never);
+      try {
+        const values = got.values.toArray();
+        assert.strictEqual(topkBitsAt(values, 0), 0x7ff8_0000_cafe_baben, `workers=${wc}: the exact NaN payload must survive the threads artifact too`);
+        assertTopkBitsIdentical(ref.values, values, `workers=${wc}: NaN-payload values vs runtime.ts`);
+        assertTopkBitsIdentical(ref.indices, got.indices.toArray(), `workers=${wc}: NaN-payload indices vs runtime.ts`);
+      } finally {
+        got.values.dispose();
+        got.indices.dispose();
+      }
+    } finally {
+      a.dispose();
+    }
+  }
+});
+
+test("topk threaded parity: the three prevalidated throws carry the SAME stems on every pool as on the stable core", () => {
+  const shape2d: number[] = [2, 3];
+  const shape1d: number[] = [3];
+  const stableM = WNDArray.fromArray(stableCore, shape2d, [1, 2, 3, 4, 5, 6]);
+  const stableV = WNDArray.fromArray(stableCore, shape1d, [1, 2, 3]);
+  let rankMsg: string;
+  let invalidMsg: string;
+  let boundsMsg: string;
+  try {
+    rankMsg = throwMsg(() => stableM.topk(2 as never));
+    invalidMsg = throwMsg(() => stableV.topk(-1 as never));
+    boundsMsg = throwMsg(() => stableV.topk(4 as never));
+    assert.strictEqual(rankMsg, "topk: expected a 1-D vector (got shape [2,3])", "sanity: exact expected wording");
+    assert.strictEqual(invalidMsg, "topk: k must be a non-negative integer (got -1)", "sanity: exact expected wording");
+    assert.strictEqual(boundsMsg, "topk: k=4 exceeds the vector length 3", "sanity: exact expected wording");
+  } finally {
+    stableM.dispose();
+    stableV.dispose();
+  }
+  for (const wc of WORKER_COUNTS) {
+    const pool = pools.get(wc)!;
+    const m = WNDArray.fromArray(pool.core, shape2d, [1, 2, 3, 4, 5, 6]);
+    const v = WNDArray.fromArray(pool.core, shape1d, [1, 2, 3]);
+    try {
+      assert.strictEqual(throwMsg(() => m.topk(2 as never)), rankMsg, `workers=${wc}: rank stem`);
+      assert.strictEqual(throwMsg(() => v.topk(-1 as never)), invalidMsg, `workers=${wc}: invalid-k stem`);
+      assert.strictEqual(throwMsg(() => v.topk(4 as never)), boundsMsg, `workers=${wc}: bounds stem`);
+    } finally {
+      m.dispose();
+      v.dispose();
+    }
+  }
+});

@@ -354,8 +354,20 @@ dass **Arbeitsregel 10 selbst falsch war** (es gibt ein zweites strukturell geti
 `CoreExports`-Literal), und Verify-B fand eine reale Lücke, die alle Gates grün ließ — der
 Kernel-Fehlerpfad war von 0/334 Op-, 0/7 Lifecycle- und 0/1 threaded-Tests abgedeckt.
 
-**S5 (topk)** folgt dem etablierten Workflow (Spec → Baustein 0 → Impl → Verify A+B+C →
-Freeze-Re-Pin) und ist die härteste M1 der Kampagne: der Kernel müsste den JS-Heap der
-topk-Selektion spiegeln (O(n log k), NaN-maximal, First-Index-Wins, aufsteigender Scan), und
-anders als bei `argmax` greift dort der NaN-Payload-Vorbehalt an M1 wirklich, weil
-`values[i] === data[indices[i]]` byte-exakt gilt.
+**S5 (topk): ERLEDIGT 2026-07-25, dreifach verifiziert A+B+C — DIE KAMPAGNE S0–S5 IST DAMIT
+ABGESCHLOSSEN.** Neuer Kernel `nt_topk_strided` + `WNDArray.topk` (eine Signatur,
+Instanz-Methode, keine Facaden-Änderung); `TopkCheck`/`TopkShape` als zweite Call-Site
+unverändert. Freeze-Hash `eba6ba7a…` → `146afdf6…`, dreiteilig bewiesen und von zwei
+Verifiern je in beide Richtungen nachgestellt. check:diag 237.379 @ 140 (Δ+7.551 gegen
+≤+8.000, nur 449 Marge), stress 116.053, browser Δ0, bench:editor uniform +119;
+test:resident 6122+2, test:threaded 139, cargo 222+1.
+
+**Die vorab hier notierte Erwartung war falsch und wurde korrigiert:** S5 ist NICHT die
+härteste M1 der Kampagne, und der Kernel muss den JS-Heap NICHT spiegeln. Komparator plus
+Indextiebreak bilden eine strikte Totalordnung auf `0..n-1` — es gibt genau eine korrekte
+Ausgabe, also hängt Bit-Identität nur von der Prädikat-Transliteration und davon ab, dass
+`values[i] = data[indices[i]]` ein reiner Kopiervorgang bleibt; bei `topk` läuft überhaupt
+keine Gleitkomma-Arithmetik (kategorial anders als `sum`). Zwei unabhängige Verifier haben
+das bestätigt, einer analytisch, einer empirisch. **Richtig war dagegen die Erwartung zum
+NaN-Payload:** er greift hier erstmals wirklich und ist byte-exakt bewiesen (zwei
+nicht-kanonische Muster, contiguous + gestridet + threaded + cargo).

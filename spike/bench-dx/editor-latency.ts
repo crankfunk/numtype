@@ -872,15 +872,25 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // same +436 shows up in `check:diag:stress` (115,498 -> 115,934), which
 // compiles `spike/src` directly -- an independent corroboration that this is
 // class-surface growth, not workload-specific. Measured twice, byte-identical.
+// WASM parity S5 (docs/wasm-parity-topk-spec.md, D8), 2026-07-25: pins moved
+// UNIFORMLY by +119 -- the same single-class WNDArray class-surface ripple as
+// S4 (S0/S1/S2's mechanism, not S3's three-class one): `topk` adds ONE generic
+// signature to WNDArray, and every workload instantiates WNDArray at least
+// once. No workload has its own `topk` CALL site, so the delta is perfectly
+// uniform again. The identical +119 shows up in `check:diag:stress`
+// (115,934 -> 116,053), which compiles `spike/src` directly -- an independent
+// corroboration that this is class-surface growth, not workload-specific.
+// It is smaller than S4's +436 exactly as expected: one signature instead of
+// three overloads plus a private helper. Measured twice, byte-identical.
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 37454,
-  w2: 39287,
-  w3: 70429,
-  w4: 37609,
-  w5: 42908,
-  w6: 44102,
-  w7: 36658,
-  w8: 44347,
+  w1: 37573,
+  w2: 39406,
+  w3: 70548,
+  w4: 37728,
+  w5: 43027,
+  w6: 44221,
+  w7: 36777,
+  w8: 44466,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

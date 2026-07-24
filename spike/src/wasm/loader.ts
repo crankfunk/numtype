@@ -378,3 +378,30 @@ export interface CoreExports {
     outLen: number,
   ): number;
 }
+
+// WASM parity S5 (docs/wasm-parity-topk-spec.md, D3/D6): `topk` selection
+// (`nt_topk_strided`) — the last slice of the S0-S5 parity campaign. Declared
+// as a SIXTH `export interface CoreExports { ... }` block, appended strictly
+// after every pre-existing line in this file (freeze discipline, same
+// technique as the Kern-07/S0/S1/S4 blocks above it — TypeScript merges
+// same-named interface declarations in the same module automatically, so this
+// augments `CoreExports` without touching a single pre-existing line).
+// `ThreadedCoreExports extends CoreExports` (threaded.ts) inherits it
+// automatically.
+export interface CoreExports {
+  // topk: one strided-operand quadruple + `k` + TWO output pointers (values
+  // and indices) sharing one `out_len` (== k). The only entry point in this
+  // ABI with two output buffers; they must never alias.
+  nt_topk_strided(
+    shapePtr: number,
+    rank: number,
+    stridesPtr: number,
+    offset: number,
+    dataPtr: number,
+    dataLen: number,
+    k: number,
+    outValuesPtr: number,
+    outIndicesPtr: number,
+    outLen: number,
+  ): number;
+}

@@ -632,6 +632,11 @@ function makeStackFailureMockCore(failAtMaterializeCall: number): {
     // while `check:diag` still prints a plausible `Instantiations:` line).
     nt_argmax_all_strided: notImplemented("nt_argmax_all_strided"),
     nt_argmax_axis_strided: notImplemented("nt_argmax_axis_strided"),
+    // WASM parity S5 (docs/wasm-parity-topk-spec.md): this mock's stack
+    // failure path never calls topk. Arbeitsregel 10 applies here too — this
+    // is the repo's SECOND exhaustively structurally typed `CoreExports`
+    // literal, and a missing member is a hard TS2739.
+    nt_topk_strided: notImplemented("nt_topk_strided"),
   };
 
   return { core, allocs, frees };
@@ -982,4 +987,301 @@ test("argmax(axis): a kernel status != 0 from nt_argmax_axis_strided frees the o
   assert.deepStrictEqual(Array.from(a.toArray()), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   a.dispose();
   assertLedgerBalanced(allocs, frees, "argmax(axis) kernel-status failure (whole test)");
+});
+
+// =============================================================================
+// WASM parity S5 (docs/wasm-parity-topk-spec.md, D5/D7): `WNDArray.topk`
+// lifecycle — the first and only op in the library that returns TWO resident
+// handles from one call, which is what makes this block non-symmetric with
+// every op above it. Three distinct claims:
+//
+//  (a) SUCCESS: both output buffers survive as independent handles the caller
+//      owns; both scratch buffers are gone by the time the call returns.
+//  (b) KERNEL STATUS != 0: BOTH output buffers are freed before the throw —
+//      not just the first one.
+//  (c) THE SECOND ALLOCATION FAILS (OOM): the FIRST output buffer must be
+//      unwound. This path exists nowhere else in the class, so nothing else
+//      covers it by accident.
+//
+// (b) and (c) are written here from day one rather than as a verify-round
+// addendum — the S4/V2 lesson, where exactly this path was covered by 0 of
+// 334 tests and only became visible under a forced kernel failure. As there,
+// the ledger counts at the ALLOCATOR through a thin counting wrapper around
+// the REAL core (never a hand-written mock), because the scratch here is
+// 8-12 bytes per call — orders of magnitude below WASM's 64 KiB page
+// granularity, so an allocator-growth check would wave a permanent leak
+// through.
+// =============================================================================
+
+/** A `CoreExports` that delegates to a real core but forces `nt_topk_strided`
+ * to report a caller-chosen non-zero status without touching either output
+ * buffer — the "kernel rejects already-allocated output buffers" path claim
+ * (b) exists for. Spread-based, so Arbeitsregel 10 needs no stubs here. */
+function makeTopkKernelFailureCore(real: CoreExports, forceStatus: number): { core: CoreExports; allocs: MockAlloc[]; frees: MockAlloc[] } {
+  const allocs: MockAlloc[] = [];
+  const frees: MockAlloc[] = [];
+  const core: CoreExports = {
+    ...real,
+    memory: real.memory,
+    nt_alloc(bytes: number): number {
+      const ptr = real.nt_alloc(bytes);
+      allocs.push({ ptr, bytes });
+      return ptr;
+    },
+    nt_free(ptr: number, bytes: number): void {
+      frees.push({ ptr, bytes });
+      real.nt_free(ptr, bytes);
+    },
+    nt_topk_strided(): number {
+      return forceStatus;
+    },
+  };
+  return { core, allocs, frees };
+}
+
+/** A `CoreExports` that delegates to a real core but can be ARMED to make the
+ * n-th subsequent `nt_alloc` return the failure sentinel `0` WITHOUT actually
+ * allocating — simulating an out-of-memory refusal at a chosen point.
+ * `allocBytes` (resident.ts) turns that into its "nt_alloc(N) failed (out of
+ * memory)" throw. Nothing real is allocated for the refused call, so a
+ * balanced ledger afterwards is a genuine claim about the unwind. */
+function makeArmableOomCore(real: CoreExports): {
+  core: CoreExports;
+  allocs: MockAlloc[];
+  frees: MockAlloc[];
+  armFailAt: (nthAllocFromNow: number) => void;
+} {
+  const allocs: MockAlloc[] = [];
+  const frees: MockAlloc[] = [];
+  let countdown: number | null = null;
+  const core: CoreExports = {
+    ...real,
+    memory: real.memory,
+    nt_alloc(bytes: number): number {
+      if (countdown !== null) {
+        countdown--;
+        if (countdown === 0) {
+          countdown = null;
+          return 0; // refused: no real allocation happened
+        }
+      }
+      const ptr = real.nt_alloc(bytes);
+      allocs.push({ ptr, bytes });
+      return ptr;
+    },
+    nt_free(ptr: number, bytes: number): void {
+      frees.push({ ptr, bytes });
+      real.nt_free(ptr, bytes);
+    },
+  };
+  return {
+    core,
+    allocs,
+    frees,
+    armFailAt: (nthAllocFromNow: number): void => {
+      countdown = nthAllocFromNow;
+    },
+  };
+}
+
+test("topk SUCCESS path: exact alloc/free ledger — BOTH results survive as independent buffers, both scratch buffers are gone", async () => {
+  const { core: countingCore, allocs, frees } = makeCountingCore(await initCore());
+  const shape: number[] = [7];
+  const a = WNDArray.fromArray(countingCore, shape, [3, 1, 4, 1, 5, 9, 2]);
+  const allocsBefore = allocs.length;
+  const freesBefore = frees.length;
+
+  const got = a.topk(3 as never);
+  const during = allocs.slice(allocsBefore);
+  const freedDuring = frees.slice(freesBefore);
+
+  // Exactly four allocations: shapeBuf, stridesBuf, outValues, outIndices.
+  assert.strictEqual(during.length, 4, `expected exactly 4 allocations from topk() itself (2 scratch + 2 outputs), got ${during.length}: ${JSON.stringify(during)}`);
+  // …of which exactly the two SCRATCH buffers are already freed, and the two
+  // 24-byte output buffers are NOT (they are the caller's now).
+  assert.strictEqual(freedDuring.length, 2, `expected exactly 2 frees during the call (the two scratch buffers only), got ${freedDuring.length}: ${JSON.stringify(freedDuring)}`);
+  const outstanding = during.filter((al) => !freedDuring.some((f) => f.ptr === al.ptr && f.bytes === al.bytes));
+  assert.deepStrictEqual(
+    outstanding.map((o) => o.bytes),
+    [24, 24],
+    `the two still-live allocations must be the two k*8 = 24-byte output buffers: ${JSON.stringify(outstanding)}`,
+  );
+  assert.notStrictEqual(outstanding[0]?.ptr, outstanding[1]?.ptr, "the two output buffers must be genuinely distinct allocations");
+
+  assert.deepStrictEqual(Array.from(got.indices.toArray()), [5, 4, 2], "precondition: the kernel really ran");
+  got.values.dispose();
+  got.indices.dispose();
+  a.dispose();
+  assertLedgerBalanced(allocs, frees, "topk success path (whole test)");
+});
+
+test("topk SUCCESS path at k = 0: the two zero-byte outputs are the ptr-0 sentinel, and the ledger still balances", async () => {
+  const { core: countingCore, allocs, frees } = makeCountingCore(await initCore());
+  const shape: number[] = [4];
+  const a = WNDArray.fromArray(countingCore, shape, [1, 2, 3, 4]);
+  const got = a.topk(0 as never);
+  assert.strictEqual(got.values.describe().ptr, 0, "a zero-byte output is the nt_alloc(0) sentinel");
+  assert.strictEqual(got.indices.describe().ptr, 0, "…for both outputs");
+  got.values.dispose();
+  got.indices.dispose();
+  a.dispose();
+  assertLedgerBalanced(allocs, frees, "topk k=0 path");
+});
+
+test("topk: a kernel status != 0 frees BOTH output buffers AND both scratch buffers (D5 claim (b))", async () => {
+  const { core: failingCore, allocs, frees } = makeTopkKernelFailureCore(await initCore(), 9);
+  const shape: number[] = [5];
+  const a = WNDArray.fromArray(failingCore, shape, [1, 2, 3, 4, 5]);
+  const allocsBefore = allocs.length;
+  const freesBefore = frees.length;
+
+  assert.throws(() => a.topk(2 as never), /wasm resident nt_topk_strided: status 9 for shape \[5\] k 2/);
+
+  const during = allocs.slice(allocsBefore);
+  const freedDuring = frees.slice(freesBefore);
+  assert.strictEqual(during.length, 4, `expected exactly 4 allocations (2 scratch + 2 outputs) for the failing call, got ${during.length}: ${JSON.stringify(during)}`);
+  // Non-vacuity: two of those four are the real, distinct output buffers, so
+  // "everything was freed" is a claim about two genuine 16-byte blocks.
+  assert.strictEqual(during.filter((al) => al.bytes === 16).length, 2, `expected two 16-byte output allocations: ${JSON.stringify(during)}`);
+  assertLedgerBalanced(during, freedDuring, "topk kernel-status failure");
+
+  // Same contract as every other op's failure path: the receiver stays live.
+  assert.strictEqual(a.disposed, false);
+  assert.deepStrictEqual(Array.from(a.toArray()), [1, 2, 3, 4, 5]);
+  a.dispose();
+  assertLedgerBalanced(allocs, frees, "topk kernel-status failure (whole test)");
+});
+
+test("topk: when the SECOND output allocation fails (OOM), the FIRST is freed before the error propagates (D5 claim (c))", async () => {
+  const { core: oomCore, allocs, frees, armFailAt } = makeArmableOomCore(await initCore());
+  const shape: number[] = [5];
+  const a = WNDArray.fromArray(oomCore, shape, [1, 2, 3, 4, 5]);
+  const allocsBefore = allocs.length;
+  const freesBefore = frees.length;
+
+  // Within topk() the allocation order is: shapeBuf(1), stridesBuf(2),
+  // outValues(3), outIndices(4). Refuse the FOURTH.
+  armFailAt(4);
+  assert.throws(() => a.topk(2 as never), /resident: nt_alloc\(16\) failed \(out of memory\)/);
+
+  const during = allocs.slice(allocsBefore);
+  const freedDuring = frees.slice(freesBefore);
+  // Three allocations actually happened (the refused 4th allocated nothing).
+  assert.strictEqual(during.length, 3, `expected exactly 3 real allocations before the refusal, got ${during.length}: ${JSON.stringify(during)}`);
+  assert.strictEqual(during.filter((al) => al.bytes === 16).length, 1, `precondition: exactly ONE 16-byte output buffer was allocated before the refusal: ${JSON.stringify(during)}`);
+  // All three must be gone: outValues via the explicit unwind, the two
+  // scratch buffers via `finally`.
+  assertLedgerBalanced(during, freedDuring, "topk second-allocation OOM");
+
+  assert.strictEqual(a.disposed, false, "a failing op never touches the receiver");
+  a.dispose();
+  assertLedgerBalanced(allocs, frees, "topk second-allocation OOM (whole test)");
+});
+
+test("topk: when the FIRST output allocation fails (OOM), both scratch buffers are still freed", async () => {
+  const { core: oomCore, allocs, frees, armFailAt } = makeArmableOomCore(await initCore());
+  const shape: number[] = [5];
+  const a = WNDArray.fromArray(oomCore, shape, [1, 2, 3, 4, 5]);
+  const allocsBefore = allocs.length;
+  const freesBefore = frees.length;
+
+  armFailAt(3); // refuse outValues
+  assert.throws(() => a.topk(2 as never), /resident: nt_alloc\(16\) failed \(out of memory\)/);
+
+  const during = allocs.slice(allocsBefore);
+  const freedDuring = frees.slice(freesBefore);
+  assert.strictEqual(during.length, 2, `expected exactly 2 real allocations (the two scratch buffers), got ${during.length}: ${JSON.stringify(during)}`);
+  assertLedgerBalanced(during, freedDuring, "topk first-allocation OOM");
+  a.dispose();
+  assertLedgerBalanced(allocs, frees, "topk first-allocation OOM (whole test)");
+});
+
+test("topk: the error paths leak nothing — all three prevalidated throws happen BEFORE any allocation (D4)", async () => {
+  const { core: countingCore, allocs, frees } = makeCountingCore(await initCore());
+  const shape2d: number[] = [2, 3];
+  const m = WNDArray.fromArray(countingCore, shape2d, [1, 2, 3, 4, 5, 6]);
+  const shape1d: number[] = [3];
+  const v = WNDArray.fromArray(countingCore, shape1d, [1, 2, 3]);
+
+  const before = allocs.length;
+  assert.throws(() => m.topk(2 as never), /expected a 1-D vector/);
+  assert.throws(() => v.topk(-1 as never), /non-negative integer/);
+  assert.throws(() => v.topk(1.5 as never), /non-negative integer/);
+  assert.throws(() => v.topk(4 as never), /exceeds the vector length/);
+  assert.strictEqual(allocs.length, before, "every prevalidated topk error must throw before allocating anything");
+
+  m.dispose();
+  v.dispose();
+  assertLedgerBalanced(allocs, frees, "topk prevalidated error paths");
+});
+
+test("topk leak non-vacuity: N calls on ONE receiver (dispose both results) free exactly 2 resident buffers per call", async () => {
+  const core = await initCore();
+  const a = WNDArray.fromArray(core, [20], Array.from({ length: 20 }, (_, i) => (i * 3) % 11));
+  const N = 500;
+
+  const before = getResidentFreeCount();
+  for (let i = 0; i < N; i++) {
+    const got = a.topk(4 as never);
+    got.values.dispose();
+    got.indices.dispose();
+  }
+  const after = getResidentFreeCount();
+  a.dispose(); // outside the measured window
+
+  assert.strictEqual(
+    after - before,
+    2 * N,
+    `expected exactly 2 resident-buffer frees per topk() call (values + indices; scratch uses the raw nt_free path): before=${before}, after=${after}, delta=${after - before}, expected=${2 * N}`,
+  );
+});
+
+test("use-after-dispose: topk throws naming the op", async () => {
+  const core = await initCore();
+  const a = WNDArray.fromArray(core, [3], [1, 2, 3]);
+  a.dispose();
+  assert.throws(() => a.topk(2 as never), /WNDArray\.topk:.*disposed/);
+  // …and it does so BEFORE the rank/k prevalidation, so even a call that is
+  // ALSO invalid on those grounds reports the disposal.
+  assert.throws(() => a.topk(99 as never), /WNDArray\.topk:.*disposed/);
+});
+
+test("topk: the resident results are FRESH, independent buffers — they stay valid after the receiver is disposed", async () => {
+  const core = await initCore();
+  const a = WNDArray.fromArray(core, [5], [1, 9, 3, 4, 5]);
+  const got = a.topk(2 as never);
+  a.dispose();
+  try {
+    assert.strictEqual(got.values.disposed, false);
+    assert.strictEqual(got.indices.disposed, false);
+    assert.deepStrictEqual(Array.from(got.values.toArray()), [9, 5]);
+    assert.deepStrictEqual(Array.from(got.indices.toArray()), [1, 4]);
+  } finally {
+    got.values.dispose();
+    got.indices.dispose();
+  }
+});
+
+test("topk: mutating the RECEIVER afterwards does not change the results (the outputs are copies, not views)", async () => {
+  const core = await initCore();
+  const a = WNDArray.fromArray(core, [4], [1, 2, 3, 4]);
+  try {
+    const got = a.topk(2 as never);
+    try {
+      const b = WNDArray.fromArray(core, [4], [100, 100, 100, 100]);
+      try {
+        const summed = a.add(b); // a fresh handle; `a` itself is untouched
+        summed.dispose();
+      } finally {
+        b.dispose();
+      }
+      assert.deepStrictEqual(Array.from(got.values.toArray()), [4, 3], "the result buffer is independent of any later op on the receiver");
+      assert.deepStrictEqual(Array.from(got.indices.toArray()), [3, 2]);
+    } finally {
+      got.values.dispose();
+      got.indices.dispose();
+    }
+  } finally {
+    a.dispose();
+  }
 });

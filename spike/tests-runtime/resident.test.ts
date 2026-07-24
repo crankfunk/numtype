@@ -1827,3 +1827,714 @@ test("diagnostic quality (T4, WASM parity S4): an out-of-range literal axis is r
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// =============================================================================
+// WASM parity S5 (docs/wasm-parity-topk-spec.md, D7): `WNDArray.topk` vs the
+// TypeScript reference `topkRuntime`, bit-for-bit — the M1 proof for the LAST
+// slice of the S0-S5 campaign.
+//
+// Oracle methodology: `topkRuntime` over the RECEIVER's own logical
+// shape/data (`toArray()`, read BEFORE the topk call), so a view is compared
+// against exactly the vector it logically is. Two things make this slice's
+// oracle discipline different from `argmax`'s:
+//
+//  1. `topk` returns real DATA VALUES, not just indices, so the comparison is
+//     over raw 64-bit patterns read straight out of the result buffers —
+//     never `===` (which conflates NaN payloads and `+0`/`-0`) and never via
+//     `bitsOf`'s `new Float64Array([x])` round trip (which a V8 JIT
+//     canonicalization quirk can corrupt for NaN payloads; the same reason
+//     `bitsAtBuf` exists above).
+//  2. `topk`'s order has THREE tie levels (NaN-vs-NaN by index; equal values
+//     by index; `+0`/`-0` treated as equal). Randomized f64 draws from a
+//     continuous distribution hit exact ties with probability 0, so they are
+//     PROVABLY BLIND to the whole tiebreak-bug class. The constructed
+//     tie raster below is therefore mandatory, not decoration — including a
+//     boundary group made of several NaNs, which is a DIFFERENT comparator
+//     branch (`aNaN && bNaN`) from a numeric tie (`a === b`).
+//
+// The tests deliberately pin only the OBSERVABLE result. `topk`'s order is a
+// strict total order on the distinct indices `0..n-1`, so exactly one answer
+// is correct and the kernel's selection ALGORITHM is free (kernel doc,
+// crates/core/src/kernels/topk.rs). Pinning heap internals would block a
+// future legitimate optimization for no correctness gain.
+// =============================================================================
+
+import { topkRuntime } from "../src/runtime.ts";
+
+/** Raw 64-bit read out of a `Float64Array`'s OWN backing buffer, with no
+ * intermediate array-literal construction — the payload-preserving read
+ * (see `bitsAtBuf` above for the JIT quirk that makes this necessary). */
+function bitsAtArr(a: Float64Array, i: number): bigint {
+  return new DataView(a.buffer, a.byteOffset, a.byteLength).getBigUint64(i * 8, true);
+}
+
+function assertF64BitsIdentical(expected: Float64Array, actual: Float64Array, ctx: string): void {
+  assert.strictEqual(actual.length, expected.length, `${ctx}: result length mismatch, expected ${expected.length} got ${actual.length}`);
+  for (let i = 0; i < expected.length; i++) {
+    const e = bitsAtArr(expected, i);
+    const a = bitsAtArr(actual, i);
+    assert.strictEqual(a, e, `${ctx}: bits differ at ${i}: reference=${expected[i]} (0x${e.toString(16)}) wasm=${actual[i]} (0x${a.toString(16)})`);
+  }
+}
+
+/** Runs `recv.topk(k)` and asserts BOTH outputs bit-identical to
+ * `topkRuntime` over the receiver's own logical content, plus the
+ * `values[i] === data[indices[i]]` cross-consistency the op's own contract
+ * claims. Disposes both result handles; the caller owns `recv`. */
+function assertTopkMatches(recv: AnyWNDArray, k: number, ctx: string): void {
+  const shape = recv.shape as readonly number[];
+  const data = recv.toArray(); // logical content, BEFORE the topk call
+  const ref = topkRuntime(shape, data, k);
+  const got = recv.topk(k as never);
+  try {
+    assertShapeEqual([k], got.values.shape as readonly number[], `${ctx}: values shape`);
+    assertShapeEqual([k], got.indices.shape as readonly number[], `${ctx}: indices shape`);
+    const gotValues = got.values.toArray();
+    const gotIndices = got.indices.toArray();
+    assertF64BitsIdentical(ref.values, gotValues, `${ctx}: values`);
+    assertF64BitsIdentical(ref.indices, gotIndices, `${ctx}: indices`);
+    // Cross-consistency against the INPUT vector, byte-exact: the returned
+    // index really addresses the returned value, in the view's LOGICAL
+    // flattening (a memory-offset confusion would break this even when both
+    // outputs were internally self-consistent).
+    for (let i = 0; i < gotIndices.length; i++) {
+      const idx = gotIndices[i] ?? 0;
+      assert.ok(Number.isInteger(idx) && idx >= 0 && idx < data.length, `${ctx}: indices[${i}]=${idx} is not a valid logical index into a length-${data.length} vector`);
+      assert.strictEqual(bitsAtArr(gotValues, i), bitsAtArr(data, idx), `${ctx}: values[${i}] must be data[indices[${i}]] byte-exactly`);
+    }
+    // The two result handles are INDEPENDENT buffers, never one aliased twice
+    // (D5). Only meaningful for k > 0: at k = 0 both are the `nt_alloc(0)`
+    // ptr-0 sentinel — a zero-byte non-allocation that is never read and
+    // whose `nt_free(0, 0)` is a no-op, so there is nothing to alias.
+    if (k > 0) {
+      assert.notStrictEqual(got.values.describe().ptr, got.indices.describe().ptr, `${ctx}: values and indices must not share a buffer`);
+    } else {
+      assert.strictEqual(got.values.describe().ptr, 0, `${ctx}: a k=0 values handle must carry the ptr-0 sentinel`);
+      assert.strictEqual(got.indices.describe().ptr, 0, `${ctx}: a k=0 indices handle must carry the ptr-0 sentinel`);
+    }
+  } finally {
+    got.values.dispose();
+    got.indices.dispose();
+  }
+}
+
+/** The mandated k raster for a length-`n` receiver: 0, 1, n/2, n (deduped,
+ * and 1 dropped when the vector is empty). */
+function kRaster(n: number): number[] {
+  const raw = n === 0 ? [0] : [0, 1, Math.floor(n / 2), n];
+  return [...new Set(raw)];
+}
+
+// --- topk: contiguous receivers, randomized, over the whole k raster ------
+{
+  const rng = makeRng(0x5245535f544f504bn); // "RES_TOPK"
+  for (let c = 0; c < CASE_COUNT; c++) {
+    const n = rng.nextInt(0, 12);
+    const shape = [n];
+    const data = genData(rng, shape);
+    test(`resident topk contiguous case ${c}: n=${n}`, () => {
+      const a = WNDArray.fromArray(core, shape, Array.from(data));
+      try {
+        for (const k of kRaster(n)) {
+          assertTopkMatches(a, k, `resident topk contiguous case ${c} n=${n} k=${k}`);
+        }
+      } finally {
+        a.dispose();
+      }
+    });
+  }
+}
+
+// --- topk on VIEWS (Arbeitsregel 12 / spec D7: the four view classes) -----
+// At rank 1 the interesting receivers are: stride > 1 (a step slice), offset
+// > 0 (a window), a ROW of a transposed matrix (stride = the base's row
+// count, offset = the row index), and a composed transpose+slice view with
+// both. For `topk` this is load-bearing beyond coverage: the returned indices
+// must be indices into the VIEW's logical flattening, and a memory-offset
+// confusion would corrupt the VALUES too (kernel doc).
+
+{
+  // Fixed, hand-chosen data (no PRNG here): each view class is a structural
+  // claim, so the receivers must be deterministic and inspectable.
+  const BASE = Array.from({ length: 24 }, (_, i) => ((i * 7) % 19) - 9);
+
+  // (a) step slice: stride 2, offset 0
+  for (const k of [0, 1, 3, 6]) {
+    test(`resident topk on step-sliced view (stride 2, offset 0): k=${k}`, () => {
+      const w = WNDArray.fromArray(core, [12], BASE.slice(0, 12));
+      try {
+        const view = w.slice({ step: 2 }); // [6], stride 2
+        try {
+          assert.deepStrictEqual([...(view.shape as readonly number[])], [6], "precondition: the step slice is a length-6 rank-1 view");
+          assert.notStrictEqual(view.describe().strides[0], 1, "precondition: the view must be genuinely non-contiguous (stride != 1)");
+          assertTopkMatches(view, k, `resident topk step-sliced view k=${k}`);
+        } finally {
+          view.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+
+  // (b) offset window: stride 1, offset > 0
+  for (const k of [0, 1, 4, 8]) {
+    test(`resident topk on offset window (stride 1, offset 4): k=${k}`, () => {
+      const w = WNDArray.fromArray(core, [12], BASE.slice(0, 12));
+      try {
+        const view = w.slice({ start: 4 }); // [8], offset 4
+        try {
+          assert.deepStrictEqual([...(view.shape as readonly number[])], [8], "precondition: the window is a length-8 rank-1 view");
+          assert.notStrictEqual(view.describe().offset, 0, "precondition: the window must have a nonzero offset");
+          assertTopkMatches(view, k, `resident topk offset window k=${k}`);
+        } finally {
+          view.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+
+  // (c) a ROW of a TRANSPOSED matrix: stride = the base's column count of the
+  // pre-transpose layout, offset = the row index. Both non-trivial at once.
+  for (const row of [0, 2, 5]) {
+    for (const k of [0, 2, 4]) {
+      test(`resident topk on a transposed matrix row (row ${row}): k=${k}`, () => {
+        const w = WNDArray.fromArray(core, [4, 6], BASE);
+        try {
+          const t = w.transpose(); // [6,4], strides [1,6]
+          try {
+            const view = t.slice(row, null) as AnyWNDArray; // rank-1, stride 6, offset `row`
+            try {
+              assert.deepStrictEqual([...(view.shape as readonly number[])], [4], "precondition: a transposed row is a length-4 rank-1 view");
+              assert.strictEqual(view.describe().strides[0], 6, "precondition: the row's stride must be the base's row length");
+              assertTopkMatches(view, k, `resident topk transposed row ${row} k=${k}`);
+            } finally {
+              view.dispose();
+            }
+          } finally {
+            t.dispose();
+          }
+        } finally {
+          w.dispose();
+        }
+      });
+    }
+  }
+
+  // (d) composed: transpose -> row -> step slice. Non-natural stride AND a
+  // nonzero offset AND a second slicing step on top.
+  for (const k of [0, 1, 2]) {
+    test(`resident topk on a composed transpose+row+step view: k=${k}`, () => {
+      const w = WNDArray.fromArray(core, [4, 6], BASE);
+      try {
+        const t = w.transpose(); // [6,4]
+        try {
+          const row = t.slice(3, null) as AnyWNDArray; // [4], stride 6, offset 3
+          try {
+            const view = row.slice({ step: 2 }) as AnyWNDArray; // [2], stride 12, offset 3
+            try {
+              assert.deepStrictEqual([...(view.shape as readonly number[])], [2], "precondition: the composed view is length 2");
+              assert.strictEqual(view.describe().strides[0], 12, "precondition: composed stride");
+              assert.strictEqual(view.describe().offset, 3, "precondition: composed offset");
+              assertTopkMatches(view, k, `resident topk composed view k=${k}`);
+            } finally {
+              view.dispose();
+            }
+          } finally {
+            row.dispose();
+          }
+        } finally {
+          t.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}
+
+// --- topk: randomized IEEE special-value raster, contiguous AND view ------
+// `topk`'s order is DEFINED on these values, so this block is load-bearing
+// for M1. Still not a substitute for the constructed tie raster below:
+// `genDataSpecial` draws ties only by luck, never by construction.
+{
+  const rng = makeRng(0x544f504b5f535056n); // "TOPK_SPV"
+  for (let c = 0; c < 60; c++) {
+    const n = rng.nextInt(1, 10);
+    const data = genDataSpecial(rng, [n]);
+    const asView = rng.nextBool();
+    const k = rng.nextInt(0, n);
+    test(`resident topk special values case ${c}: n=${n} k=${k} view=${asView}`, () => {
+      const ctx = `resident topk special case ${c} n=${n} k=${k} view=${asView}`;
+      if (!asView) {
+        const a = WNDArray.fromArray(core, [n], data);
+        try {
+          assertTopkMatches(a, k, ctx);
+        } finally {
+          a.dispose();
+        }
+        return;
+      }
+      // Embed the vector as every 3rd element of a longer buffer, so the
+      // receiver is a genuine stride-3 view with the SAME logical content.
+      const padded = new Float64Array(n * 3);
+      for (let i = 0; i < n * 3; i++) padded[i] = 12345.5;
+      for (let i = 0; i < n; i++) padded[i * 3] = data[i] ?? 0;
+      const base = WNDArray.fromArray(core, [n * 3], padded);
+      try {
+        const view = base.slice({ step: 3 }) as AnyWNDArray;
+        try {
+          assertTopkMatches(view, k, ctx);
+        } finally {
+          view.dispose();
+        }
+      } finally {
+        base.dispose();
+      }
+    });
+  }
+}
+
+// --- topk: CONSTRUCTED tie raster (spec D7, the mandatory part) -----------
+// Every case here puts the k boundary INSIDE a tie group, where nothing but
+// the index tiebreak decides the answer. `expectedIndices` is a HAND
+// reference, not `topkRuntime`'s output — so these cases would catch a bug
+// shared by both surfaces, which the differential alone cannot.
+{
+  const NAN = Number.NaN;
+  const TIE_CASES: readonly { name: string; data: number[]; k: number; expectedIndices: number[] }[] = [
+    // Numeric tie group, boundary in the middle of it.
+    { name: "all-equal, k splits the group", data: [5, 5, 5, 5, 5], k: 3, expectedIndices: [0, 1, 2] },
+    { name: "numeric tie group under a unique max", data: [9, 5, 5, 5, 1], k: 3, expectedIndices: [0, 1, 2] },
+    { name: "numeric tie group straddling the boundary", data: [1, 7, 2, 7, 7, 0], k: 2, expectedIndices: [1, 3] },
+    // NaN tie group — a DIFFERENT comparator branch (aNaN && bNaN).
+    { name: "all-NaN, k splits the NaN group", data: [NAN, NAN, NAN, NAN], k: 2, expectedIndices: [0, 1] },
+    { name: "several NaNs ahead of everything, boundary inside the NaN group", data: [1, NAN, 2, NAN, 3, NAN], k: 2, expectedIndices: [1, 3] },
+    { name: "NaN group exactly filled, then the largest real value", data: [NAN, 7, 7, NAN, 7], k: 3, expectedIndices: [0, 3, 1] },
+    // +0 / -0 are EQUAL under plain >/<, so only the index decides — and the
+    // returned VALUES keep their own signs.
+    { name: "mixed +0/-0 tie group, boundary inside it", data: [-0, 0, -0, 0, -1], k: 2, expectedIndices: [0, 1] },
+    { name: "+0/-0 tie above a negative, whole group kept", data: [0, -0, -0, -5], k: 3, expectedIndices: [0, 1, 2] },
+    // All three tie levels in one vector.
+    { name: "NaN + numeric + signed-zero ties together", data: [3, NAN, 3, -0, 0, NAN, 3], k: 5, expectedIndices: [1, 5, 0, 2, 6] },
+    // Infinities alongside ties.
+    { name: "+Inf duplicated, boundary inside the +Inf group", data: [Infinity, 1, Infinity, Infinity], k: 2, expectedIndices: [0, 2] },
+    { name: "-Inf duplicated at the bottom, k = n", data: [-Infinity, 2, -Infinity], k: 3, expectedIndices: [1, 0, 2] },
+  ];
+
+  for (const tc of TIE_CASES) {
+    test(`resident topk constructed tie raster: ${tc.name} (k=${tc.k})`, () => {
+      const shape = [tc.data.length];
+      const a = WNDArray.fromArray(core, shape, tc.data);
+      try {
+        // (1) hand reference — catches a bug SHARED by both surfaces.
+        const got = a.topk(tc.k as never);
+        try {
+          assert.deepStrictEqual(Array.from(got.indices.toArray()), tc.expectedIndices, `${tc.name}: indices must match the hand reference`);
+          const gotValues = got.values.toArray();
+          for (let i = 0; i < tc.expectedIndices.length; i++) {
+            const src = tc.expectedIndices[i] ?? 0;
+            const expectedBits = bitsAtArr(Float64Array.from(tc.data), src);
+            assert.strictEqual(bitsAtArr(gotValues, i), expectedBits, `${tc.name}: values[${i}] must be data[${src}] byte-exactly (sign of zero and NaN payload included)`);
+          }
+        } finally {
+          got.values.dispose();
+          got.indices.dispose();
+        }
+        // (2) …and the full differential against topkRuntime, over the whole
+        // k raster, so the boundary is crossed from both sides too.
+        for (const k of kRaster(tc.data.length)) {
+          assertTopkMatches(a, k, `tie raster ${tc.name} k=${k}`);
+        }
+      } finally {
+        a.dispose();
+      }
+    });
+  }
+}
+
+// --- topk: NON-CANONICAL NaN PAYLOAD, byte-exact (the M1 risk point) ------
+// `topk` is the first op of the campaign that returns real DATA VALUES rather
+// than indices, so this is where the NaN-payload caveat actually bites: an
+// f64 load/store through the kernel must preserve a payload (only arithmetic
+// may canonicalize), and `values[i] = data[indices[i]]` must stay a plain
+// element copy. Its own named test, never a side effect of another.
+test("resident topk: an EXACT non-canonical NaN payload survives byte-identically through the kernel (M1 risk point, spec T3)", () => {
+  const data = new Float64Array(6);
+  data[0] = 1;
+  data[2] = 1e308;
+  data[3] = Number.POSITIVE_INFINITY;
+  data[5] = -7;
+  // Two DIFFERENT non-canonical payloads, so the test also proves they are
+  // not conflated with each other or with the canonical NaN.
+  new DataView(data.buffer).setBigUint64(1 * 8, 0x7ff8_0000_cafe_baben, true);
+  new DataView(data.buffer).setBigUint64(4 * 8, 0x7ff0_0000_dead_beefn, true);
+  assert.ok(Number.isNaN(data[1] ?? 0) && Number.isNaN(data[4] ?? 0), "precondition: both constructed elements must actually be NaN");
+  assert.notStrictEqual(bitsAtArr(data, 1), 0x7ff8_0000_0000_0000n, "precondition: payload 1 must be non-canonical");
+  assert.notStrictEqual(bitsAtArr(data, 4), 0x7ff8_0000_0000_0000n, "precondition: payload 2 must be non-canonical");
+
+  const shape: number[] = [6];
+  const w = WNDArray.fromArray(core, shape, data); // Float64Array source -> memcpy
+  try {
+    // The payloads really made it into WASM memory unchanged.
+    const d = w.describe();
+    assert.strictEqual(bitsAtBuf(core.memory.buffer, d.ptr, 1), 0x7ff8_0000_cafe_baben, "payload 1 must survive the copy INTO wasm memory");
+    assert.strictEqual(bitsAtBuf(core.memory.buffer, d.ptr, 4), 0x7ff0_0000_dead_beefn, "payload 2 must survive the copy INTO wasm memory");
+
+    const got = w.topk(6 as never);
+    try {
+      const values = got.values.toArray();
+      const indices = got.indices.toArray();
+      // NaNs sort first, among themselves by ascending index.
+      assert.deepStrictEqual(Array.from(indices), [1, 4, 3, 2, 0, 5], "NaNs first (by ascending index), then +Inf, 1e308, 1, -7");
+      assert.strictEqual(bitsAtArr(values, 0), 0x7ff8_0000_cafe_baben, "values[0] must carry payload 1 EXACTLY — no canonicalization, no substitution");
+      assert.strictEqual(bitsAtArr(values, 1), 0x7ff0_0000_dead_beefn, "values[1] must carry payload 2 EXACTLY");
+      // …and the TS reference agrees bit-for-bit, which is the M1 claim.
+      const ref = topkRuntime(shape, data, 6);
+      assertF64BitsIdentical(ref.values, values, "NaN-payload case: values vs topkRuntime");
+      assertF64BitsIdentical(ref.indices, indices, "NaN-payload case: indices vs topkRuntime");
+    } finally {
+      got.values.dispose();
+      got.indices.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+test("resident topk: a non-canonical NaN payload survives through a STRIDED view too (the kernel's own read path)", () => {
+  // Payload sits at a nonzero offset behind a stride, i.e. exactly the read
+  // `data[offset + i * strides[0]]` the kernel performs.
+  const padded = new Float64Array(9);
+  for (let i = 0; i < 9; i++) padded[i] = i;
+  new DataView(padded.buffer).setBigUint64(7 * 8, 0x7ff8_0000_0bad_f00dn, true);
+  const shape: number[] = [9];
+  const w = WNDArray.fromArray(core, shape, padded);
+  try {
+    const view = w.slice({ start: 1, step: 3 }) as AnyWNDArray; // logical [1, 4, 7]
+    try {
+      assert.deepStrictEqual([...(view.shape as readonly number[])], [3], "precondition: length-3 strided view");
+      const got = view.topk(3 as never);
+      try {
+        assert.deepStrictEqual(Array.from(got.indices.toArray()), [2, 1, 0], "the NaN (logical index 2) first, then 4, then 1");
+        assert.strictEqual(bitsAtArr(got.values.toArray(), 0), 0x7ff8_0000_0bad_f00dn, "the payload must survive the STRIDED read path byte-exactly");
+      } finally {
+        got.values.dispose();
+        got.indices.dispose();
+      }
+    } finally {
+      view.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+// --- topk: k = 0 / k = n / n = 0 edges ------------------------------------
+
+test("resident topk: k = 0 yields two valid, empty [0] handles — never a throw, even on an empty vector", () => {
+  const shape: number[] = [4];
+  const w = WNDArray.fromArray(core, shape, [3, 1, 4, 1]);
+  try {
+    const got = w.topk(0 as never);
+    try {
+      assertShapeEqual([0], got.values.shape as readonly number[], "k=0 values shape");
+      assertShapeEqual([0], got.indices.shape as readonly number[], "k=0 indices shape");
+      assert.strictEqual(got.values.toArray().length, 0);
+      assert.strictEqual(got.indices.toArray().length, 0);
+      assert.strictEqual(got.values.disposed, false, "a k=0 handle is a live handle, not a disposed one");
+    } finally {
+      got.values.dispose();
+      got.indices.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+
+  const emptyShape: number[] = [0];
+  const e = WNDArray.fromArray(core, emptyShape, []);
+  try {
+    const got = e.topk(0 as never);
+    try {
+      assertShapeEqual([0], got.values.shape as readonly number[], "empty receiver, k=0 values shape");
+      assertShapeEqual([0], got.indices.shape as readonly number[], "empty receiver, k=0 indices shape");
+    } finally {
+      got.values.dispose();
+      got.indices.dispose();
+    }
+  } finally {
+    e.dispose();
+  }
+});
+
+test("resident topk: k = n returns the WHOLE vector in sorted order, bit-identical to topkRuntime", () => {
+  const shape: number[] = [7];
+  const data = [2, -5, 9, 0, 9, -5, 3];
+  const w = WNDArray.fromArray(core, shape, data);
+  try {
+    assertTopkMatches(w, 7, "k = n");
+    const got = w.topk(7 as never);
+    try {
+      assert.deepStrictEqual(Array.from(got.values.toArray()), [9, 9, 3, 2, 0, -5, -5], "k=n values, descending");
+      assert.deepStrictEqual(Array.from(got.indices.toArray()), [2, 4, 6, 0, 3, 1, 5], "k=n indices, ties by ascending index");
+    } finally {
+      got.values.dispose();
+      got.indices.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+// --- topk: the two result handles are genuinely independent ---------------
+
+test("resident topk: values and indices are INDEPENDENT resident buffers — disposing one leaves the other fully usable", () => {
+  const shape: number[] = [5];
+  const w = WNDArray.fromArray(core, shape, [1, 5, 3, 2, 4]);
+  const got = w.topk(3 as never);
+  w.dispose(); // the receiver goes first: both results are fresh, not views
+  assert.strictEqual(got.values.disposed, false);
+  assert.strictEqual(got.indices.disposed, false);
+  got.values.dispose();
+  assert.strictEqual(got.indices.disposed, false, "disposing values must not dispose indices");
+  assert.deepStrictEqual(Array.from(got.indices.toArray()), [1, 4, 2], "indices stay readable after values is disposed");
+  got.indices.dispose();
+});
+
+// --- cross-surface MESSAGE parity, word-for-word (T4, M3) -----------------
+// Same technique as the argmax/item/stack stem tests above: a plain,
+// non-`const` shape variable widens past the compile-time guard so the call
+// actually reaches the runtime throw under test.
+
+test("cross-surface message parity: topk rank stem, word-for-word (T4, M3)", () => {
+  const shape: number[] = [2, 3];
+  const nd = NDArray.fromArray(shape, [1, 2, 3, 4, 5, 6]);
+  const wnd = WNDArray.fromArray(core, shape, [1, 2, 3, 4, 5, 6]);
+  try {
+    const ndMsg = throwMessage(() => nd.topk(2 as never));
+    const wndMsg = throwMessage(() => wnd.topk(2 as never));
+    assert.strictEqual(ndMsg, "topk: expected a 1-D vector (got shape [2,3])", "sanity: exact expected wording");
+    assert.strictEqual(wndMsg, ndMsg, "topk rank stem must be word-for-word identical across surfaces");
+  } finally {
+    wnd.dispose();
+  }
+});
+
+test("cross-surface message parity: topk invalid-k stems (negative AND dot-form), word-for-word (T4, M3)", () => {
+  const shape: number[] = [3];
+  const nd = NDArray.fromArray(shape, [1, 2, 3]);
+  const wnd = WNDArray.fromArray(core, shape, [1, 2, 3]);
+  try {
+    assert.strictEqual(throwMessage(() => nd.topk(-1 as never)), "topk: k must be a non-negative integer (got -1)", "sanity: exact expected wording");
+    assert.strictEqual(throwMessage(() => wnd.topk(-1 as never)), throwMessage(() => nd.topk(-1 as never)), "negative-k stem must match across surfaces");
+    assert.strictEqual(throwMessage(() => nd.topk(1.5 as never)), "topk: k must be a non-negative integer (got 1.5)", "sanity: exact expected wording");
+    assert.strictEqual(throwMessage(() => wnd.topk(1.5 as never)), throwMessage(() => nd.topk(1.5 as never)), "dot-form-k stem must match across surfaces");
+    assert.strictEqual(throwMessage(() => wnd.topk(Number.NaN as never)), throwMessage(() => nd.topk(Number.NaN as never)), "NaN-k stem must match across surfaces");
+    // Verify-round finding (S5): `k = Infinity` is only reachable dynamically
+    // (`TopkCheck` rejects it statically), but `Number.isInteger(Infinity)`
+    // is `false`, so it must hit the SAME invalid-k stem as NaN/dot-form/
+    // negative — never fall through to the bounds check.
+    assert.strictEqual(throwMessage(() => nd.topk(Infinity as never)), "topk: k must be a non-negative integer (got Infinity)", "sanity: exact expected wording");
+    assert.strictEqual(throwMessage(() => wnd.topk(Infinity as never)), throwMessage(() => nd.topk(Infinity as never)), "Infinity-k stem must match across surfaces");
+  } finally {
+    wnd.dispose();
+  }
+});
+
+test("cross-surface message parity: topk bounds stem, word-for-word (T4, M3)", () => {
+  const shape: number[] = [3];
+  const nd = NDArray.fromArray(shape, [1, 2, 3]);
+  const wnd = WNDArray.fromArray(core, shape, [1, 2, 3]);
+  try {
+    const ndMsg = throwMessage(() => nd.topk(4 as never));
+    const wndMsg = throwMessage(() => wnd.topk(4 as never));
+    assert.strictEqual(ndMsg, "topk: k=4 exceeds the vector length 3", "sanity: exact expected wording");
+    assert.strictEqual(wndMsg, ndMsg, "topk bounds stem must be word-for-word identical across surfaces");
+  } finally {
+    wnd.dispose();
+  }
+});
+
+test("resident topk: the VALIDATION ORDER is pinned — a call violating two conditions at once reports the SAME one on both surfaces (D4)", () => {
+  // rank AND k are both wrong: rank is checked first, so the rank stem wins.
+  const shape2d: number[] = [2, 3];
+  const nd2 = NDArray.fromArray(shape2d, [1, 2, 3, 4, 5, 6]);
+  const w2 = WNDArray.fromArray(core, shape2d, [1, 2, 3, 4, 5, 6]);
+  try {
+    const wndMsg = throwMessage(() => w2.topk(-1 as never));
+    assert.strictEqual(wndMsg, "topk: expected a 1-D vector (got shape [2,3])", "rank is checked BEFORE k's own validity");
+    assert.strictEqual(wndMsg, throwMessage(() => nd2.topk(-1 as never)), "…and both surfaces agree on which one wins");
+    const wndMsg2 = throwMessage(() => w2.topk(99 as never));
+    assert.strictEqual(wndMsg2, "topk: expected a 1-D vector (got shape [2,3])", "rank is checked BEFORE the bounds check too");
+    assert.strictEqual(wndMsg2, throwMessage(() => nd2.topk(99 as never)), "…and both surfaces agree");
+  } finally {
+    w2.dispose();
+  }
+
+  // k's own validity AND the bounds are both violated (-1 on a length-3
+  // vector is negative, and would also be "out of bounds" if compared
+  // numerically): the invalid-k stem wins, never the bounds stem.
+  const shape1d: number[] = [3];
+  const nd1 = NDArray.fromArray(shape1d, [1, 2, 3]);
+  const w1 = WNDArray.fromArray(core, shape1d, [1, 2, 3]);
+  try {
+    const msg = throwMessage(() => w1.topk(3.5 as never));
+    assert.strictEqual(msg, "topk: k must be a non-negative integer (got 3.5)", "k's own validity is checked BEFORE the length bound (3.5 > 3 would also be out of bounds)");
+    assert.strictEqual(msg, throwMessage(() => nd1.topk(3.5 as never)), "…and both surfaces agree");
+  } finally {
+    w1.dispose();
+  }
+});
+
+// --- oracle-FREE cross-surface pin ----------------------------------------
+// No `topkRuntime` anywhere: just "the two surfaces agree", shapes included.
+{
+  const rng = makeRng(0x544f504b5f584653n); // "TOPK_XFS"
+  for (let c = 0; c < 24; c++) {
+    const n = rng.nextInt(1, 10);
+    const data = genData(rng, [n]);
+    const k = rng.nextInt(0, n);
+    test(`topk cross-surface pin (oracle-free) case ${c}: n=${n} k=${k}`, () => {
+      const nd = NDArray.fromArray([n], data).topk(k as never);
+      const w = WNDArray.fromArray(core, [n], Array.from(data));
+      try {
+        const got = w.topk(k as never);
+        try {
+          assert.deepStrictEqual([...(got.values.shape as readonly number[])], [...nd.values.shape], "values shape must be identical across surfaces");
+          assert.deepStrictEqual([...(got.indices.shape as readonly number[])], [...nd.indices.shape], "indices shape must be identical across surfaces");
+          assertF64BitsIdentical(nd.values.data, got.values.toArray(), `cross-surface values case ${c}`);
+          assertF64BitsIdentical(nd.indices.data, got.indices.toArray(), `cross-surface indices case ${c}`);
+        } finally {
+          got.values.dispose();
+          got.indices.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}
+
+// --- memory.grow DURING the call (the "never cache memory.buffer" rule) ---
+// Same regression class `stack` and `argmax` already pin above: `topk`
+// allocates FOUR buffers per call (two scratch + two outputs), any of which
+// can trigger a grow, so a stale cached view would be caught here.
+test("topk: a call large enough to trigger memory.grow STRICTLY DURING the call (not during the preceding fromArray) stays correct", async () => {
+  const freshCore = await initCore();
+
+  // Prime: allocate-then-free a block bigger than the real input, so the
+  // input itself needs no growth (WASM memory never shrinks, so the freed
+  // block stays reusable capacity).
+  const primeElems = 205000;
+  const prime = WNDArray.fromArray(freshCore, [primeElems], new Float64Array(primeElems));
+  prime.dispose();
+
+  const n = 200000;
+  const inputData = new Float64Array(n);
+  for (let i = 0; i < n; i++) inputData[i] = ((i * 37) % 997) - 500;
+
+  const beforeFrom = freshCore.memory.buffer.byteLength;
+  const shape: number[] = [n];
+  const a = WNDArray.fromArray(freshCore, shape, inputData);
+  const afterFrom = freshCore.memory.buffer.byteLength;
+  assert.strictEqual(afterFrom, beforeFrom, `precondition: fromArray() must NOT need to grow memory here (before=${beforeFrom}, after=${afterFrom})`);
+
+  try {
+    const beforeTopk = freshCore.memory.buffer.byteLength;
+    const got = a.topk(50000 as never);
+    const afterTopk = freshCore.memory.buffer.byteLength;
+    try {
+      assert.notStrictEqual(afterTopk, beforeTopk, `precondition: this case must actually trigger memory.grow STRICTLY DURING the topk() call (before=${beforeTopk}, after=${afterTopk})`);
+      const ref = topkRuntime(shape, inputData, 50000);
+      assertF64BitsIdentical(ref.values, got.values.toArray(), "topk memory.grow case values — the result must reflect the POST-growth buffer");
+      assertF64BitsIdentical(ref.indices, got.indices.toArray(), "topk memory.grow case indices — the result must reflect the POST-growth buffer");
+    } finally {
+      got.values.dispose();
+      got.indices.dispose();
+    }
+  } finally {
+    a.dispose();
+  }
+});
+
+// --- T4 / Arbeitsregel 2: real-tsc diagnostic pin for `WNDArray.topk` -----
+// `topk` has a SINGLE signature (no overload set), so Arbeitsregel 2's
+// "declare the guard carrier last" does not apply — but the house rule to pin
+// the diagnostic's CONTENT and POSITION does. The `@ts-expect-error` pins in
+// `spike/tests/ndarray.test-d.ts` prove the calls are rejected; this proves
+// WHERE (the `k` argument's exact column, including for a RECEIVER-rank
+// problem, the DotCheck precedent) and WITH WHAT WORDING. Runs the real
+// compiler on a throwaway fixture OUTSIDE the repo, so the deliberately
+// broken code never joins any type corpus.
+test("diagnostic quality (T4, WASM parity S5): topk's three error classes are all rejected AT the k argument, with the pinned stems", () => {
+  const dir = mkdtempSync(join(tmpdir(), "numtype-topk-diag-pin-"));
+  try {
+    const residentPath = fileURLToPath(new URL("../src/wasm/resident.ts", import.meta.url).href);
+    const ambientPath = fileURLToPath(new URL("../src/ambient.d.ts", import.meta.url).href);
+    const repoRoot = fileURLToPath(new URL("../..", import.meta.url).href);
+    // Three bad calls, one per error class. Columns are DERIVED from the
+    // fixture text below, never hand-copied from an observed tsc run.
+    const badBounds = `v.topk(6);    // deliberate: k=6 exceeds the vector length 5`;
+    const badNegative = `v.topk(-1);  // deliberate: k must be non-negative`;
+    const badRank = `m.topk(2);    // deliberate: rank-2 receiver, reported AT the k argument`;
+    const BOUNDS_LINE = 4;
+    const NEGATIVE_LINE = 5;
+    const RANK_LINE = 6;
+    const BOUNDS_COL = badBounds.indexOf("6") + 1;
+    const NEGATIVE_COL = badNegative.indexOf("-1") + 1;
+    const RANK_COL = badRank.indexOf("2") + 1;
+    writeFileSync(
+      join(dir, "probe.ts"),
+      `import type { WNDArray } from ${JSON.stringify(residentPath)};\n` +
+        `declare const v: WNDArray<[5]>;\n` +
+        `declare const m: WNDArray<[2, 3]>;\n` +
+        `${badBounds}\n` +
+        `${badNegative}\n` +
+        `${badRank}\n` +
+        `v.topk(3);   // must stay clean\n` +
+        `v.topk(0);   // k=0 boundary, must stay clean\n` +
+        `v.topk(5);   // k=D boundary, must stay clean\n`,
+    );
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "bundler",
+          noEmit: true,
+          allowImportingTsExtensions: true,
+          skipLibCheck: true,
+          noUncheckedIndexedAccess: true,
+          exactOptionalPropertyTypes: true,
+        },
+        include: ["probe.ts", ambientPath],
+      }),
+    );
+    const res = spawnSync("pnpm", ["exec", "tsc", "--noEmit", "-p", dir], { cwd: repoRoot, encoding: "utf8" });
+    const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
+    assert.notStrictEqual(res.status, 0, `fixture must fail to compile:\n${out}`);
+    const probeErrors = out.split("\n").filter((l) => l.includes("probe.ts(") && l.includes("error TS"));
+    assert.strictEqual(probeErrors.length, 3, `expected exactly THREE fixture errors (the three well-formed topk calls must resolve cleanly):\n${out}`);
+    assert.ok(out.includes(`topk: k=6 exceeds the vector length 5`), `the bounds stem must survive to the diagnostic:\n${out}`);
+    assert.ok(out.includes(`topk: k must be a non-negative integer (got -1)`), `the invalid-k stem must survive to the diagnostic:\n${out}`);
+    assert.ok(out.includes(`topk: expected a 1-D vector (got shape [2,3])`), `the rank stem must survive to the diagnostic:\n${out}`);
+    // Every rejection sits AT the `k` ARGUMENT — including the rank one,
+    // whose actual problem is with the RECEIVER (DotCheck precedent).
+    for (const [line, col, what] of [
+      [BOUNDS_LINE, BOUNDS_COL, "bounds"],
+      [NEGATIVE_LINE, NEGATIVE_COL, "negative k"],
+      [RANK_LINE, RANK_COL, "receiver rank"],
+    ] as const) {
+      assert.ok(
+        probeErrors.some((l) => l.includes(`probe.ts(${line},${col})`)),
+        `the ${what} error must be reported at line ${line}, column ${col} (the k argument itself):\n${probeErrors.join("\n")}`,
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

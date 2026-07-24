@@ -914,3 +914,116 @@ unverändert, bench:editor uniform +436 — diesmal perfekt uniform, weil kein W
 `argmax`-Aufrufstelle hat. test:resident 5866+2, test:threaded 127, cargo 204+1.
 
 Details: docs/wasm-parity-argmax-spec.md v3, docs/wasm-parity-argmax-ergebnisse.md.
+
+---
+
+## WASM-Parität S5: `topk` — und der Abschluss der Kampagne (2026-07-25)
+
+Die fünfte und letzte Scheibe. Sie hat den Kernel `nt_topk_strided` gebracht, aber ihr
+eigentlicher Ertrag war eine Korrektur an dem, was das Projekt über sie zu wissen glaubte.
+
+**Zwei Sätze in FOLLOWUPS und CLAUDE.md waren falsch.** Sie standen dort seit der
+topk-Selektions-Scheibe: ein künftiger `nt_topk`-Kernel „sollte diesen Heap-Algorithmus
+spiegeln", und S5 sei „die härteste M1 der Kampagne". Beim Lesen von `topkRuntime` vor dem
+Spec-Schreiben zeigte sich, dass die Funktion das Gegenargument längst im eigenen
+Doc-Kommentar trug: `topkCompareValues` plus der Indextiebreak `|| (idxA - idxB)` ist eine
+strikte Totalordnung auf den paarweise verschiedenen Indizes `0..n-1`. Es gibt daher genau
+eine korrekte top-`k`-Menge in genau einer Reihenfolge — Heap und Vollsortierung müssen
+übereinstimmen. Damit hängt Bit-Identität nicht am Algorithmus, sondern nur an der exakten
+Transliteration des Ordnungs-Prädikats und daran, dass `values[i] = data[indices[i]]` ein
+reiner Element-Kopiervorgang bleibt. Bei `topk` findet überhaupt keine
+Gleitkomma-Arithmetik statt — kategorial anders als bei `sum`, wo die Akkumulationsreihenfolge
+die Bits ändert und der Kernel die Schleifenordnung spiegeln muss.
+
+Weil dieses Argument die gesamte M1-Begründung trug, bekam Baustein 0 den ausdrücklichen
+Auftrag, es zu brechen. Es hielt: der Verifier leitete die Ordnung unabhängig neu her
+(Trichotomie für jedes Paar, Transitivität aus „totale Präordnung + strikter Tiebreak",
+IEEE-754-Übereinstimmung der Vergleichsoperatoren zwischen JS und Rust/WASM). Baustein B
+bestätigte es später empirisch und fügte ein nützliches Korollar hinzu: an jeder
+Heap-Vergleichsstelle sind die verglichenen Indizes strukturell verschieden, also kann der
+Komparator dort nie exakt 0 liefern — womit `<`-vs-`<=`-Mutationen an genau diesen Stellen
+beweisbar äquivalente Mutanten sind und keine Testlücke anzeigen. Das erspart künftigen
+Verifiern die Jagd auf einen nicht existierenden Bug. Die praktische Konsequenz stand als
+bindende Festlegung in der Spec: die Tests dürfen sich nicht auf Heap-Interna festlegen,
+sonst pinnen sie eine Implementierung statt eines Vertrags.
+
+**Der echte M1-Risikopunkt lag woanders, und die Vorgängerscheibe hatte ihn präzise
+vorhergesagt.** Baustein C hatte in S4 festgestellt, dass der NaN-Payload-Vorbehalt für
+`argmax` strukturell nicht greifen kann (die Ausgabe ist immer ein Index) und erst bei
+`topk` beißt, wo echte Datenwerte durch den Kernel wandern. Der Beweis lief in drei Stufen:
+Baustein 0 schloss vorab eine Lücke im Repo-Präzedenzfall (die bestehende Fixture deckt nur
+2D-Transpose ab; er schickte zusätzlich eine Rang-1, gestridete, Offset-Sicht mit
+nicht-kanonischem NaN durch `nt_materialize` — genau das Lesemuster des künftigen Kernels)
+und grenzte das ehrlich als Analogie-Evidenz ab; die Implementierung ersetzte sie durch
+direkte Evidenz an `nt_topk_strided` (zwei verschiedene Bitmuster, roh per `DataView`
+gesetzt, im WASM-Speicher verifiziert, contiguous und gestridet, stable und über alle vier
+threaded-Pools, plus ein cargo-Test).
+
+**Baustein 0 fand außerdem einen MAJOR an der Spec und entlarvte eine meiner
+Vorsichtsmaßnahmen als überstreng.** Der Append-Punkt: v1 nannte die letzte reale Funktion
+als „letztes Item" von `abi.rs` — tatsächlich ist es ein Testmodul, und die Datei hat ein
+durchgängiges, nie gebrochenes Muster (Realcode nach dem jeweils aktuellen Dateiende, dann
+das eigene Testmodul). Wörtlich gelesen hätte v1 erstmals Realcode vor ein bestehendes
+Testmodul gespleißt; für den Freeze-Hash folgenlos, aber musterbrechend. Und die
+Budget-Disziplin: ich hatte aus der S3-Lektion (+6.705 pro literaler Aufrufstelle) abgeleitet,
+Differentialtests müssten `k` dynamisch verwenden. Der Verifier maß es statt es zu glauben —
+der Aufschlag liegt im niedrigen dreistelligen Bereich. Die Restriktion wurde auf eine
+Vorsicht mit Messpflicht zurückgestuft.
+
+**Die Zahl selbst blieb am Ende ungeklärt, und das steht so im Ergebnis-Doc.** Sie wurde
+dreimal gemessen und ergab dreimal etwas anderes: ≈122 (Proxy), ≈149 (echter Code), ≈95
+(eigene Sonde des Spec-Verifiers). Alle in derselben Größenordnung, alle meilenweit von
+S3s +6.705, aber die Streuung ist selbst der Befund — der Instantiation-Zähler ist sichtbar
+sensitiv gegenüber dem Boilerplate der Messsonde. Dokumentiert ist deshalb die Spanne mit
+dem benannten Mechanismus statt einer der drei Zahlen als Wahrheit.
+
+**Das Gate hielt mit der engsten Marge der Kampagne: +7.551 von ≤+8.000, 449 übrig.** Der
+Implementierer hat korrekt nicht ins Gate optimiert, sondern bisektiert — und dabei den
+verwertbarsten Nebenbefund der Scheibe gefunden: der Kostentreiber ist nicht `topk` (+130),
+sondern der Vier-View-Klassen-Block, den Arbeitsregel 12 verlangt, mit +3.926 = 52 % der
+ganzen Scheibe. Getrieben nicht von der Op, sondern von den literal-argumentigen
+`.slice()`-Aufrufstellen darin, die je die volle `SliceSpecsGuard`/`SliceShape`-Maschinerie
+zahlen. Für Laufzeittests kauft ein literales Slice-Spec nichts. Die Zahl ist dreifach
+unabhängig durch Ausbau des Blocks bestätigt (Implementierer, Baustein A, Baustein B — alle
+exakt 233.453 @ 140 ohne ihn) und wird als Hausregel-Kandidat weitergetragen.
+
+**Baustein B fand einen Testkommentar, der mehr behauptete als sein Test beweist** — zum
+dritten Mal in dieser Kampagne dieselbe Klasse. Der cargo-Test zum zweiten ABI-Regionscheck
+rief mit beiden Pointern auf 0 und demselben `out_len` auf, sodass der erste Check immer
+zuerst griff; entfernt man den zweiten Check, bleibt der Test grün. B konstruierte einen
+diskriminierenden Fall und bewies es per Mutant. Nach S3 (Leck-Test drei Größenordnungen zu
+grobkörnig) und S4 (eine „unabhängige Bestätigung", die 500 × 8 Byte gegen 64-KiB-Seiten
+hielt) ist das der dritte Fund — Bewusstsein allein verhindert die Klasse offenbar nicht, es
+braucht die mechanische Probe. Geschlossen mit dem diskriminierenden Test; der überclaimende
+Kommentar wurde auf das zurückgezogen, was er wirklich prüft.
+
+B hat außerdem die Tie-Blindheits-Lektion aus S4 präzisiert und damit korrigiert: blind sind
+nicht „randomisierte" Tests, sondern Ziehungen aus einer **stetigen** Verteilung. Diskrete
+Spezialwert-Generatoren treffen Gleichstände gelegentlich (gemessen: 0 von 140
+stetig-zufälligen Fällen fingen den Tie-Mutanten, aber 6 von 66 Spezialwert-Fällen, und alle
+11 von 11 konstruierten).
+
+**Baustein C korrigierte eine Fragestellung des Orchestrators.** Ich hatte gefragt, ob die
+Scheibe den NaN-Payload-v6-Kandidaten schließt. C: nein — sie liefert den fehlenden
+Gegenfall, der die Scope-Grenze des Vorbehalts erst sichtbar macht, denn der Kandidatentext
+spricht nur von Arithmetik-Ergebnissen, und `topk` liegt auf der anderen Seite. Ohne diese
+Grenze läse ein künftiger v6-Leser „NaN nur als Wert-Klasse" für alle Kernel. C fand
+außerdem eine Inkonsistenz in der Projekt-Historie: der Wortlaut von M3 deckt
+Methoden-Rückgabetypen nicht, aber S3 hat ein strukturell identisches Problem als echte
+M3-Verletzung gewertet, für +5.498 gefixt und das Gate dafür eigens angehoben. Entweder war
+S3 zu weit gefasst oder M3 muss den Fall decken — Owner-Entscheidung, Wortlaut liegt vor.
+Das v6-Bündel steht damit bei zehn Kandidaten.
+
+Arbeitsregel 13 wurde diesmal dreifach unabhängig erfüllt: Implementierer, A und B fuhren je
+eine echte `tsc --lsp --stdio`-Messung mit Kontrollpunkt. Alle drei: der Rückgabetyp hovert
+als aufgelöstes Objekt-Literal, kein Alias-Leck.
+
+Endstand: Freeze-Hash `146afdf629694318a5dcca87c5bb980ae6280e875ae5d9b5ddef045a00c0c324`,
+check:diag 237.379 @ 140, stress 116.053 @ 82, browser 2.142 @ 75 unverändert, bench:editor
+uniform +119, test:resident 6122+2, test:threaded 139, cargo 222+1.
+
+**Damit ist die Kampagne S0–S5 abgeschlossen.** `WNDArray` und der threaded-Pfad tragen alle
+fünf Dogfooding-Ops; die README trägt keine „TypeScript-runtime only"-Ausnahme mehr, empirisch
+gegen `spike/src/index.ts` verifiziert.
+
+Details: docs/wasm-parity-topk-spec.md v2, docs/wasm-parity-topk-ergebnisse.md.

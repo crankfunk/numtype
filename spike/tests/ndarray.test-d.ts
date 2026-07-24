@@ -1439,3 +1439,100 @@ rw.argmax(5);
 
 // @ts-expect-error - axis 3 out of range even with keepdims: error stays at the axis argument
 rw.argmax(3, true);
+
+// =============================================================================
+// WASM parity S5 (docs/wasm-parity-topk-spec.md, D2/D7): `WNDArray.topk` type
+// pins — the last op of the S0-S5 campaign. `WNDArray` declares its own
+// signature independently of `NDArray`, so a wiring typo in resident.ts would
+// NOT be caught by the W1 `NDArray.topk` section above; what is pinned here is
+// the WIRING (same `TopkCheck`/`TopkShape` machinery, second call site) plus
+// the two-handle return shape.
+//
+// Budget note (W5-D6: `Equal<...>` MESSAGE pins cost ≈1,700 instantiations
+// each): the four `topk` message wordings are pinned exactly once, by
+// `TOPK_RANK_MSG`/`TOPK_NEGATIVE_K_MSG`/`TOPK_DOTFORM_K_MSG`/
+// `TOPK_BOUNDS_K_MSG` above, over the very type expression BOTH surfaces
+// declare (`Guard<TopkCheck<S, K>, K>`). Duplicating them here would buy no
+// new information, so the WNDArray side pins the error's POSITION
+// (`@ts-expect-error` at the k argument) instead; the message CONTENT is
+// covered end-to-end by the cross-surface runtime stem tests and the real-tsc
+// diagnostic probe in resident.test.ts, which also pins the COLUMN.
+// =============================================================================
+
+declare const wTopkV: WNDArray<[5]>;
+
+// --- topk(k): exact literal tuples on BOTH handles, incl. the k=0/k=D
+// valid boundaries -------------------------------------------------------
+
+const wTopk3 = wTopkV.topk(3);
+type W_TOPK3_VALUES = Expect<Equal<(typeof wTopk3.values)["shape"], readonly [3]>>;
+type W_TOPK3_INDICES = Expect<Equal<(typeof wTopk3.indices)["shape"], readonly [3]>>;
+
+const wTopk0 = wTopkV.topk(0); // k=0: VALID boundary
+type W_TOPK0_VALUES = Expect<Equal<(typeof wTopk0.values)["shape"], readonly [0]>>;
+type W_TOPK0_INDICES = Expect<Equal<(typeof wTopk0.indices)["shape"], readonly [0]>>;
+
+const wTopkD = wTopkV.topk(5); // k=D: VALID boundary
+type W_TOPKD_VALUES = Expect<Equal<(typeof wTopkD.values)["shape"], readonly [5]>>;
+type W_TOPKD_INDICES = Expect<Equal<(typeof wTopkD.indices)["shape"], readonly [5]>>;
+
+// Both handles are real `WNDArray`s (not `NDArray`s, and not the erased
+// `AnyWNDArray`) — the wiring claim this whole section exists for.
+type W_TOPK_HANDLE_KIND = Expect<Equal<typeof wTopk3.values, WNDArray<[3]>>>;
+type W_TOPK_HANDLE_KIND_IDX = Expect<Equal<typeof wTopk3.indices, WNDArray<[3]>>>;
+
+// --- topk(k): compile errors AT the k argument (DotCheck precedent) -------
+
+// @ts-expect-error - k=-1 is negative: error stays at the k argument
+wTopkV.topk(-1);
+
+// @ts-expect-error - k=1.5 is non-integer (dot-form): error stays at the k argument
+wTopkV.topk(1.5);
+
+// @ts-expect-error - k=6 exceeds the vector length 5: error stays at the k argument
+wTopkV.topk(6);
+
+// @ts-expect-error - k = Number.MAX_SAFE_INTEGER vastly exceeds length 5: still a PROVABLE compile error
+wTopkV.topk(9007199254740991);
+
+declare const wTopkRank2: WNDArray<[2, 3]>;
+// @ts-expect-error - rank-2 receiver: topk requires rank-1 (the RECEIVER's problem surfaces at the k argument, DotCheck precedent)
+wTopkRank2.topk(2);
+
+declare const wTopkRank0: WNDArray<[]>;
+// @ts-expect-error - rank-0 receiver: topk requires rank-1; error stays at the k argument
+wTopkRank0.topk(1);
+
+// --- topk(k): degradations (never a confidently-wrong literal claim) ------
+
+declare const wDynK: number;
+const wTopkDyn = wTopkV.topk(wDynK);
+type W_TOPK_DYN_K_VALUES = Expect<Equal<(typeof wTopkDyn.values)["shape"], readonly [number]>>;
+type W_TOPK_DYN_K_INDICES = Expect<Equal<(typeof wTopkDyn.indices)["shape"], readonly [number]>>;
+
+declare const wUnionK: 2 | 3; // uniformly-valid union: still no-claim (the union filter runs unconditionally)
+const wTopkUnion = wTopkV.topk(wUnionK);
+type W_TOPK_UNION_K = Expect<Equal<(typeof wTopkUnion.values)["shape"], readonly [number]>>;
+
+declare const wUnionKMixed: 2 | 10; // 10 alone would be a hard error; the union degrades, never confidently accepts OR rejects
+const wTopkUnionMixed = wTopkV.topk(wUnionKMixed);
+type W_TOPK_UNION_K_MIXED = Expect<Equal<(typeof wTopkUnionMixed.indices)["shape"], readonly [number]>>;
+
+// Exponent-form literal: beyond the digit machinery's plain-digit subset, so
+// no-claim rather than a lie in either direction.
+const wTopkExp = wTopkV.topk(1e21);
+type W_TOPK_EXP_K = Expect<Equal<(typeof wTopkExp.values)["shape"], readonly [number]>>;
+
+// --- topk(k): RankUnknowable receiver -> uniform no-claim (policy pin) ----
+// Deliberately COMPILES with NO static claim, mirroring the NDArray-side
+// TOPK_MIXEDRANK pins above: on a mixed-rank-union receiver even a
+// provably-invalid k degrades to no-claim (D-V1.3 house policy); the runtime
+// backstop stays authoritative.
+declare const wTopkMixedRankRecv: WNDArray<readonly [2, 3] | readonly [5]>;
+const wTopkMixedRankNegK = wTopkMixedRankRecv.topk(-1);
+type W_TOPK_MIXEDRANK_NEG_K_VALUES = Expect<Equal<(typeof wTopkMixedRankNegK.values)["shape"], readonly [number]>>;
+type W_TOPK_MIXEDRANK_NEG_K_INDICES = Expect<Equal<(typeof wTopkMixedRankNegK.indices)["shape"], readonly [number]>>;
+
+declare const wTopkDynRankRecv: WNDArray<number[]>;
+const wTopkDynRank = wTopkDynRankRecv.topk(2);
+type W_TOPK_DYN_RANK = Expect<Equal<(typeof wTopkDynRank.values)["shape"], readonly [2]>>;
