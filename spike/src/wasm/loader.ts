@@ -341,3 +341,40 @@ export interface CoreExports {
     outLen: number,
   ): number;
 }
+
+// WASM parity S4 (docs/wasm-parity-argmax-spec.md, D3): `argmax` reductions
+// (`nt_argmax_all_strided` / `nt_argmax_axis_strided`). Declared as a FIFTH
+// `export interface CoreExports { ... }` block, appended strictly after every
+// pre-existing line in this file (freeze discipline, same technique as the
+// Kern-07/S0/S1 blocks above it — TypeScript merges same-named interface
+// declarations in the same module automatically, so this augments
+// `CoreExports` without touching a single pre-existing line).
+// `ThreadedCoreExports extends CoreExports` (threaded.ts) inherits these
+// declarations automatically.
+export interface CoreExports {
+  // argmax_all: one strided-operand quadruple + outDataPtr, output implicitly
+  // 1 f64 (the index) — identical seven-parameter convention to
+  // `nt_sum_all_strided`.
+  nt_argmax_all_strided(
+    shapePtr: number,
+    rank: number,
+    stridesPtr: number,
+    offset: number,
+    dataPtr: number,
+    dataLen: number,
+    outDataPtr: number,
+  ): number;
+  // argmax_axis: identical nine-parameter convention to
+  // `nt_sum_axis_strided`.
+  nt_argmax_axis_strided(
+    shapePtr: number,
+    rank: number,
+    stridesPtr: number,
+    offset: number,
+    dataPtr: number,
+    dataLen: number,
+    axis: number,
+    outDataPtr: number,
+    outLen: number,
+  ): number;
+}

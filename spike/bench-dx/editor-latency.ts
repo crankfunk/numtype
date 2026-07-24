@@ -862,15 +862,25 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // carry. Owner-approved trade-off (the slice's own check:diag gate was
 // raised from +8,000 to +13,000 for it, measured, not estimated). Measured
 // twice, byte-identical. See docs/wasm-parity-item-stack-ergebnisse.md.
+// WASM parity S4 (docs/wasm-parity-argmax-spec.md, D8), 2026-07-24: pins moved
+// UNIFORMLY by +436 -- the familiar single-class WNDArray class-surface ripple
+// (S0/S1/S2's mechanism, not S3's three-class one): `argmax` adds three
+// generic overload signatures plus one private niladic helper to WNDArray, and
+// every workload instantiates WNDArray at least once. No workload has its own
+// `argmax` CALL site, which is exactly why the delta is perfectly uniform this
+// time (unlike S3, where w8's own `stack` call site broke uniformity). The
+// same +436 shows up in `check:diag:stress` (115,498 -> 115,934), which
+// compiles `spike/src` directly -- an independent corroboration that this is
+// class-surface growth, not workload-specific. Measured twice, byte-identical.
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 37018,
-  w2: 38851,
-  w3: 69993,
-  w4: 37173,
-  w5: 42472,
-  w6: 43666,
-  w7: 36222,
-  w8: 43911,
+  w1: 37454,
+  w2: 39287,
+  w3: 70429,
+  w4: 37609,
+  w5: 42908,
+  w6: 44102,
+  w7: 36658,
+  w8: 44347,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

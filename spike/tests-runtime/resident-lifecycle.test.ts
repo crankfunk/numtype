@@ -624,6 +624,14 @@ function makeStackFailureMockCore(failAtMaterializeCall: number): {
     nt_scalar_sub_strided: notImplemented("nt_scalar_sub_strided"),
     nt_scalar_mul_strided: notImplemented("nt_scalar_mul_strided"),
     nt_scalar_div_strided: notImplemented("nt_scalar_div_strided"),
+    // WASM parity S4 (docs/wasm-parity-argmax-spec.md): this mock's stack
+    // failure path never calls argmax. Arbeitsregel 10 applies HERE TOO —
+    // this file carries the repo's SECOND exhaustively structurally typed
+    // `CoreExports` literal (the rule's "the only one" wording was wrong; the
+    // S4 Baustein-0 probe proved both files throw TS2739 on a missing member,
+    // while `check:diag` still prints a plausible `Instantiations:` line).
+    nt_argmax_all_strided: notImplemented("nt_argmax_all_strided"),
+    nt_argmax_axis_strided: notImplemented("nt_argmax_axis_strided"),
   };
 
   return { core, allocs, frees };
@@ -667,4 +675,311 @@ test("stack: a row that fails mid-loop (kernel status != 0) frees BOTH the outpu
   }
   assert.deepStrictEqual(Array.from(rows[0]!.toArray()), [1, 1, 1, 1]);
   for (const r of rows) r.dispose();
+});
+
+// =============================================================================
+// WASM parity S4 (docs/wasm-parity-argmax-spec.md, D5/D7): `WNDArray.argmax`
+// lifecycle. Two distinct claims, one per reduction form:
+//
+//  (a) The AXIS form hands its output buffer to `WNDArray.fresh` (`sum`'s
+//      pattern), so exactly one resident buffer per call becomes the caller's
+//      to dispose; the two scratch buffers must be gone by the time the call
+//      returns.
+//  (b) The truly niladic `argmax()` form returns a plain `number` and must
+//      leave NOTHING resident: its one-element output buffer is read and
+//      freed inside the same call (`dot`/`norm`'s pattern).
+//
+// Both are asserted with an EXACT ledger rather than an allocator-growth
+// plateau: the scratch here is 8-12 bytes per call, orders of magnitude below
+// WASM's 64 KiB page granularity, so a growth check would pass vacuously even
+// on a permanent leak (that is not a hypothesis — the S3 verify round proved
+// it with a real scratch-leak mutant that a 500-iteration growth check waved
+// through). `getResidentFreeCount()` alone is not enough either: it only fires
+// in `releaseBuffer()` when a refcounted `ResidentBuffer` hits 0, never on the
+// raw `nt_free` path `allocBytes`/`freeBuf` use for ephemeral scratch. So the
+// ledger below counts at the ALLOCATOR, through a thin counting wrapper around
+// the REAL core (not a hand-written mock: argmax must actually run its kernel
+// for the ledger to describe the real code path).
+// =============================================================================
+
+/** A `CoreExports` that delegates everything to a real core but records every
+ * `nt_alloc`/`nt_free`. Same spread-then-override technique `threaded.ts`
+ * itself uses over `instance.exports`. */
+function makeCountingCore(real: CoreExports): { core: CoreExports; allocs: MockAlloc[]; frees: MockAlloc[] } {
+  const allocs: MockAlloc[] = [];
+  const frees: MockAlloc[] = [];
+  const core: CoreExports = {
+    ...real,
+    memory: real.memory,
+    nt_alloc(bytes: number): number {
+      const ptr = real.nt_alloc(bytes);
+      allocs.push({ ptr, bytes });
+      return ptr;
+    },
+    nt_free(ptr: number, bytes: number): void {
+      frees.push({ ptr, bytes });
+      real.nt_free(ptr, bytes);
+    },
+  };
+  return { core, allocs, frees };
+}
+
+/** Every non-sentinel allocation must have been freed exactly once
+ * (`nt_alloc(0)` returns the ptr-0 sentinel and is never a real block). */
+function assertLedgerBalanced(allocs: readonly MockAlloc[], frees: readonly MockAlloc[], ctx: string): void {
+  const ledger = (entries: readonly MockAlloc[]): string[] =>
+    entries
+      .filter((e) => e.bytes !== 0)
+      .map((e) => `${e.ptr}:${e.bytes}`)
+      .sort();
+  assert.deepStrictEqual(ledger(frees), ledger(allocs), `${ctx}: every allocation must be freed exactly once (scratch included): allocs=${JSON.stringify(allocs)}, frees=${JSON.stringify(frees)}`);
+}
+
+test("argmax(axis) SUCCESS path: exact alloc/free ledger over the counting wrapper (both scratch buffers included)", async () => {
+  const { core: countingCore, allocs, frees } = makeCountingCore(await initCore());
+  const shape: number[] = [3, 4];
+  const a = WNDArray.fromArray(countingCore, shape, Array.from({ length: 12 }, (_, i) => (i * 5) % 7));
+  const got = a.argmax(1);
+  assert.strictEqual(got.toArray().length, 3, "precondition: the kernel really ran and produced a [3] result");
+  got.dispose();
+  a.dispose();
+  assertLedgerBalanced(allocs, frees, "argmax(axis)");
+  // Non-vacuity of the ledger itself: the call really did allocate (receiver +
+  // two scratch buffers + output), so a balanced ledger is a claim about
+  // something, not about an empty list.
+  assert.ok(allocs.length >= 4, `expected at least 4 allocations (receiver + 2 scratch + output), got ${allocs.length}: ${JSON.stringify(allocs)}`);
+});
+
+test("argmax() niladic SUCCESS path: exact alloc/free ledger — the one-element output buffer is freed in the SAME call", async () => {
+  const { core: countingCore, allocs, frees } = makeCountingCore(await initCore());
+  const shape: number[] = [3, 4];
+  const a = WNDArray.fromArray(countingCore, shape, Array.from({ length: 12 }, (_, i) => (i * 5) % 7));
+  const allocsBefore = allocs.length;
+  const freesBefore = frees.length;
+  const idx = a.argmax();
+  assert.strictEqual(typeof idx, "number", "precondition: the niladic form returns a plain number");
+  // Everything this call allocated is already freed — BEFORE any dispose().
+  const during = allocs.slice(allocsBefore);
+  const freedDuring = frees.slice(freesBefore);
+  assert.ok(during.length >= 3, `expected at least 3 allocations for a niladic argmax() (2 scratch + 1 output), got ${during.length}`);
+  assertLedgerBalanced(during, freedDuring, "argmax() niladic (within the single call)");
+  a.dispose();
+  assertLedgerBalanced(allocs, frees, "argmax() niladic (whole test)");
+});
+
+test("argmax() niladic leak non-vacuity: N calls on ONE receiver leave ZERO net resident allocation", async () => {
+  const core = await initCore();
+  const a = WNDArray.fromArray(core, [4, 5], Array.from({ length: 20 }, (_, i) => (i * 3) % 11));
+  const N = 500;
+
+  // (1) The niladic form never produces a resident handle at all, so the
+  // refcount-free counter must not move by a single tick.
+  const before = getResidentFreeCount();
+  for (let i = 0; i < N; i++) a.argmax();
+  const after = getResidentFreeCount();
+  assert.strictEqual(after, before, `argmax() must never create/release a resident buffer: before=${before}, after=${after}`);
+
+  // (2) Supplementary plausibility check, NOT independent proof — Verify-
+  // Runde finding V1 (docs/wasm-parity-argmax-spec.md D7): an earlier
+  // version of this comment claimed the 500 iterations below were
+  // "independent corroboration" because a leaked 8-byte output would
+  // "eventually cross a page boundary". That is arithmetically impossible
+  // at this N (500 * 8 = 4,000 bytes vs. a 65,536-byte WASM page — reaching
+  // one page of leaked output alone would take 8,192 leaking calls, > 16x
+  // this block's count) and was itself an instance of the exact S3 lesson
+  // this file's own `stack` leak-test comments already apply elsewhere: an
+  // allocator-growth check that passes vacuously against the leak size it
+  // claims to rule out. Assertion (1) above — the EXACT
+  // `getResidentFreeCount()` delta — is the real proof for THIS test; this
+  // block is retained only as a coarse, orders-of-magnitude sanity check
+  // (e.g. it would catch a whole leaked scratch buffer, not an 8-byte one).
+  for (let i = 0; i < 20; i++) a.argmax();
+  const byteLengthAfterWarmup = core.memory.buffer.byteLength;
+  for (let i = 0; i < 500; i++) a.argmax();
+  assert.strictEqual(core.memory.buffer.byteLength, byteLengthAfterWarmup, `500 more argmax() calls must not grow WASM memory: ${byteLengthAfterWarmup} -> ${core.memory.buffer.byteLength}`);
+
+  a.dispose();
+});
+
+test("argmax(axis) leak non-vacuity: N calls on ONE receiver (dispose each result) free exactly 1 resident buffer per call", async () => {
+  const core = await initCore();
+  const a = WNDArray.fromArray(core, [4, 5], Array.from({ length: 20 }, (_, i) => (i * 3) % 11));
+  const N = 500;
+
+  const before = getResidentFreeCount();
+  for (let i = 0; i < N; i++) {
+    const got = a.argmax(1);
+    got.dispose();
+  }
+  const after = getResidentFreeCount();
+  a.dispose(); // outside the measured window
+
+  assert.strictEqual(
+    after - before,
+    N,
+    `expected exactly 1 resident-buffer free per argmax(axis) call (the result; scratch uses the raw nt_free path): before=${before}, after=${after}, delta=${after - before}, expected=${N}`,
+  );
+});
+
+test("use-after-dispose: argmax throws naming the op, in every form", async () => {
+  const core = await initCore();
+  const a = WNDArray.fromArray(core, [2, 3], [1, 2, 3, 4, 5, 6]);
+  a.dispose();
+  assert.throws(() => a.argmax(), /WNDArray\.argmax:.*disposed/);
+  assert.throws(() => a.argmax(0), /WNDArray\.argmax:.*disposed/);
+  assert.throws(() => a.argmax(0, true), /WNDArray\.argmax:.*disposed/);
+});
+
+test("argmax: the error paths leak nothing — an out-of-range axis and an empty reduction throw BEFORE any allocation", async () => {
+  const { core: countingCore, allocs, frees } = makeCountingCore(await initCore());
+  const shape: number[] = [2, 3];
+  const a = WNDArray.fromArray(countingCore, shape, [1, 2, 3, 4, 5, 6]);
+  const allocsBefore = allocs.length;
+  assert.throws(() => a.argmax(9), /out of range/);
+  assert.strictEqual(allocs.length, allocsBefore, "an out-of-range axis must throw before allocating anything");
+
+  const emptyShape: number[] = [0, 3];
+  const e = WNDArray.fromArray(countingCore, emptyShape, []);
+  const allocsBeforeEmpty = allocs.length;
+  assert.throws(() => e.argmax(), /empty array/);
+  assert.throws(() => e.argmax(0), /empty array/);
+  assert.strictEqual(allocs.length, allocsBeforeEmpty, "an empty reduction must throw before allocating anything");
+
+  e.dispose();
+  a.dispose();
+  assertLedgerBalanced(allocs, frees, "argmax error paths");
+});
+
+test("argmax: a resident result is a FRESH, independent buffer — stays valid after the receiver is disposed", async () => {
+  const core = await initCore();
+  const shape: number[] = [2, 3];
+  const a = WNDArray.fromArray(core, shape, [1, 9, 3, 4, 5, 2]);
+  const got = a.argmax(1);
+  a.dispose();
+  try {
+    assert.strictEqual(got.disposed, false);
+    assert.deepStrictEqual(Array.from(got.toArray()), [1, 1]);
+  } finally {
+    got.dispose();
+  }
+});
+
+// =============================================================================
+// Verify-Runde V2 (docs/wasm-parity-argmax-spec.md, D7 "Nachträgliche
+// Testpflichten"): the kernel-status-failure path of BOTH `argmax` branches,
+// each tested DIRECTLY — not one mutated and the other inferred by symmetry.
+// Baustein B's adversarial pass forced `status !== 0` with its own counting
+// core wrapper and measured 0/334 argmax tests, 0/7 lifecycle tests, 0/1
+// threaded test failing when the `freeBuf(this.core, outDataBuf)` call
+// preceding each throw (resident.ts:1775 for the full-reduction helper
+// `argmaxAllBuf`, :1905 for the axis branch) was removed — a real 16-byte
+// leak the committed suite could not see, exactly the guarantee this
+// module's own doc comments claim. Same "spread a real core, force one
+// kernel's status" technique as `makeCountingCore` above (so `nt_alloc`/
+// `nt_free` allocate and free for real — the ledger below is a claim about
+// the REAL allocator, not a hand-typed mock's bookkeeping) — which is also
+// why it needs no `notImplemented` stubs under Arbeitsregel 10 (it spreads
+// a real core rather than exhaustively hand-typing one).
+// =============================================================================
+
+/** A `CoreExports` that delegates everything to a real core (so scratch and
+ * output allocation is genuine) but forces one of the two `argmax` kernels
+ * to report a caller-chosen non-zero status without touching its output
+ * buffer — reproducing exactly the "kernel rejects an already-allocated
+ * output buffer" path each branch's own `status !== 0` check exists for. */
+function makeArgmaxKernelFailureMockCore(
+  real: CoreExports,
+  forceStatus: { all?: number; axis?: number },
+): { core: CoreExports; allocs: MockAlloc[]; frees: MockAlloc[] } {
+  const allocs: MockAlloc[] = [];
+  const frees: MockAlloc[] = [];
+  const core: CoreExports = {
+    ...real,
+    memory: real.memory,
+    nt_alloc(bytes: number): number {
+      const ptr = real.nt_alloc(bytes);
+      allocs.push({ ptr, bytes });
+      return ptr;
+    },
+    nt_free(ptr: number, bytes: number): void {
+      frees.push({ ptr, bytes });
+      real.nt_free(ptr, bytes);
+    },
+    nt_argmax_all_strided(
+      shapePtr: number,
+      rank: number,
+      stridesPtr: number,
+      offset: number,
+      dataPtr: number,
+      dataLen: number,
+      outDataPtr: number,
+    ): number {
+      if (forceStatus.all !== undefined) return forceStatus.all;
+      return real.nt_argmax_all_strided(shapePtr, rank, stridesPtr, offset, dataPtr, dataLen, outDataPtr);
+    },
+    nt_argmax_axis_strided(
+      shapePtr: number,
+      rank: number,
+      stridesPtr: number,
+      offset: number,
+      dataPtr: number,
+      dataLen: number,
+      axis: number,
+      outDataPtr: number,
+      outLen: number,
+    ): number {
+      if (forceStatus.axis !== undefined) return forceStatus.axis;
+      return real.nt_argmax_axis_strided(shapePtr, rank, stridesPtr, offset, dataPtr, dataLen, axis, outDataPtr, outLen);
+    },
+  };
+  return { core, allocs, frees };
+}
+
+test("argmax() niladic: a kernel status != 0 from nt_argmax_all_strided frees the output buffer AND both scratch buffers (Verify-Runde V2 — the FULL-REDUCTION branch inside the private argmaxAllBuf helper, tested DIRECTLY)", async () => {
+  const { core: failingCore, allocs, frees } = makeArgmaxKernelFailureMockCore(await initCore(), { all: 9 });
+  const shape: number[] = [3, 4];
+  const a = WNDArray.fromArray(failingCore, shape, Array.from({ length: 12 }, (_, i) => i));
+  const allocsBefore = allocs.length;
+  const freesBefore = frees.length;
+
+  assert.throws(() => a.argmax(), /wasm resident nt_argmax_all_strided: status 9 for shape \[3,4\]/);
+
+  const during = allocs.slice(allocsBefore);
+  const freedDuring = frees.slice(freesBefore);
+  assert.strictEqual(
+    during.length,
+    3,
+    `expected exactly 3 allocations (2 scratch + 1 output) for the failing call, got ${during.length}: ${JSON.stringify(during)}`,
+  );
+  assertLedgerBalanced(during, freedDuring, "argmax() niladic kernel-status failure (nt_argmax_all_strided)");
+
+  // Same contract as every other op's failure path: the receiver stays live and usable.
+  assert.strictEqual(a.disposed, false);
+  assert.deepStrictEqual(Array.from(a.toArray()), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  a.dispose();
+  assertLedgerBalanced(allocs, frees, "argmax() niladic kernel-status failure (whole test)");
+});
+
+test("argmax(axis): a kernel status != 0 from nt_argmax_axis_strided frees the output buffer AND both scratch buffers (Verify-Runde V2 — the AXIS branch, tested DIRECTLY, not inferred from the full-reduction branch by symmetry)", async () => {
+  const { core: failingCore, allocs, frees } = makeArgmaxKernelFailureMockCore(await initCore(), { axis: 9 });
+  const shape: number[] = [3, 4];
+  const a = WNDArray.fromArray(failingCore, shape, Array.from({ length: 12 }, (_, i) => i));
+  const allocsBefore = allocs.length;
+  const freesBefore = frees.length;
+
+  assert.throws(() => a.argmax(1), /wasm resident nt_argmax_axis_strided: status 9 for shape \[3,4\] axis 1/);
+
+  const during = allocs.slice(allocsBefore);
+  const freedDuring = frees.slice(freesBefore);
+  assert.strictEqual(
+    during.length,
+    3,
+    `expected exactly 3 allocations (2 scratch + 1 output) for the failing call, got ${during.length}: ${JSON.stringify(during)}`,
+  );
+  assertLedgerBalanced(during, freedDuring, "argmax(axis) kernel-status failure (nt_argmax_axis_strided)");
+
+  assert.strictEqual(a.disposed, false);
+  assert.deepStrictEqual(Array.from(a.toArray()), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  a.dispose();
+  assertLedgerBalanced(allocs, frees, "argmax(axis) kernel-status failure (whole test)");
 });

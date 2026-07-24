@@ -182,9 +182,9 @@ a.slice(9);                      // ❌ compile error: index 9 out of bounds for
 The five ops added in 0.2.0 all came from one place: the friction log of the RAG example below,
 built against 0.1.1. They shipped as TypeScript-runtime surface only (no WASM kernel), which is why
 they are shown here rather than in the bit-for-bit block above. Since then the WASM-resident twin
-has caught up for all but two of them — `sqrt`, the scalar overloads, `mean`, `stack` and `item` now
-work on WASM-resident arrays too, each proven bit-identical to the TypeScript reference by
-differential tests; only `argmax`/`topk` remain TypeScript-runtime only (see
+has caught up for all but one of them — `sqrt`, the scalar overloads, `mean`, `stack`, `item` and
+`argmax` now work on WASM-resident arrays too, each proven bit-identical to the TypeScript
+reference by differential tests; only `topk` remains TypeScript-runtime only (see
 [What's implemented](#whats-implemented)):
 
 ```ts
@@ -315,15 +315,18 @@ conversion, `add`/`sub`/`mul`/`div`, `matmul`, `sum` with `keepdims`, `transpose
 `reshape`/`flatten`, `dot`/`norm`/`cosineSimilarity`) — a *minimum viable* NumPy, not a clone.
 
 **`argmax`/`topk`** (ranking primitives — index of the maximum element, and the top-`k` values +
-indices of a 1-D vector) are also available on `NDArray`, but — unlike every op listed above —
-**TypeScript-runtime surface only, no WASM kernel yet**: a deliberate, disclosed surface
-asymmetry, not an oversight.
+indices of a 1-D vector) are also available on `NDArray`. `argmax` runs on WASM-resident arrays
+too, through its own from-scratch Rust kernels (`nt_argmax_{all,axis}_strided`) — proven
+bit-identical to the TypeScript reference by differential tests, on the threaded backend as well,
+including the IEEE special-value edges its total order is defined on (NaN counts as maximal, ties
+go to the first index). `topk` remains **TypeScript-runtime surface only, no WASM kernel yet**: a
+deliberate, disclosed surface asymmetry, not an oversight.
 
 **Scalar overloads for `add`/`sub`/`mul`/`div`, a new `mean` reduction, and a new `sqrt` op** are
 also available: `x.div(2)` reads as "divide by 2" (shape-preserving, no `[1]`-wrap needed, even at
 rank 0), `mean` composes `sum` with one division per output element, and `sqrt` is elementwise
 `Math.sqrt` (shape-preserving at every rank — IEEE 754 requires correct rounding for square root,
-same as `+`/`-`/`*`/`/`, so this stays exact, unlike a true transcendental op). Unlike `argmax`/`topk`
+same as `+`/`-`/`*`/`/`, so this stays exact, unlike a true transcendental op). Unlike `topk`
 above, these three are **no longer TypeScript-only**: the WASM-resident twin `WNDArray` now carries
 all of them — `sqrt` and the four scalar ops through their own from-scratch Rust kernels, `mean` by
 composing the existing `sum` and scalar-division kernels rather than adding one — each proven

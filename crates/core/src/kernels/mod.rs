@@ -15,3 +15,6 @@ pub mod sqrt;
 // WASM parity S1 (docs/wasm-parity-scalar-spec.md): scalar elementwise ops.
 // Appended after all pre-existing module declarations (freeze discipline).
 pub mod scalar;
+// WASM parity S4 (docs/wasm-parity-argmax-spec.md): argmax reductions.
+// Appended after all pre-existing module declarations (freeze discipline).
+pub mod argmax;

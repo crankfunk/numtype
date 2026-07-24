@@ -1593,3 +1593,141 @@ pub extern "C" fn nt_scalar_div_strided(
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// WASM parity S4 (docs/wasm-parity-argmax-spec.md): `argmax` on the resident/
+// threaded backends. Appended strictly after every pre-existing item in this
+// file (freeze discipline: `nt_scalar_div_strided` above is the last
+// pre-existing item; nothing above this comment is touched). NOT cfg-gated
+// (same reasoning as the Kern-07/S0/S1 blocks above it) — this op belongs in
+// BOTH the plain artifact (`pnpm build:wasm`) and the threads artifact, so
+// the plain artifact's hash legitimately changes again this phase.
+//
+// Both entry points mirror the `nt_sum_*_strided` twins signature-for-
+// signature (7 and 9 parameters respectively) — see
+// `kernels::argmax`'s module doc for the pinned total order and for why the
+// returned index is the view's LOGICAL row-major index, never a memory
+// offset.
+// ---------------------------------------------------------------------------
+
+/// WASM parity S4: index of the maximum element of a strided view, in the
+/// view's logical row-major flattening. Same seven-parameter convention as
+/// `nt_sum_all_strided`: output is implicitly one f64 (the index, exactly
+/// representable), so there is no `out_len`. Fallible: a size-0 view has no
+/// argmax (`ShapeIncompatible`) — `WNDArray.argmax` prevalidates that case in
+/// TS so the thrown message stem matches `argmaxRuntime`'s word for word;
+/// this status is defense in depth.
+#[no_mangle]
+pub extern "C" fn nt_argmax_all_strided(
+    shape_ptr: u32,
+    rank: u32,
+    strides_ptr: u32,
+    offset: u32,
+    data_ptr: u32,
+    data_len: u32,
+    out_data_ptr: u32,
+) -> u32 {
+    // Defense-in-depth prevalidation (see module doc). Output is implicit
+    // len=1 (a single f64), matching the unconditional `read_slice_mut(...,
+    // 1)` below.
+    if let Err(e) = validate_rank(rank) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(shape_ptr, rank, 4),
+        validate_region(strides_ptr, rank, 4),
+        validate_region(data_ptr, data_len, 8),
+        validate_region(out_data_ptr, 1, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
+    let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
+    let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
+
+    match kernels::argmax::argmax_all_strided(shape, strides, offset, data) {
+        Ok(index) => {
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, 1) };
+            dst[0] = index;
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// WASM parity S4: index of the maximum along `axis` (may be negative) of a
+/// strided view. Same nine-parameter convention as `nt_sum_axis_strided`;
+/// each output element is the index ALONG the axis. A zero-length axis has no
+/// argmax (`ShapeIncompatible`, prevalidated in TS); a size-0 OUTPUT (e.g.
+/// `[0,3]` reduced along axis 1) is valid and writes nothing.
+#[no_mangle]
+pub extern "C" fn nt_argmax_axis_strided(
+    shape_ptr: u32,
+    rank: u32,
+    strides_ptr: u32,
+    offset: u32,
+    data_ptr: u32,
+    data_len: u32,
+    axis: i32,
+    out_data_ptr: u32,
+    out_len: u32,
+) -> u32 {
+    // Defense-in-depth prevalidation (see module doc).
+    if let Err(e) = validate_rank(rank) {
+        return status_of(e);
+    }
+    if let Some(e) = first_error(&[
+        validate_region(shape_ptr, rank, 4),
+        validate_region(strides_ptr, rank, 4),
+        validate_region(data_ptr, data_len, 8),
+        validate_region(out_data_ptr, out_len, 8),
+    ]) {
+        return status_of(e);
+    }
+
+    let shape: &[u32] = unsafe { read_slice(shape_ptr, rank) };
+    let strides: &[u32] = unsafe { read_slice(strides_ptr, rank) };
+    let data: &[f64] = unsafe { read_slice(data_ptr, data_len) };
+
+    match kernels::argmax::argmax_axis_strided(shape, strides, offset, data, axis) {
+        Ok((_out_shape, out_data)) => {
+            if out_data.len() as u32 != out_len {
+                return KernelError::SizeOverflow.status();
+            }
+            let dst: &mut [f64] = unsafe { read_slice_mut(out_data_ptr, out_len) };
+            dst.copy_from_slice(&out_data);
+            STATUS_OK
+        }
+        Err(e) => status_of(e),
+    }
+}
+
+/// New test module for this phase (WASM parity S4) — deliberately SEPARATE
+/// from every pre-existing test module in this file (freeze discipline: never
+/// insert into an existing one). Same garbage-rank/garbage-len prevalidation
+/// pattern as `mod kern07_abi_tests` above.
+#[cfg(test)]
+mod s4_argmax_abi_tests {
+    use super::*;
+
+    #[test]
+    fn argmax_all_strided_garbage_rank_is_status_2() {
+        assert_eq!(nt_argmax_all_strided(0, u32::MAX, 0, 0, 0, 0, 0), KernelError::RankTooLarge.status());
+    }
+
+    #[test]
+    fn argmax_all_strided_garbage_len_is_status_3() {
+        assert_eq!(nt_argmax_all_strided(0, 0, 0, 0, 0, u32::MAX, 0), KernelError::SizeOverflow.status());
+    }
+
+    #[test]
+    fn argmax_axis_strided_garbage_rank_is_status_2() {
+        assert_eq!(nt_argmax_axis_strided(0, u32::MAX, 0, 0, 0, 0, 0, 0, 0), KernelError::RankTooLarge.status());
+    }
+
+    #[test]
+    fn argmax_axis_strided_garbage_len_is_status_3() {
+        assert_eq!(nt_argmax_axis_strided(0, 0, 0, 0, 0, u32::MAX, 0, 0, 0), KernelError::SizeOverflow.status());
+    }
+}

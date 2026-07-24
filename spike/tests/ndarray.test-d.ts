@@ -1359,3 +1359,83 @@ type WSTACK_UNKNOWABLE_RANK = Expect<Equal<(typeof wstackedUnknowableRank)["shap
 declare const wstackArrUnion: readonly (WNDArray<[3]> | WNDArray<[4]>)[];
 const wstackedArrUnion = WNDArray.stack(wcore, wstackArrUnion);
 type WSTACK_ARRAY_UNION = Expect<Equal<(typeof wstackedArrUnion)["shape"], readonly [number, number]>>;
+
+// =============================================================================
+// WASM parity S4 (docs/wasm-parity-argmax-spec.md, D2/D7): `WNDArray.argmax`
+// type pins. `WNDArray` declares its overloads independently of `NDArray`, so
+// a wiring typo in resident.ts would NOT be caught by the W1 `NDArray.argmax`
+// section above — the same reason `WNDArray.sum`'s keepdims pins exist
+// separately (T7f/T7g). The underlying `ReduceAxis`/`Guard`/`OkShape`
+// degradation RULES are the identical imports, already proven there; what is
+// pinned here is the WIRING plus D2's niladic `number` deviation.
+//
+// Budget note (W5-D6: `Equal<...>` MESSAGE pins cost ≈1,700 instantiations
+// each): the out-of-range message wording is pinned exactly once, by
+// `ARGMAX_AXIS_OOB_MSG` above, over the very type expression BOTH surfaces
+// declare (`Guard<ReduceAxis<S, Axis>, Axis>`). Duplicating it here would buy
+// no new information at ≈1,700 instantiations, so the WNDArray side pins the
+// error's POSITION (`@ts-expect-error` at the axis argument) instead, and the
+// message CONTENT is covered end-to-end by the cross-surface runtime stem
+// tests plus the real-tsc diagnostic probe in special-values.test.ts.
+// =============================================================================
+
+// --- argmax(): niladic -> plain `number` (D2), never WNDArray<[]> ---------
+// `rw` is the existing `WNDArray<[2, 3, 4]>` receiver declared for the
+// `sum` keepdims pins above — reused deliberately rather than re-declared.
+const wArgmaxFlat = rw.argmax();
+type W_ARGMAX_FLAT = Expect<Equal<typeof wArgmaxFlat, number>>;
+
+// --- argmax(axis[, keepdims]): exact literal tuples -----------------------
+
+const wArgmaxAxis1 = rw.argmax(1);
+type W_ARGMAX_AXIS1 = Expect<Equal<(typeof wArgmaxAxis1)["shape"], readonly [2, 4]>>;
+
+const wArgmaxAxis1Keep = rw.argmax(1, true);
+type W_ARGMAX_AXIS1_KEEP = Expect<Equal<(typeof wArgmaxAxis1Keep)["shape"], readonly [2, 1, 4]>>;
+
+const wArgmaxAxis1NoKeep = rw.argmax(1, false); // explicit `false` == default
+type W_ARGMAX_AXIS1_NOKEEP = Expect<Equal<(typeof wArgmaxAxis1NoKeep)["shape"], readonly [2, 4]>>;
+
+const wArgmaxNeg = rw.argmax(-1);
+type W_ARGMAX_NEG = Expect<Equal<(typeof wArgmaxNeg)["shape"], readonly [2, 3]>>;
+
+// `argmax(undefined)` is the 1-ARG overload with an axis VALUE of `undefined`
+// (full reduction) — a DIFFERENT overload from the true 0-arg `argmax()`
+// above, exactly as on the NDArray surface (D2).
+const wArgmaxUndefAxis = rw.argmax(undefined);
+type W_ARGMAX_UNDEF_AXIS = Expect<Equal<(typeof wArgmaxUndefAxis)["shape"], readonly []>>;
+
+const wArgmaxUndefKeep = rw.argmax(undefined, true);
+type W_ARGMAX_UNDEF_KEEP = Expect<Equal<(typeof wArgmaxUndefKeep)["shape"], readonly [1, 1, 1]>>;
+
+// --- degradations: every edge ends in an honest no-claim, never a wrong
+// literal and never `never` (same ReduceAxis machinery as `WNDArray.sum`) --
+
+declare const wArgmaxDynAxis: number;
+const wArgmaxDyn = rw.argmax(wArgmaxDynAxis);
+type W_ARGMAX_DYN_AXIS = Expect<Equal<(typeof wArgmaxDyn)["shape"], readonly number[]>>;
+
+const wArgmaxUnionAxis = rw.argmax(0 as 0 | 2);
+type W_ARGMAX_UNION_AXIS = Expect<Equal<(typeof wArgmaxUnionAxis)["shape"], readonly number[]>>;
+
+declare const wArgmaxMixedRankRecv: WNDArray<[2, 3] | [2, 3, 4]>;
+const wArgmaxMixedRank = wArgmaxMixedRankRecv.argmax(1);
+type W_ARGMAX_MIXED_RANK = Expect<Equal<(typeof wArgmaxMixedRank)["shape"], readonly number[]>>;
+
+declare const wArgmaxDynRankRecv: WNDArray<number[]>;
+const wArgmaxDynRank = wArgmaxDynRankRecv.argmax(0);
+type W_ARGMAX_DYN_RANK = Expect<Equal<(typeof wArgmaxDynRank)["shape"], readonly number[]>>;
+
+declare const wArgmaxDynKeep: true | undefined;
+const wArgmaxKeepUnion = rw.argmax(1, wArgmaxDynKeep);
+type W_ARGMAX_KEEP_UNION = Expect<Equal<(typeof wArgmaxKeepUnion)["shape"], readonly [2, 4] | readonly [2, 1, 4]>>;
+
+// --- negative: an out-of-range LITERAL axis is rejected AT the axis
+// argument, in BOTH the 1-arg and the 2-arg form (Arbeitsregel 2: the
+// guard-carrying overload is declared LAST, so it carries the diagnostic) --
+
+// @ts-expect-error - axis 5 is out of range for rank-3 shape [2,3,4]: error stays at the axis argument
+rw.argmax(5);
+
+// @ts-expect-error - axis 3 out of range even with keepdims: error stays at the axis argument
+rw.argmax(3, true);

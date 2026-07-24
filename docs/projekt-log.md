@@ -807,3 +807,110 @@ bench:editor in dieser Scheibe zweimal neu gesetzt, test:resident 5497+2, test:t
 und Freeze-Hash unverändert.
 
 Details: docs/wasm-parity-item-stack-spec.md v3, docs/wasm-parity-item-stack-ergebnisse.md.
+
+---
+
+## WASM-Parität S4: `argmax` (2026-07-24)
+
+Die vierte Scheibe der Kampagne — und die erste seit S1, die einen **echten neuen Kernel**
+hinzufügt. S2 (`mean`) und S3 (`item`/`stack`) waren kernel-los; die Pflicht-Vorabfrage aus
+Arbeitsregel 11 lautet daher jedes Mal aufs Neue, ob die Op eine Komposition bereits verifizierter
+Kernel ist. Für `argmax` ist sie es nicht: der Bestand enthält keine Vergleichs-, Maximum- oder
+Index-produzierende Operation. Die Spec schrieb die kernel-lose TS-Alternative (das S3-`item`-Muster,
+eine Schleife über `core.memory.buffer`) ausdrücklich als angreifbare Alternative mit auf — Baustein 0
+hat sie geprüft und nicht gekippt: `item` war ein O(1)-Skalar-Read, `argmax` ist eine O(N)-Reduktion
+wie `dot` und `norm_sq`, die beide einen Kernel haben. Damit bindet M1 neu und der Freeze-Hash
+bewegt sich zum ersten Mal seit S1.
+
+**Baustein 0 fand zwei Dinge vor der ersten Codezeile, und das teurere war eine falsche HAUSREGEL.**
+Arbeitsregel 10 verlangt für jeden neuen `CoreExports`-Member einen `notImplemented`-Stub im
+hand-getippten Mock und benannte `backend-oom.test.ts` als „das EINZIGE strukturell getippte
+`CoreExports`-Literal im Repo". Das war falsch — `resident-lifecycle.test.ts:601` ist ein zweites,
+mit eigenem lokalem Helfer. Baustein 0 hat es nicht erschlossen, sondern reproduziert: zwei
+Dummy-Member ins Interface, und beide Dateien werfen TS2739 bei Exit 1, während `check:diag`
+weiterhin eine plausible `Instantiations`-Zeile druckt. Das ist die Arbeitsregel-6-Falle in
+Reinform — ein Gate, das die Gesundheit seines eigenen Messlaufs nicht mitprüft. Der zweite Befund
+war eine unentschiedene Frage, die das Repo seit zwei Scheiben mit sich herumtrug: für View- und
+keepdims-Tests existierten **zwei unvereinbare Präzedenzfälle** (S2/`mean` benutzt `keepDimsShape`
+als Shape-Orakel; `NDArray.argmax`s eigener Test lehnt genau das als zirkulär ab). Beide haben
+recht, für verschiedene Fragen — aufgelöst als dreiteilige bindende Regel: Daten gegen
+`argmaxRuntime` mit vorab gelesenem `view.toArray()`, keepdims-Shape über strukturelle Invarianten,
+plus ein orakelfreier Cross-Surface-Shape-Pin.
+
+Baustein 0 korrigierte außerdem die Gate-Begründung. Die Spec v1 hatte ≤+6.000 vorregistriert und
+sich dabei auf S2s *erstgemessene* +1.500 gestützt — S2s **realisierte** Gesamtkosten waren aber
++5.689, weil der View-Coverage-Nachtrag allein +4.189 kostete. S4 fordert diese View-Fälle von
+Anfang an und hat zusätzlich eine Rust/ABI-Schicht. Das Gate wurde daraufhin **vor jeder Messung**
+auf ≤+8.000 angehoben, mit offengelegter Herleitung und unveränderter STOPP-Klausel — ausdrücklich
+etwas anderes als S3, wo ein gerissenes Gate nachträglich angehoben werden musste. Realisiert
+wurden +3.138; die alte Registrierung hätte also auch gehalten, was die v1-Begründung nicht
+weniger falsch macht.
+
+**Der tragende Semantik-Punkt der Op** ist, dass `nt_argmax_all_strided` den Index in die *logische*
+row-major-Abflachung der View liefern muss, nie den berechneten Speicher-Offset — auf transponierten
+oder geslicten Views fallen beide auseinander. Das ist dieselbe Falle, die `sum_all_strided`s
+Doc-Kommentar seit Kern 03 für die Akkumulations*reihenfolge* beschreibt, hier in der Index-Domäne.
+Baustein A hat sie zur wertvollsten Einzelmessung der Runde gemacht: statt die Totalordnung
+anzugreifen (die der Implementierer schon mutiert hatte), setzte A `max_idx` auf den Speicher-Offset.
+Es fielen 3 cargo-Tests — darunter exakt die dafür geschriebene Nicht-Vakuitäts-Assertion — und
+**40 von 1607 JS-Tests, ausschließlich die vier View-Klassen**. Kein einziger contiguous-Fall fiel,
+was mathematisch erwartbar ist (bei natürlichen Strides und Offset 0 gilt `off == flat`). Damit ist
+Arbeitsregel 12 nicht mehr nur begründet, sondern gemessen.
+
+**Verify-B fand eine reale Lücke, die alle Gates grün gelassen hatte.** `WNDArray.argmax` gibt bei
+`status != 0` den frisch allozierten Ausgabepuffer frei, bevor es wirft — eine Garantie, die der
+Doc-Kommentar des Moduls ausdrücklich behauptet. B entfernte den `freeBuf`-Aufruf und maß: 0 von
+334 Op-Tests, 0 von 7 Lifecycle-Tests, 0 von 1 threaded-Test fielen. Mit einem eigenen zählenden
+Core-Wrapper, der Status 1 erzwingt, wies B ein reales 16-Byte-Leck nach. Kein committeter Test
+erzwang je einen Kernel-Fehlschlag für diese Op, obwohl S3 für `stack` genau so einen Test hat.
+Geschlossen wurde die Lücke mit zwei Tests, je einem pro Einstiegspunkt, und dem entscheidenden
+Beweis-Detail: **jeder Mutant fällte genau einen Test, der jeweils andere Zweig blieb grün** — ein
+schlampiger Test hätte beide oder keinen gefällt.
+
+Der zweite B-Befund war unangenehmer, weil er eine bereits gelernte Lektion war. Der Leck-Test
+behauptete in seinem Kommentar, 500 Aufrufe ohne Speicherwachstum seien eine „unabhängige
+Bestätigung", weil ein geleaktes 8-Byte-Ergebnis irgendwann eine Seitengrenze reißen würde. Die
+Rechnung: 500 × 8 = 4.000 Byte gegen 64-KiB-Seiten, es bräuchte 8.192 Iterationen. Die Assertion
+war für genau das Leck, das sie adressierte, arithmetisch unfähig — dieselbe Fehlerklasse, die S3
+bereits gelernt und in der Wissensbasis abgelegt hatte, reproduziert ausgerechnet in dem Test, der
+sie verhindern sollte. Der KB-Capture bestätigte das unabhängig: zwei der drei Lektionen dieser
+Scheibe waren exakte Wiederholungen bestehender Notizen, mit identischen Zahlen, und wurden
+revidiert statt dupliziert.
+
+**Zur Tie-Blindheit verschärfte B die Diagnose des Implementierers.** Dessen Pflicht-Mutant (`>` →
+`>=` in der Totalordnung) war von 0 der 240 randomisierten Differentialfälle gefangen worden, mit
+der Erklärung „Zufalls-Floats erzeugen praktisch nie Gleichstände". B präzisierte: die Daten stammen
+aus einer *stetigen* Verteilung, ein Gleichstand ist dort ein **Maß-Null-Ereignis** — die 0/240 sind
+eine mathematische Gewissheit der Testkonstruktion, kein Pech. Und das Spezialwert-Raster fängt es
+nur *zufällig* (5/60), weil sein Generator mit 35 % pro Element aus einem kleinen diskreten Pool
+zieht; ob eine Kollision entsteht, hängt am Seed statt an einer Konstruktion. Verlässlich fangen es
+nur die absichtlich konstruierten Rust-Unit-Tests. Die Lücke sitzt damit genau in der
+Cross-Language-Schicht, in der M1s Vertrag lebt.
+
+**Arbeitsregel 13 wurde diesmal vierfach erfüllt statt einmal.** S3 hatte gelehrt, dass eine
+Hover-Norm gemessen und nicht gelesen werden muss — dort übersahen drei Leser des Quelltexts eine
+M3-Verletzung. In dieser Scheibe fuhren der Implementierer, Baustein A, Baustein B und Baustein C je
+unabhängig eine echte `tsc --lsp --stdio`-Messung mit `sum` als Kontrollpunkt. Alle vier: saubere
+aufgelöste Tupel, keine Alias-Leckage. Die S3-Fehlerklasse ist hier by construction abwesend, weil
+D2 den Rückgabetyp ausschreibt statt einen Top-Level-Alias in Rückgabeposition einzuführen.
+
+Baustein C fand keine Vertragsverstöße und keine neue Auslegungsfrage, präzisierte aber einen
+bestehenden v6-Kandidaten in Richtung S5: der NaN-Payload-Vorbehalt an M1 kann für `argmax`
+strukturell nicht greifen, weil die Ausgabe stets ein ganzzahliger Index ist und nie ein kopierter
+Datenwert. Bei `topk` wird er relevant, weil dort `values[i] === data[indices[i]]` byte-exakt gilt.
+
+Ehrlich offengelegt bleibt eine benennbare Einschränkung der M1-Behauptung: eine nicht-ganzzahlige
+Achse (nur über `as unknown as number` erreichbar) divergiert zwischen den Flächen, weil JS den
+Float bis in `Array.prototype.slice` mitschleppt, während die WASM-ABI `ToInt32` vor Rusts
+Negativ-Achsen-Arithmetik anwendet. B hat live reproduziert, dass derselbe Mechanismus für
+`WNDArray.sum` seit S1 gilt und die Wurzel als FOLLOWUPS-Item seit W1 offen ist — die Scheibe erbt
+die Lücke korrekt, statt sie zu erzeugen, aber die Behauptung ist an dieser Eingabe nicht wörtlich
+unqualifiziert wahr.
+
+Endstand: Freeze-Hash `8255821b…` → `eba6ba7ac85d15a814fd027392a81c7450d885d2048d7efd6694b7e8370988bb`
+(dreiteilig bewiesen, von A und B je unabhängig in beide Richtungen nachgestellt), check:diag
+229.828 @ 140 (Δ+3.138, null Order-Noise), stress 115.934 @ 82 (Δ+436), browser 2.142 @ 75
+unverändert, bench:editor uniform +436 — diesmal perfekt uniform, weil kein Workload eine
+`argmax`-Aufrufstelle hat. test:resident 5866+2, test:threaded 127, cargo 204+1.
+
+Details: docs/wasm-parity-argmax-spec.md v3, docs/wasm-parity-argmax-ergebnisse.md.

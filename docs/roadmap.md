@@ -337,5 +337,25 @@ Backend-Facaden (`WNDArray` ist nicht aus index.ts exportiert). check:diag 226.6
 (Δ+12.986, Gate in Spec v3 Owner-abgenommen von +8.000 auf +13.000 angehoben), stress 115.498,
 browser Δ0, bench:editor 8 Pins ZWEIMAL neu gesetzt; test:resident 5497+2, test:threaded 114.
 Kernbefund der Verify-Runde: eine **M3-Verletzung an der Konsumenten-API**, die drei Leser
-übersahen und nur eine echte LSP-Messung fand (neue Arbeitsregel 13). **S4–S5** folgen dem
-etablierten Workflow (Spec → Baustein 0 → Impl → Verify A+B+C → Freeze-Re-Pin).
+übersahen und nur eine echte LSP-Messung fand (neue Arbeitsregel 13).
+
+**S4 (argmax): ERLEDIGT 2026-07-24, dreifach verifiziert A+B+C.** Erste Scheibe der Kampagne seit
+S1 mit einem **echten neuen Kernel** — Arbeitsregel 11 verneint hier die Kompositionsfrage
+(kein Vergleichs-/Max-/Index-Primitiv im Bestand, von Baustein 0 per Grep belegt; die kernel-lose
+TS-Alternative wurde geprüft und verworfen, weil `argmax` eine O(N)-Reduktion ist wie `dot`/
+`norm_sq`, die beide einen Kernel haben). Neue Datei `kernels/argmax.rs` + zwei ABI-Appends
+`nt_argmax_{all,axis}_strided`, `WNDArray.argmax` mit drei Overloads (niladisch → `number`),
+**keine** Facaden-Änderung (Instanz-Methode, anders als S3s Static). **M1 bindet neu, Freeze-Hash
+bewegt sich legitim** `8255821b…` → `eba6ba7a…`, dreiteilig bewiesen und von zwei Verifiern
+unabhängig in beide Richtungen nachgestellt. check:diag 229.828 @ 140 (Δ+3.138 gegen ein VOR der
+Messung von +6.000 auf +8.000 angehobenes Gate), stress 115.934, browser Δ0, bench:editor uniform
++436; test:resident 5866+2, test:threaded 127, cargo 204+1. Zwei Kernbefunde: Baustein 0 zeigte,
+dass **Arbeitsregel 10 selbst falsch war** (es gibt ein zweites strukturell getipptes
+`CoreExports`-Literal), und Verify-B fand eine reale Lücke, die alle Gates grün ließ — der
+Kernel-Fehlerpfad war von 0/334 Op-, 0/7 Lifecycle- und 0/1 threaded-Tests abgedeckt.
+
+**S5 (topk)** folgt dem etablierten Workflow (Spec → Baustein 0 → Impl → Verify A+B+C →
+Freeze-Re-Pin) und ist die härteste M1 der Kampagne: der Kernel müsste den JS-Heap der
+topk-Selektion spiegeln (O(n log k), NaN-maximal, First-Index-Wins, aufsteigender Scan), und
+anders als bei `argmax` greift dort der NaN-Payload-Vorbehalt an M1 wirklich, weil
+`values[i] === data[indices[i]]` byte-exakt gilt.

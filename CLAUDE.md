@@ -160,7 +160,25 @@ als M3-konform durchgewinkt und den Fehlschluss später selbst benannt. Fix: Ali
 Owner-abgenommen von +8.000 auf +13.000 angehoben (v3). Verify schloss fünf Lücken, drei davon
 vakuöse Tests (Leck-Test zu grobkörnig für 8-Byte-Scratch-Lecks; Liveness nur für Zeile 0 getestet;
 Core-Prüfung von der `rows[0]`-Variante ununterscheidbar) — alle drei nur per Mutant sichtbar.
-**S4–S5 offen** (FOLLOWUPS).
+**S4 (argmax): ERLEDIGT 2026-07-24, dreifach verifiziert A+B+C** (docs/wasm-parity-argmax-spec.md v3
+/-ergebnisse.md): Arbeitsregel-11-Verdikt **KERNEL** — anders als S2/S3 keine Komposition möglich
+(kein Vergleichs-/Max-/Index-Primitiv im Bestand, von Baustein 0 per Grep belegt; `dot`/`norm_sq`
+setzen als O(N)-Reduktionen den Präzedenzfall). Neue Datei `kernels/argmax.rs` + zwei ABI-Appends
+`nt_argmax_{all,axis}_strided` (7/9 Parameter, signatur-identisch zu den `sum`-Zwillingen),
+`WNDArray.argmax` mit drei Overloads (niladisch → `number` nach `dot`/`norm`-Präzedenz), KEINE
+Facaden-Änderung (Instanz-Methode, anders als S3s Static). **M1 bindet neu, Freeze-Hash bewegt sich
+legitim** `8255821b…` → `eba6ba7a…`, dreiteilig bewiesen und von A UND B je unabhängig in beide
+Richtungen nachgestellt. Regel 10 greift (zwei neue CoreExports-Member) — und Baustein 0 fand dabei,
+dass die REGEL selbst falsch war: es gibt ein ZWEITES strukturell getipptes `CoreExports`-Literal
+(`resident-lifecycle.test.ts:601`), empirisch belegt (beide Dateien werfen TS2739 bei Exit 1, während
+check:diag eine plausible Zahl druckt); Regel korrigiert, Prüfkommando jetzt selbst-diskriminierend
+(`grep -A1`). Baustein 0 löste außerdem eine unentschiedene Orakel-Methodik auf (zwei unvereinbare
+Präzedenzfälle im Repo für View-/keepdims-Tests → dreiteilige bindende Regel). Verify-B fand EINE
+reale Lücke, die alle Gates grün ließ: der Kernel-Fehlerpfad (`status != 0` → Free vor Throw) war von
+0/334 Op-, 0/7 Lifecycle- und 0/1 threaded-Tests abgedeckt, mit nachgewiesenem 16-Byte-Leck —
+geschlossen, je Zweig getrennt mutations-bewiesen. check:diag **229,828 @ 140** (Δ+3,138 gegen ein
+VOR der Messung von +6.000 auf +8.000 angehobenes Gate, Herleitung offengelegt), null Order-Noise.
+**S5 (topk) offen** (FOLLOWUPS).
 **Zwei Prozess-Lehren, wertvoller als die Optimierung selbst:** (1) Die informelle Vorab-Sondage
 lag um mehr als eine Größenordnung daneben (0,60 gegen gemessene 1,050 bei `k = n`; bei `k = n/2`
 sogar mit falschem Vorzeichen) — live nachgestellt, Ursachen im Sondage-Quelltext belegt
@@ -170,7 +188,11 @@ VIERMAL gebrochen, bevor sie messen durfte — zwei der Fassungen stammten vom O
 gefunden ausnahmslos dadurch, dass Verifier sie als Skript nachbauten und gegen tausende
 synthetische Raster laufen ließen statt sie zu lesen.
 FOLLOWUPS-Minis nebenher; Trusted Publishing optional (Fakten in FOLLOWUPS). **COVENANT-v6-Bündel
-steht bei vier Kandidaten** — reif für eine eigene kleine Vertrags-Scheibe.
+steht bei acht Kandidaten** — reif für eine eigene kleine Vertrags-Scheibe. S4 fügte KEINEN neunten
+hinzu, präzisierte aber einen bestehenden: der NaN-Payload-Vorbehalt an M1 kann für `argmax`
+strukturell nicht greifen (die Ausgabe ist stets ein ganzzahliger Index, nie ein kopierter
+Datenwert) — er beißt erst bei S5/`topk`, wo `values[i] === data[indices[i]]` byte-exakt gilt
+(Baustein-C-Befund).
 Repo-Härtung aktiv seit 2026-07-20: Rulesets `protect-main` (kein Force-Push/Delete auf main —
 gilt auch für den Owner; bewusste Ausnahme nur via Ruleset-Deaktivierung) +
 `protect-release-tags` (`v*` unverrückbar). README trägt seit 2026-07-20 eine
@@ -190,10 +212,19 @@ Session-Zustand).
 ## Aktuelle Pins & Gates (IST-Zahlen; Historie im Projekt-Log)
 
 - **Artefakt-Hash** (Clean-Rebuild, SHA256 von `spike/src/wasm/numtype_core.wasm`):
-  `8255821bb1fb42b0367296cc9f64886a4e72968fcc3290086e7ab24309739176` — **UNVERÄNDERT seit WASM-
-  Parität S2/mean 2026-07-23** (mean fügt KEINEN neuen Kernel hinzu, reine TS-Komposition;
-  Clean-Rebuild hat den bestehenden S1-Pin exakt reproduziert, `git status crates/` leer, `cargo
-  test` unverändert 184+1). Zuvor gesetzt seit WASM-Parität S1/Skalar-Overloads 2026-07-23, von
+  `eba6ba7ac85d15a814fd027392a81c7450d885d2048d7efd6694b7e8370988bb` — **NEU seit WASM-Parität
+  S4/argmax 2026-07-24**, von `8255821b…`. Die zwei neuen `nt_argmax_{all,axis}_strided`-Kernel
+  ändern den Hash legitim; additive-only-Dekomposition (neues File `kernels/argmax.rs`, zwei
+  abi.rs-Anhänge strikt ans Dateiende, ein `kernels/mod.rs`-Anhang; `shape.rs`/`matmul_blocked.rs`/
+  `sum.rs` byte-unverändert). Dreiteiliger Beweis: Pre-Edit-Clean-Rebuild reproduzierte den ALTEN
+  Pin exakt, Diff ist ein einziger Hunk (138 Insertions, 0 Deletions), neuer Pin aus zwei
+  byte-identischen Clean-Rebuilds — **von Baustein A und Baustein B je unabhängig in BEIDE
+  Richtungen nachgestellt**. Threads-Artefakt `3ad9c49b4d…`, bewusst KEIN persistierter Pin —
+  test:threaded beweist seine Bit-Identität zum stable Core. CI-Gate `check:freeze` mit
+  plattform-gelabelter Pin-Menge. **Vorheriger Stand:**
+  `8255821bb1fb42b0367296cc9f64886a4e72968fcc3290086e7ab24309739176` (seit WASM-Parität S1/
+  Skalar-Overloads 2026-07-23, unverändert durch S2/mean und S3/item+stack — beide kernel-los —,
+  von
   `24a048c7…` S0/sqrt — die vier neuen `nt_scalar_{add,sub,mul,div}_strided`-
   Kernel ändern den Hash legitim; additive-only-Dekomposition (neues File `kernels/scalar.rs`, vier
   abi.rs-Anhänge, `kernels/mod.rs`-Anhang, `unary_strided` → `pub(crate)`), Pre-Edit-Clean-Rebuild
@@ -201,8 +232,17 @@ Session-Zustand).
   Pin — test:threaded beweist seine Bit-Identität zum stable Core. CI-Gate `check:freeze` mit
   plattform-gelabelter Pin-Menge. **Vorheriger Stand:** `24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2`
   (seit WASM-Parität S0/sqrt 2026-07-23, von `0b9df4f1…` Kern 11).
-- **check:diag** Haupt-Pin **226,690 @ 140 Files** (nur Root-Korpus; seit WASM-Parität S3/item+stack
-  2026-07-24, von 213,704 @ 140 — **Δ+12,986**, Dateiset unverändert 140 (kein neues File, kein
+- **check:diag** Haupt-Pin **229,828 @ 140 Files** (nur Root-Korpus; seit WASM-Parität S4/argmax
+  2026-07-24, von 226,690 @ 140 — **Δ+3,138**, Dateiset unverändert 140 (kein neues File, **null
+  Order-Noise**), in fünf Stufen dekomponiert: ① CoreExports-Member + beide Mock-Stubs **Δ0**
+  (dritte Bestätigung des S0/D10-Gewinns: ein neuer Member kostet +0 statt +7, nach n=4 in S1 und
+  n=0 in S2 jetzt n=2), ② `WNDArray.argmax` + privater Helfer +458, ③ Test-Anhänge +2,117,
+  ④ Typ-Pins +382, ⑤ Verify-Runden-Nachträge +181. Das Absolut-Gate wurde **VOR jeder Messung** von
+  ≤+6,000 auf ≤+8,000 angehoben (Baustein-0-Befund: die v1-Begründung stützte sich auf S2s
+  erstgemessene +1,500, S2s REALISIERTE Gesamtkosten waren aber +5,689 — der View-Coverage-Nachtrag
+  allein kostete +4,189); realisiert wurden +3,138, die alte Registrierung hätte also auch gehalten.
+  Details docs/wasm-parity-argmax-ergebnisse.md. **Vorheriger Stand: 226,690 @ 140** (seit
+  WASM-Parität S3/item+stack 2026-07-24, von 213,704 @ 140 — **Δ+12,986**, Dateiset unverändert 140 (kein neues File, kein
   Order-Noise), in sieben Stufen dekomponiert: ① runtime.ts-Helfer Δ0, ② resident.ts +1,111,
   ③ Facaden +1,632, ④ Test-Anhänge +3,834 (Erstmessung +6,705 — literal-typisierte
   `WNDArray.stack`-Aufrufstellen zahlen die volle `StackFold`-Maschinerie PRO Aufrufstelle, über
@@ -249,8 +289,12 @@ Session-Zustand).
   docs/scale-probe-ergebnisse.md). Historie: **201,455 @ 137** war der W5-Stand, von 195,481 —
   Δ+5,873, Aufschlüsselung in docs/op-w5-item-ergebnisse.md — davon nur +623 Quellcode, der Rest
   Test-/Typ-Pin-Kosten; enthält den D6-Befund „`Equal<ItemGuard<...>>`-Message-Pins sind pro
-  Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 115,498 @ 82**
-  (seit WASM-Parität S3/item+stack 2026-07-24, von 107,283 @ 82 — **Δ+8,215**, Klassen-Surface-Ripple
+  Pin ≈1,700 teuer", FOLLOWUPS trackt weitere Untersuchung) · **check:diag:stress 115,934 @ 82**
+  (seit WASM-Parität S4/argmax 2026-07-24, von 115,498 @ 82 — **Δ+436**, reine
+  WNDArray-Klassen-Surface-Ripple aus den drei neuen Overloads; identisch zum uniformen
+  bench:editor-Delta, was die Attribution unabhängig bestätigt — stress kompiliert `spike/src`
+  direkt. Davor 115,498 @ 82 seit WASM-Parität S3/item+stack 2026-07-24, von 107,283 @ 82 —
+  **Δ+8,215**, Klassen-Surface-Ripple
   über drei Klassen statt einer; davon +5,453 allein aus dem Hover-Fix (Stufe ⑦), Dateiset
   unverändert. Davor 107,283 @ 82, unverändert seit WASM-Parität S2/mean 2026-07-23 — der View-Coverage-Nachtrag berührt nur
   `spike/tests-runtime/resident.test.ts`, das stress nicht importiert, Δ0, gemessen; davor Δ+323
@@ -262,7 +306,13 @@ Session-Zustand).
   noch der View-Coverage-Nachtrag rühren es (browser kompiliert weder threaded.ts noch die
   Test-Runtime-/Typ-Pin-Dateien, in denen `mean`s Anhänge landen), Δ0, gemessen; stress/browser
   ungated by design, `pnpm check` compoundet alle drei).
-- **Testzahlen:** test:core 1591 · test:resident **5497+2** (+449 aus WASM-Parität S3/item+stack
+- **Testzahlen:** test:core 1591 · test:resident **5866+2** (+369 aus WASM-Parität S4/argmax
+  2026-07-24: M1-Differential über contiguous + alle vier View-Klassen × drei Formen ×
+  keepdims, Spezialwert-Raster, Rang 0, size-0-Ausgabe ohne Throw, zwei size-0-Throws,
+  Cross-Surface-Message-Parität, orakelfreie Cross-Surface-Shape-Pins, real-tsc-Diagnose-Pin,
+  Lifecycle mit exakter Alloc/Free-Bilanz — plus drei Verify-Nachträge: zwei
+  Kernel-Fehlerpfad-Tests (je Zweig, Status ≠ 0 erzwungen) und ein memory-grow-Regressionstest;
+  davor 5497+2 (+449 aus WASM-Parität S3/item+stack
   2026-07-24: item-Differential über contiguous + vier View-Klassen + rank 0 + size-0-Achse,
   stack-Differential inkl. N=1/D=0/Aliasing/memory-grow-Fall, sechs Cross-Surface-Message-Paritäts-
   Tests, Lifecycle inkl. exakter Alloc/Free-Bilanz, Facaden-Erreichbarkeit; davor 5048+2
@@ -271,13 +321,22 @@ Session-Zustand).
   niladisch/positive-/negative-Achse × keepdims true/false, in resident.test.ts; davor 5022+2
   (+305 S2-mean-Tests: 244 M1-Differential in resident.test.ts inkl. Determinismus-/size-0-Pins +
   60 randomisierte Spezialwert-Fälle + 1 Leak-Non-Vakuitäts-Test, davor 4717+2 seit S1)) ·
-  test:threaded **114** (+13 S3-item/stack-Parität, davor 101 = +10 S2-mean-Parität, davor
+  test:threaded **127** (+13 S4-argmax-Parität, davor 114 = +13 S3-item/stack, davor 101 = +10
+  S2-mean-Parität, davor
   91 = +16 S1-Skalar-Parität, davor 75 = +4 sqrt-Parität +2 Spezialwerte) · test:browser 4 ·
-  test:package 3 + Typ-Smoke · cargo 184 (+1 zero_alloc = 185, UNVERÄNDERT seit S1 — S2 berührt
-  kein Rust) · test:example (Registry-Install + Example-Typcheck + 8 asserted Queries, unberührt).
+  test:package 3 + Typ-Smoke · cargo **204** (+1 zero_alloc = 205; +20 aus S4/argmax: 16 in
+  `kernels/argmax.rs` inkl. der Nicht-Vakuitäts-Assertion für den transponierten View + 4
+  abi.rs-Prävalidierungs-Tests. Davor 184+1, unverändert seit S1 — S2 und S3 berührten kein
+  Rust) · test:example (Registry-Install + Example-Typcheck + 8 asserted Queries, unberührt).
 - **Editor-Gate:** `bench:editor` W1–**W8** — Instantiation-Pins exact-match hart (seit
+  **WASM-Parität S4/argmax 2026-07-24** uniform **+436** = `{w1 37.454, w2 39.287, w3 70.429,
+  w4 37.609, w5 42.908, w6 44.102, w7 36.658, w8 44.347}`; zweifach gemessen, byte-identisch.
+  Diesmal **perfekt uniform** — anders als S3, wo w8 als einziger Workload eine eigene
+  `stack`-Aufrufstelle hatte: kein Workload hat eine `argmax`-Aufrufstelle, der Effekt ist reine
+  WNDArray-Klassen-Surface-Ripple aus den drei neuen Overloads. Der identische Wert +436 auf
+  `check:diag:stress` bestätigt die Attribution unabhängig. Davor seit
   **WASM-Parität S3/item+stack 2026-07-24** = `{w1 37.018, w2 38.851, w3 69.993, w4 37.173,
-  w5 42.472, w6 43.666, w7 36.222, w8 43.911}`. In DIESER Scheibe zweimal gesetzt: erst +2.722 bis
+  w5 42.472, w6 43.666, w7 36.222, w8 43.911}`. In JENER Scheibe zweimal gesetzt: erst +2.722 bis
   +2.761 (Spanne 39) für item/stack selbst, dann nach dem Hover-Fix nochmals +5.361 bis +5.500
   (Spanne 139); beide Runden zweifach gemessen, je byte-identisch. Nicht perfekt uniform, weil w8 als
   einziger Workload eine eigene `stack`-Aufrufstelle hat — die Richtung des Effekts (w8 bewegt sich am
@@ -364,11 +423,23 @@ Session-Zustand).
   selbst im Haupt-Loop überwachen oder den Agenten per SendMessage gezielt zum Nachbericht
   auffordern — nie annehmen, dass ein gestarteter Lauf auch dokumentiert wurde.
 - **Arbeitsregeln aus der WASM-Parität-Kampagne (2026-07-23, gelten für S3–S5):** (10) **Jeder neue
-  `CoreExports`-Member braucht einen `notImplemented(...)`-Stub im hand-getippten Mock in
-  `spike/tests-runtime/backend-oom.test.ts`** (das EINZIGE strukturell getippte `CoreExports`-Literal
-  im Repo). Fehlt er, scheitert `pnpm check`/`check:diag` mit **TS2739** — druckt aber weiterhin eine
-  plausibel aussehende Instantiations-Zeile (Spezialfall von Regel 6; S0 fügte den Stub still hinzu,
-  S1/Baustein 0 fand die Falle empirisch). (11) **Vor jedem neuen Kernel prüfen, ob die Op
+  `CoreExports`-Member braucht einen `notImplemented(...)`-Stub in jedem EXHAUSTIV hand-getippten
+  Mock — aber nicht in einem, der einen echten Core per Spread (`...real`) übernimmt** (der erbt
+  neue Member automatisch). Fehlt ein Stub in einem exhaustiven Literal, scheitert
+  `pnpm check`/`check:diag` mit **TS2739** — druckt aber weiterhin eine plausibel aussehende
+  Instantiations-Zeile (Spezialfall von Regel 6). **Prüf-Kommando, das die beiden Klassen OHNE
+  Vorwissen trennt** (Korrektur 2026-07-24/S4 — die Vorgänger-Formulierung nannte eine feste Datei-
+  und Trefferzahl, die beim nächsten Mock veraltet; die frühere „das EINZIGE …-Literal im Repo"
+  war schon vorher empirisch falsch):
+  `grep -rn --include='*.ts' -A1 ': CoreExports = {' .` — jeder Treffer zeigt automatisch seine
+  eigene Klasse in der Zeile UNTER dem Match: beginnt sie mit `...<name>,` (ein Spread), braucht
+  dieses Literal KEINE Stubs; beginnt sie stattdessen mit einem echten Member (z. B. `memory: {`),
+  ist es exhaustiv getippt und JEDER neue `CoreExports`-Member braucht hier einen Stub. Aktuell
+  (S4): zwei exhaustive Literale (`spike/tests-runtime/backend-oom.test.ts`,
+  `spike/tests-runtime/resident-lifecycle.test.ts:601`) und zwei Spread-Literale
+  (`makeCountingCore`, `makeArgmaxKernelFailureMockCore`, beide resident-lifecycle.test.ts) — diese
+  Zahl wächst mit künftigen Scheiben und ist deshalb bewusst NICHT Teil der Regel selbst, nur das
+  Kommando ist es. (11) **Vor jedem neuen Kernel prüfen, ob die Op
   definitorisch eine KOMPOSITION bereits verifizierter Kernel ist.** Dann als Komposition bauen: der
   Freeze-Hash bleibt unberührt (der Beweis kippt in eine billige NEGATIVE Assertion „darf sich nicht
   bewegen"), die Beweislast schrumpft auf einen Kompositions-Differentialtest, und gepinnte

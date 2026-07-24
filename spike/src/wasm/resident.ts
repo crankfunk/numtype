@@ -1732,4 +1732,189 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
     const view = new Float64Array(this.core.memory.buffer, this.buf.ptr, this.buf.lenElems);
     return view[flat] ?? NaN;
   }
+
+  /** WASM parity S4 (docs/wasm-parity-argmax-spec.md, D5): the shared
+   * marshalling of BOTH full-reduction forms of `argmax` below — the truly
+   * niladic `argmax()` (which reads the result and frees the buffer, `dot`/
+   * `norm`'s pattern) and `argmax(undefined[, keepdims])` (which hands the
+   * buffer to `WNDArray.fresh`, `sum`'s pattern). Factored out so the two
+   * forms provably share ONE code path rather than two hand-copied ones.
+   *
+   * Returns an OWNED one-element output buffer: on success the caller is
+   * responsible for freeing it (or handing it to `WNDArray.fresh`); on a
+   * non-zero kernel status it is freed here before the throw, so it never
+   * escapes. Per-call scratch is freed in `finally` either way.
+   *
+   * The empty-receiver check runs BEFORE any allocation and before the
+   * kernel call, and throws `argmaxRuntime`'s own stem word for word (M3) —
+   * `product(this.shape)` is the VIEW's logical element count, which is what
+   * `argmaxRuntime` sees as `data.length`, not `this.buf.lenElems` (a view
+   * may span a larger allocation). */
+  private argmaxAllBuf(): ScratchBuf {
+    if (product(this.shape) === 0) {
+      throw new Error(`argmax: attempt to get argmax of an empty array`);
+    }
+    const scratch: ScratchBuf[] = [];
+    try {
+      const shapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(shapeBuf);
+      const stridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(stridesBuf);
+      const outDataBuf = allocBytes(this.core, 8);
+
+      const status = this.core.nt_argmax_all_strided(
+        shapeBuf.ptr,
+        this.shape.length,
+        stridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        outDataBuf.ptr,
+      );
+      if (status !== 0) {
+        freeBuf(this.core, outDataBuf); // fresh output buffer never escapes on failure
+        throw new Error(`wasm resident nt_argmax_all_strided: status ${status} for shape [${this.shape.join(",")}]`);
+      }
+      return outDataBuf;
+    } finally {
+      // Ephemeral per-call scratch: always freed — success, kernel failure,
+      // or an OOM throw between the allocations above.
+      for (const buf of scratch) freeBuf(this.core, buf);
+    }
+  }
+
+  /** Index of the maximum element — resident twin of `NDArray.argmax`
+   * (WASM parity S4, docs/wasm-parity-argmax-spec.md), routed through the
+   * new `nt_argmax_{all,axis}_strided` kernels. Overloads 0/1/2 mirror
+   * `NDArray.argmax`'s own exactly, and 1/2 mirror `sum`/`mean` above (the
+   * sixth call site of the already-proven `ReduceAxis`/`Guard`/`OkShape`
+   * machinery — `reduce.ts` is not touched by this slice).
+   *
+   * `argmax()` (zero arguments) returns the index into the ROW-MAJOR
+   * FLATTENING of every element as a plain `number`, leaving the `WNDArray`
+   * world exactly like `dot`/`norm` above — the same deliberate D2
+   * departure `NDArray.argmax` makes. `argmax(axis)` / `argmax(axis,
+   * keepdims)` stay inside the `WNDArray` world; `keepdims` is pure shape
+   * metadata via the shared `keepDimsShape` helper (the reduced DATA is
+   * unchanged — a size-1 axis leaves `product` unchanged).
+   *
+   * **Logical, not memory, index (the tragende semantic point, kernel doc
+   * `crates/core/src/kernels/argmax.rs`):** the full reduction answers with
+   * the index into THIS VIEW's logical row-major flattening, so on a
+   * transposed/sliced receiver it deliberately differs from the memory
+   * offset. The axis form's indices run along the axis and are therefore
+   * stride-independent.
+   *
+   * Total order (pinned in docs/op-w1-argmax-topk-spec.md D4, shared with
+   * `argmaxRuntime`'s `beatsMax`): NaN counts as MAXIMAL; ties (including
+   * `0`/`-0`, compared with plain `>`, never `Object.is`) are broken by the
+   * FIRST index. Result DATA is always an f64-encoded INTEGRAL index (this
+   * codebase is f64-only throughout).
+   *
+   * Error paths are prevalidated in TS, before any allocation, so the
+   * thrown stems are word-for-word `argmaxRuntime`'s (M3, cross-surface
+   * parity): an empty full reduction and a zero-length axis both throw
+   * `argmax: attempt to get argmax of an empty array`, an out-of-range axis
+   * throws the shared `reduce: axis …` stem `sum` already throws. A size-0
+   * OUTPUT is NOT an error (`[0,3]` along axis 1 is an empty `[0]`
+   * result). */
+  argmax(): number;
+  argmax<const Axis extends number | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+  ): WNDArray<OkShape<ReduceAxis<S, Axis, false>>>;
+  argmax<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims: KeepDims,
+  ): WNDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>;
+  argmax<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
+    axis?: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims?: KeepDims,
+  ): WNDArray<any> | number {
+    this.assertLive("argmax");
+
+    // `arguments.length`, not `axis === undefined`: the TRULY niladic
+    // overload (`argmax()`, zero arguments -> `number`) is a DIFFERENT
+    // overload from the 1-/2-arg forms whose axis value happens to BE
+    // `undefined` (`argmax(undefined)` / `argmax(undefined, true)` ->
+    // full-reduction `WNDArray<...>`, mirroring `sum(undefined[, keepdims])`)
+    // — TS's own overload resolution distinguishes these by ARGUMENT COUNT at
+    // the call site (D2), so the implementation must too. Byte-for-byte the
+    // same dispatch `NDArray.argmax` performs.
+    if (arguments.length === 0) {
+      const outDataBuf = this.argmaxAllBuf();
+      try {
+        // Fresh view derived AFTER the last allocation above (memory rule).
+        const view = new Float64Array(this.core.memory.buffer, outDataBuf.ptr, 1);
+        return view[0] ?? 0;
+      } finally {
+        freeBuf(this.core, outDataBuf); // ephemeral: read above, never returned as a handle
+      }
+    }
+
+    const axisNum = axis as unknown as Axis | undefined;
+
+    if (axisNum === undefined) {
+      const outDataBuf = this.argmaxAllBuf();
+      const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : [];
+      return WNDArray.fresh<OkShape<ReduceAxis<S, Axis, KeepDims>>>(
+        this.core,
+        outShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
+        outDataBuf.ptr,
+        1,
+      );
+    }
+
+    const rank = this.shape.length;
+    const normAxis = axisNum < 0 ? rank + axisNum : axisNum;
+    if (normAxis < 0 || normAxis >= rank) {
+      throw new Error(`reduce: axis ${axisNum} is out of range for shape [${this.shape.join(",")}] (rank ${rank})`);
+    }
+    // Unlike `sum`/`mean`, a zero-length axis has no answer (summing zero
+    // elements is 0; the argmax of zero candidates does not exist) — same
+    // stem, same position in the validation order, as `argmaxRuntime`.
+    if ((this.shape[normAxis] ?? 1) === 0) {
+      throw new Error(`argmax: attempt to get argmax of an empty array`);
+    }
+
+    const outShape = [...this.shape.slice(0, normAxis), ...this.shape.slice(normAxis + 1)];
+    const outLen = product(outShape);
+    // keepdims is metadata only: `outLen` (kernel element count) is unchanged —
+    // a size-1 axis leaves `product` unchanged — only the reported shape differs.
+    const resultShape = keepdims ? keepDimsShape(this.shape, axisNum) : outShape;
+
+    const scratch: ScratchBuf[] = [];
+    try {
+      const shapeBuf = writeU32Array(this.core, this.shape);
+      scratch.push(shapeBuf);
+      const stridesBuf = writeU32Array(this.core, this.strides);
+      scratch.push(stridesBuf);
+      const outDataBuf = allocBytes(this.core, outLen * 8);
+
+      const status = this.core.nt_argmax_axis_strided(
+        shapeBuf.ptr,
+        rank,
+        stridesBuf.ptr,
+        this.offset,
+        this.buf.ptr,
+        this.buf.lenElems,
+        axisNum,
+        outDataBuf.ptr,
+        outLen,
+      );
+      if (status !== 0) {
+        freeBuf(this.core, outDataBuf);
+        throw new Error(
+          `wasm resident nt_argmax_axis_strided: status ${status} for shape [${this.shape.join(",")}] axis ${axisNum}`,
+        );
+      }
+      return WNDArray.fresh<OkShape<ReduceAxis<S, Axis, KeepDims>>>(
+        this.core,
+        resultShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
+        outDataBuf.ptr,
+        outLen,
+      );
+    } finally {
+      for (const buf of scratch) freeBuf(this.core, buf);
+    }
+  }
 }

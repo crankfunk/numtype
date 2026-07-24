@@ -1238,3 +1238,148 @@ function runStackCase(name: string, n: number, d: number, asView: boolean[], rng
   runStackCase("stack threaded parity: special values, mixed contiguous+view rows, n=4 d=5", 4, 5, [false, true, false, true], rng, true);
 }
 
+
+// ---------------------------------------------------------------------------
+// WASM parity S4 (docs/wasm-parity-argmax-spec.md, D1/D7): `WNDArray.argmax`
+// threaded-vs-stable parity. `argmax` adds two REAL kernels
+// (`nt_argmax_{all,axis}_strided`), and the threads artifact is built from the
+// same crate — so this block proves the two artifacts agree bit-for-bit on the
+// new exports, exactly as the sqrt/scalar blocks above do for theirs. Extends
+// the file's established threaded-vs-stable differential, reusing the
+// persistent `pools`/`stableCore` set up above.
+//
+// Oracle methodology (spec D1, same as resident.test.ts's own argmax block):
+// DATA against `argmaxRuntime`; the keepdims SHAPE via structural invariants,
+// never `keepDimsShape` (which is what the method under test itself calls).
+// ---------------------------------------------------------------------------
+
+import { argmaxRuntime } from "../src/runtime.ts";
+
+/** The message of a call that must throw (local to this S4 block). */
+function throwMsg(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+  throw new Error("expected fn() to throw, but it did not");
+}
+
+/** keepdims SHAPE via structural invariants only — deliberately NOT
+ * `keepDimsShape` (circular for argmax; spec D1(2)). */
+function assertArgmaxKeepdimsShape(
+  inputShape: readonly number[],
+  axis: number | undefined,
+  keptShape: readonly number[],
+  reducedShape: readonly number[],
+  ctx: string,
+): void {
+  const prod = (s: readonly number[]): number => s.reduce((acc, d) => acc * d, 1);
+  assert.strictEqual(keptShape.length, inputShape.length, `${ctx}: keepdims must preserve rank`);
+  assert.strictEqual(prod(keptShape), prod(reducedShape), `${ctx}: keepdims must not change the element count`);
+  if (axis === undefined) {
+    assert.ok(keptShape.every((d) => d === 1), `${ctx}: full reduction with keepdims must be all-ones, got [${keptShape.join(",")}]`);
+    return;
+  }
+  const normAxis = axis < 0 ? inputShape.length + axis : axis;
+  assert.strictEqual(keptShape[normAxis], 1, `${ctx}: the reduced axis must be size 1 under keepdims`);
+  assert.deepStrictEqual(
+    [...keptShape.slice(0, normAxis), ...keptShape.slice(normAxis + 1)],
+    [...reducedShape],
+    `${ctx}: keepdims shape minus the reduced axis must equal the non-keepdims shape`,
+  );
+}
+
+function runArgmaxCase(name: string, shape: number[], axis: number | undefined, keepdims: boolean, asView: boolean, rng: Rng, special = false): void {
+  test(name, () => {
+    const data = special ? genDataSpecial(rng, shape) : genData(rng, shape);
+    const ref = argmaxRuntime(shape, data, axis);
+
+    const assertShape = (got: readonly number[], ctx: string): void => {
+      if (keepdims) assertArgmaxKeepdimsShape(shape, axis, got, ref.shape, ctx);
+      else assertShapeEqual(ref.shape, got, ctx);
+    };
+
+    const stableOperand = makeOperand(stableCore, asView, shape, data);
+    let stableData: Float64Array;
+    let stableNiladic: number;
+    try {
+      stableNiladic = stableOperand.arr.argmax();
+      const got = stableOperand.arr.argmax(axis, keepdims);
+      try {
+        assertShape(got.shape as readonly number[], `${name}: stable shape`);
+        stableData = got.toArray();
+      } finally {
+        got.dispose();
+      }
+    } finally {
+      disposeAll(stableOperand);
+    }
+    assertDataBitIdentical(ref.data, stableData, `${name}: runtime.ts vs stable resident`);
+    assert.strictEqual(stableNiladic, argmaxRuntime(shape, data, undefined).data[0], `${name}: stable niladic vs runtime.ts`);
+
+    for (const wc of WORKER_COUNTS) {
+      const pool = pools.get(wc)!;
+      const operand = makeOperand(pool.core, asView, shape, data);
+      try {
+        assert.strictEqual(operand.arr.argmax(), stableNiladic, `${name} workers=${wc}: niladic argmax() vs stable`);
+        const got = operand.arr.argmax(axis, keepdims);
+        try {
+          assertShape(got.shape as readonly number[], `${name} workers=${wc}`);
+          const gotData = got.toArray();
+          assertDataBitIdentical(ref.data, gotData, `${name} workers=${wc} vs runtime.ts`);
+          assertDataBitIdentical(stableData, gotData, `${name} workers=${wc} vs stable resident`);
+        } finally {
+          got.dispose();
+        }
+      } finally {
+        disposeAll(operand);
+      }
+    }
+  });
+}
+
+{
+  const rng = makeRng(0x41524758_5f544852n); // "ARGX_THR"
+  runArgmaxCase("argmax() threaded parity: contiguous [2,3,4]", [2, 3, 4], undefined, false, false, rng);
+  // Pflicht view case (spec D7): a transposed view on every pool AND stable —
+  // the case where the LOGICAL index provably differs from the memory offset.
+  runArgmaxCase("argmax() threaded parity: transposed view [4,3,2]", [4, 3, 2], undefined, false, true, rng);
+  runArgmaxCase("argmax() threaded parity: rank-0 scalar", [], undefined, false, false, rng);
+  // Axis form: plain, negative, keepdims — contiguous AND view.
+  runArgmaxCase("argmax(axis) threaded parity: contiguous [2,3,4]", [2, 3, 4], 1, false, false, rng);
+  runArgmaxCase("argmax(axis) threaded parity: transposed view [4,3,2]", [4, 3, 2], -1, false, true, rng);
+  runArgmaxCase("argmax(axis, keepdims=true) threaded parity: contiguous [2,3,4]", [2, 3, 4], 0, true, false, rng);
+  runArgmaxCase("argmax(axis, keepdims=true) threaded parity: transposed view [4,3,2]", [4, 3, 2], 2, true, true, rng);
+  runArgmaxCase("argmax(undefined, keepdims=true) threaded parity: contiguous [2,3,4]", [2, 3, 4], undefined, true, false, rng);
+  // C-2 lesson (from the S0/sqrt verify round): at least one genDataSpecial
+  // case, contiguous AND view, directly on the threads artifact — niladic and
+  // axis form. For argmax the special values are not decoration: the total
+  // order is DEFINED on them (NaN maximal, ties by first index).
+  runArgmaxCase("argmax() threaded parity: special values, contiguous [2,3,4]", [2, 3, 4], undefined, false, false, rng, true);
+  runArgmaxCase("argmax() threaded parity: special values, transposed view [4,3,2]", [4, 3, 2], undefined, false, true, rng, true);
+  runArgmaxCase("argmax(axis) threaded parity: special values, contiguous [2,3,4]", [2, 3, 4], 1, false, false, rng, true);
+  runArgmaxCase("argmax(axis) threaded parity: special values, transposed view [4,3,2]", [4, 3, 2], -2, true, true, rng, true);
+}
+
+test("argmax threaded parity: the empty-reduction throws carry the SAME stem on every pool as on the stable core", async () => {
+  const shape: number[] = [0, 3];
+  const stableEmpty = WNDArray.fromArray(stableCore, shape, []);
+  let stableMsg: string;
+  try {
+    stableMsg = throwMsg(() => stableEmpty.argmax());
+    assert.strictEqual(stableMsg, "argmax: attempt to get argmax of an empty array", "sanity: exact expected wording");
+  } finally {
+    stableEmpty.dispose();
+  }
+  for (const wc of WORKER_COUNTS) {
+    const pool = pools.get(wc)!;
+    const e = WNDArray.fromArray(pool.core, shape, []);
+    try {
+      assert.strictEqual(throwMsg(() => e.argmax()), stableMsg, `workers=${wc}: niladic empty stem`);
+      assert.strictEqual(throwMsg(() => e.argmax(0)), stableMsg, `workers=${wc}: zero-length-axis stem`);
+    } finally {
+      e.dispose();
+    }
+  }
+});

@@ -1174,3 +1174,656 @@ test("stack: a large call that actually triggers memory.grow mid-loop stays byte
     for (const o of owners) o.dispose();
   }
 });
+
+// =============================================================================
+// WASM parity S4 (docs/wasm-parity-argmax-spec.md, D7): `WNDArray.argmax` —
+// the M1 differential against `argmaxRuntime`, the pinned correctness oracle
+// (spike/src/runtime.ts, deliberately UNCHANGED by this slice: a parity proof
+// that rebuilds its own oracle in the same commit proves less).
+//
+// Oracle methodology (spec D1, BINDING — the Baustein-0 finding that this repo
+// carried TWO mutually incompatible precedents for exactly this question):
+//  1. DATA is always compared against `argmaxRuntime` — never circular. For a
+//     VIEW receiver the reference is built from `view.toArray()`, the view's
+//     own logical row-major content, read BEFORE the method under test runs,
+//     together with `view.shape`. Never re-derived from the base buffer (the
+//     S2/F1 lesson).
+//  2. The keepdims SHAPE is asserted through STRUCTURAL INVARIANTS, never
+//     against `keepDimsShape` — that helper is exactly what `WNDArray.argmax`
+//     itself calls, so using it as the oracle here WOULD be circular (the
+//     objection `argmax-topk.test.ts:216-240` already raises on the NDArray
+//     side). The NON-keepdims shape, by contrast, comes out of `argmaxRuntime`
+//     itself and is a legitimate oracle, so it is compared directly.
+//  3. Additionally, an oracle-FREE cross-surface shape pin (further below):
+//     `WNDArray.argmax(axis, kd).shape` deep-equals `NDArray.argmax(axis,
+//     kd).shape` on the materialized equivalent.
+// =============================================================================
+
+import { argmaxRuntime } from "../src/runtime.ts";
+import { bitsOf } from "./assert-helpers.ts";
+import { genDataSpecial } from "./prng.ts";
+
+/** Raw 64-bit comparison (the spec's explicit "compare the result BITS, not
+ * just `===`"). Strictly stronger than `assertDataBitIdentical`'s `Object.is`
+ * for NaN payloads and identical everywhere else; argmax results are integral
+ * indices, so any bit difference at all is a real divergence. */
+function assertIndexBitsIdentical(expected: Float64Array, actual: Float64Array, ctx: string): void {
+  assert.strictEqual(actual.length, expected.length, `${ctx}: result length mismatch, expected ${expected.length} got ${actual.length}`);
+  for (let i = 0; i < expected.length; i++) {
+    const e = expected[i] ?? 0;
+    const a = actual[i] ?? 0;
+    assert.strictEqual(
+      bitsOf(a),
+      bitsOf(e),
+      `${ctx}: index bits differ at flat ${i}: reference=${e} (0x${bitsOf(e).toString(16)}) wasm=${a} (0x${bitsOf(a).toString(16)})`,
+    );
+  }
+}
+
+/** D1(2): keepdims SHAPE via structural invariants only — deliberately NOT
+ * `keepDimsShape` (circular). `reducedShape` is `argmaxRuntime`'s own output
+ * shape and IS a legitimate oracle. Mirrors the invariant set
+ * `argmax-topk.test.ts` established for the NDArray surface. */
+function assertKeepdimsShapeInvariants(
+  inputShape: readonly number[],
+  axis: number | undefined,
+  keptShape: readonly number[],
+  reducedShape: readonly number[],
+  ctx: string,
+): void {
+  const prod = (s: readonly number[]): number => s.reduce((acc, d) => acc * d, 1);
+  assert.strictEqual(keptShape.length, inputShape.length, `${ctx}: keepdims must preserve rank`);
+  assert.strictEqual(prod(keptShape), prod(reducedShape), `${ctx}: keepdims must not change the element count`);
+  if (axis === undefined) {
+    // Every axis was reduced -> every kept axis must be size 1.
+    assert.ok(
+      keptShape.every((d) => d === 1),
+      `${ctx}: full reduction with keepdims must be all-ones, got [${keptShape.join(",")}]`,
+    );
+    return;
+  }
+  const normAxis = axis < 0 ? inputShape.length + axis : axis;
+  assert.strictEqual(keptShape[normAxis], 1, `${ctx}: the reduced axis ${normAxis} must be size 1 under keepdims`);
+  const withoutAxis = [...keptShape.slice(0, normAxis), ...keptShape.slice(normAxis + 1)];
+  assert.deepStrictEqual([...withoutAxis], [...reducedShape], `${ctx}: keepdims shape minus the reduced axis must equal the non-keepdims shape`);
+  assert.deepStrictEqual(
+    [...withoutAxis],
+    [...inputShape.slice(0, normAxis), ...inputShape.slice(normAxis + 1)],
+    `${ctx}: every non-reduced axis must be unchanged from the input shape`,
+  );
+}
+
+/** Runs `recv.argmax(axis, keepdims)` and asserts it against `argmaxRuntime`
+ * over the receiver's OWN logical shape/data (`toArray()`, read BEFORE the
+ * argmax call — D1(1)). Works uniformly for contiguous handles and views:
+ * a contiguous handle is just the identity view. Disposes `got`; the caller
+ * owns `recv` and any base handles. */
+function assertArgmaxMatches(recv: AnyWNDArray, axis: number | undefined, keepdims: boolean, ctx: string): void {
+  const shape = recv.shape as readonly number[];
+  const data = recv.toArray(); // logical content, BEFORE the argmax call
+  const ref = argmaxRuntime(shape, data, axis);
+  const got = recv.argmax(axis, keepdims);
+  try {
+    if (keepdims) assertKeepdimsShapeInvariants(shape, axis, got.shape as readonly number[], ref.shape, ctx);
+    else assertShapeEqual(ref.shape, got.shape as readonly number[], ctx);
+    assertIndexBitsIdentical(ref.data, got.toArray(), ctx);
+  } finally {
+    got.dispose();
+  }
+}
+
+/** The TRULY niladic form (`argmax()`, zero arguments -> plain `number`,
+ * D2) — a different overload from `argmax(undefined)`, so it needs its own
+ * assertion path. */
+function assertArgmaxNiladicMatches(recv: AnyWNDArray, ctx: string): void {
+  const shape = recv.shape as readonly number[];
+  const data = recv.toArray();
+  const ref = argmaxRuntime(shape, data, undefined).data[0] ?? 0;
+  const got = recv.argmax();
+  assert.strictEqual(typeof got, "number", `${ctx}: niladic argmax() must return a plain number`);
+  assert.strictEqual(bitsOf(got), bitsOf(ref), `${ctx}: niladic argmax() must equal argmaxRuntime's flat index ${ref}, got ${got}`);
+}
+
+// --- argmax(): full reduction, resident vs naive, bit-identical -----------
+// Covers BOTH full-reduction forms per case: the niladic `number` form and
+// the 1-/2-arg `argmax(undefined[, keepdims])` WNDArray form.
+{
+  const rng = makeRng(0x5245535f414d4158n); // "RES_AMAX"
+  for (let c = 0; c < CASE_COUNT; c++) {
+    const shape = genShape(rng, 0, 4);
+    const data = genData(rng, shape);
+    const keepdims = rng.nextBool();
+
+    test(`resident argmax_all case ${c}: shape=[${shape.join(",")}] keepdims=${keepdims}`, () => {
+      const a = WNDArray.fromArray(core, shape, Array.from(data));
+      try {
+        const ctx = `resident argmax_all case ${c} shape=[${shape.join(",")}] keepdims=${keepdims}`;
+        assertArgmaxNiladicMatches(a, `${ctx} (niladic)`);
+        assertArgmaxMatches(a, undefined, keepdims, ctx);
+      } finally {
+        a.dispose();
+      }
+    });
+  }
+}
+
+// --- argmax(axis[, keepdims]): resident vs naive, bit-identical -----------
+{
+  const rng = makeRng(0x5245535f414d4158n + 1n); // "RES_AMAX"+1
+  for (let c = 0; c < CASE_COUNT; c++) {
+    const shape = genShape(rng, 1, 4);
+    const data = genData(rng, shape);
+    const rank = shape.length;
+    const positiveAxis = rng.nextInt(0, rank - 1);
+    const axis = rng.nextBool() ? positiveAxis - rank : positiveAxis;
+    const keepdims = rng.nextBool();
+
+    test(`resident argmax_axis case ${c}: shape=[${shape.join(",")}] axis=${axis} keepdims=${keepdims}`, () => {
+      const a = WNDArray.fromArray(core, shape, Array.from(data));
+      try {
+        assertArgmaxMatches(a, axis, keepdims, `resident argmax_axis case ${c} shape=[${shape.join(",")}] axis=${axis} keepdims=${keepdims}`);
+      } finally {
+        a.dispose();
+      }
+    });
+  }
+}
+
+// --- argmax on VIEWS (Arbeitsregel 12 / spec D7: the FOUR view classes) ---
+// The interesting receiver for a resident op is the non-contiguous one, and
+// for `argmax` specifically it is load-bearing beyond coverage: the returned
+// index must be the index into the VIEW's logical row-major flattening, which
+// on a transposed/sliced receiver genuinely differs from the memory offset
+// (kernel doc, crates/core/src/kernels/argmax.rs). A memory-order bug would
+// pass every contiguous case above and fail here.
+
+// transpose view: [3,4] -> T [4,3]
+for (const axis of [0, 1, undefined] as const) {
+  for (const keepdims of [true, false] as const) {
+    test(`resident argmax on transpose view: [3,4]^T axis=${axis} keepdims=${keepdims}`, () => {
+      const w = WNDArray.fromArray(core, [3, 4], [5, 2, 9, 1, 7, 3, 0, 8, 4, 6, 11, 10]);
+      try {
+        const view = w.transpose(); // O(1) view, reversed strides
+        try {
+          const ctx = `resident argmax transpose view axis=${axis} keepdims=${keepdims}`;
+          assertArgmaxMatches(view, axis, keepdims, ctx);
+          assertArgmaxNiladicMatches(view, `${ctx} (niladic)`);
+        } finally {
+          view.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}
+
+// sliced view (step slice, non-natural strides, offset 0): [4,3] -> rows
+// {0,2} via step 2 -> [2,3].
+for (const axis of [0, 1, undefined] as const) {
+  for (const keepdims of [true, false] as const) {
+    test(`resident argmax on sliced view (step): [4,3] step 2 axis=${axis} keepdims=${keepdims}`, () => {
+      const baseData = [3, 14, 1, 5, 9, 2, 6, 53, 5, 8, 97, 9];
+      const w = WNDArray.fromArray(core, [4, 3], baseData);
+      try {
+        const view = w.slice({ step: 2 }, null); // O(1) view, non-natural strides
+        try {
+          const ctx = `resident argmax sliced view axis=${axis} keepdims=${keepdims}`;
+          assertArgmaxMatches(view, axis, keepdims, ctx);
+          assertArgmaxNiladicMatches(view, `${ctx} (niladic)`);
+        } finally {
+          view.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}
+
+// offset window (nonzero offset, natural strides): [5,3] -> rows 2.. -> [3,3], offset 6.
+for (const axis of [0, -1, undefined] as const) {
+  for (const keepdims of [true, false] as const) {
+    test(`resident argmax on offset window: [5,3] rows 2.. axis=${axis} keepdims=${keepdims}`, () => {
+      const baseData = Array.from({ length: 15 }, (_, i) => ((i * 7) % 13) - 6);
+      const w = WNDArray.fromArray(core, [5, 3], baseData);
+      try {
+        const view = w.slice({ start: 2 }); // O(1) view, offset 6, natural strides
+        try {
+          const ctx = `resident argmax offset window axis=${axis} keepdims=${keepdims}`;
+          assertArgmaxMatches(view, axis, keepdims, ctx);
+          assertArgmaxNiladicMatches(view, `${ctx} (niladic)`);
+        } finally {
+          view.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}
+
+// composed view: [2,3,4] -> transpose [4,3,2] -> slice rows 1.. of axis 1 ->
+// [4,2,2], non-natural strides AND nonzero offset.
+for (const axis of [0, 1, 2, undefined] as const) {
+  for (const keepdims of [true, false] as const) {
+    test(`resident argmax on composed transpose+slice view: [2,3,4]^T sliced axis=${axis} keepdims=${keepdims}`, () => {
+      const baseData = Array.from({ length: 24 }, (_, i) => ((i * 11) % 23) - 11);
+      const w = WNDArray.fromArray(core, [2, 3, 4], baseData);
+      try {
+        const t = w.transpose();
+        try {
+          const view = t.slice(null, { start: 1 }, null);
+          try {
+            const ctx = `resident argmax composed view axis=${axis} keepdims=${keepdims}`;
+            assertArgmaxMatches(view, axis, keepdims, ctx);
+            assertArgmaxNiladicMatches(view, `${ctx} (niladic)`);
+          } finally {
+            view.dispose();
+          }
+        } finally {
+          t.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}
+
+// --- special-value raster (spec D7): NaN / +-0 / +-Inf / subnormals through
+// the same receiver classes. `argmax`'s total order is defined ON these
+// values (NaN maximal, ties by first index), so this block is load-bearing
+// for M1, not decoration.
+{
+  const rng = makeRng(0x414d41585f535056n); // "AMAX_SPV"
+  const SHAPES: readonly (readonly number[])[] = [[], [1], [7], [2, 3], [3, 4], [2, 3, 4], [2, 2, 2, 2]];
+  for (let c = 0; c < 60; c++) {
+    const shape = [...(SHAPES[c % SHAPES.length] ?? [3])];
+    const data = genDataSpecial(rng, shape);
+    const asView = rng.nextBool() && shape.length >= 2;
+    const rank = shape.length;
+    const useAxis = rank > 0 && rng.nextBool();
+    const positiveAxis = rank > 0 ? rng.nextInt(0, rank - 1) : 0;
+    const axis = useAxis ? (rng.nextBool() ? positiveAxis - rank : positiveAxis) : undefined;
+    const keepdims = rng.nextBool();
+
+    test(`resident argmax special values case ${c}: shape=[${shape.join(",")}] view=${asView} axis=${axis} keepdims=${keepdims}`, () => {
+      const ctx = `resident argmax special case ${c} shape=[${shape.join(",")}] view=${asView} axis=${axis} keepdims=${keepdims}`;
+      if (!asView) {
+        const a = WNDArray.fromArray(core, shape, data);
+        try {
+          assertArgmaxMatches(a, axis, keepdims, ctx);
+          assertArgmaxNiladicMatches(a, `${ctx} (niladic)`);
+        } finally {
+          a.dispose();
+        }
+        return;
+      }
+      // Transposed VIEW whose logical shape/content is exactly shape/data
+      // (the involution trick threaded.test.ts/blocked.test.ts use).
+      const baseShape = [...shape].reverse();
+      const baseData = transposeRuntime(shape, data).data;
+      const base = WNDArray.fromArray(core, baseShape, baseData);
+      try {
+        const view = base.transpose();
+        try {
+          assertArgmaxMatches(view, axis, keepdims, ctx);
+          assertArgmaxNiladicMatches(view, `${ctx} (niladic)`);
+        } finally {
+          view.dispose();
+        }
+      } finally {
+        base.dispose();
+      }
+    });
+  }
+}
+
+/** Reads a raw 64-bit element straight out of a `Float64Array`'s own backing
+ * buffer with no intermediate array-literal construction — the
+ * payload-preserving read `argmax-topk.test.ts` had to introduce after
+ * bisecting a V8 JIT canonicalization quirk in `bitsOf`'s
+ * `new Float64Array([x])` round trip. */
+function bitsAtBuf(buffer: ArrayBufferLike, byteOffset: number, i: number): bigint {
+  return new DataView(buffer, byteOffset + i * 8, 8).getBigUint64(0, true);
+}
+
+test("resident argmax: a NON-CANONICAL NaN payload still counts as maximal (M1 special-value edge)", () => {
+  // Build the NaN DIRECTLY in the backing buffer, never via an array literal.
+  const data = new Float64Array(5);
+  data[0] = 1;
+  data[2] = 1e308;
+  data[3] = Number.POSITIVE_INFINITY;
+  data[4] = -7;
+  new DataView(data.buffer).setBigUint64(1 * 8, 0x7ff8_0000_cafe_baben, true);
+  assert.ok(Number.isNaN(data[1] ?? 0), "precondition: the constructed element must actually be NaN");
+  assert.notStrictEqual(bitsAtBuf(data.buffer, 0, 1), 0x7ff8_0000_0000_0000n, "precondition: payload must be non-canonical for this test to mean anything");
+
+  const shape: number[] = [5];
+  const w = WNDArray.fromArray(core, shape, data); // Float64Array source -> memcpy, payload preserved
+  try {
+    // The payload really made it into WASM memory unchanged (not merely into
+    // a JS copy) — read straight from the core's linear memory.
+    const d = w.describe();
+    assert.strictEqual(bitsAtBuf(core.memory.buffer, d.ptr, 1), 0x7ff8_0000_cafe_baben, "the non-canonical payload must survive the copy INTO wasm memory");
+
+    assert.strictEqual(w.argmax(), 1, "a non-canonical NaN must still beat +Infinity (NaN is maximal)");
+    assert.strictEqual(w.argmax(), argmaxRuntime(shape, data, undefined).data[0], "cross-surface: same answer as argmaxRuntime");
+  } finally {
+    w.dispose();
+  }
+});
+
+// --- rank 0, size-0 output, and the two empty-reduction throws ------------
+
+test("resident argmax: rank 0 (a lone element) answers 0 in every form", () => {
+  const shape: number[] = [];
+  const w = WNDArray.fromArray(core, shape, [42]);
+  try {
+    assert.strictEqual(w.argmax(), 0, "niladic");
+    const full = w.argmax(undefined);
+    try {
+      assertShapeEqual([], full.shape as readonly number[], "rank-0 full reduction shape");
+      assert.deepStrictEqual(Array.from(full.toArray()), [0], "rank-0 full reduction data");
+    } finally {
+      full.dispose();
+    }
+    const kept = w.argmax(undefined, true);
+    try {
+      assertShapeEqual([], kept.shape as readonly number[], "rank-0 keepdims shape (rank 0 has no axes to keep)");
+    } finally {
+      kept.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+test("resident argmax: a size-0 OUTPUT is valid, never a throw ([0,3] along axis 1 -> empty [0])", () => {
+  const shape: number[] = [0, 3];
+  const w = WNDArray.fromArray(core, shape, []);
+  try {
+    const got = w.argmax(1);
+    try {
+      assertShapeEqual([0], got.shape as readonly number[], "size-0 output shape");
+      assert.strictEqual(got.toArray().length, 0, "size-0 output must be empty");
+      // Cross-surface: the naive surface agrees, shape and emptiness alike.
+      const nd = NDArray.fromArray(shape, []).argmax(1);
+      assertShapeEqual(nd.shape, got.shape as readonly number[], "size-0 output shape must match NDArray.argmax");
+      assert.strictEqual(nd.data.length, 0, "NDArray size-0 output must be empty too");
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+test("resident argmax: an empty full reduction throws, in BOTH full-reduction forms", () => {
+  const shape: number[] = [0];
+  const w = WNDArray.fromArray(core, shape, []);
+  try {
+    assert.throws(() => w.argmax(), /argmax: attempt to get argmax of an empty array/);
+    assert.throws(() => w.argmax(undefined), /argmax: attempt to get argmax of an empty array/);
+    assert.throws(() => w.argmax(undefined, true), /argmax: attempt to get argmax of an empty array/);
+  } finally {
+    w.dispose();
+  }
+});
+
+test("resident argmax: a zero-length AXIS throws (unlike sum/mean, which are well-defined there)", () => {
+  const shape: number[] = [2, 0, 3];
+  const w = WNDArray.fromArray(core, shape, []);
+  try {
+    assert.throws(() => w.argmax(1), /argmax: attempt to get argmax of an empty array/);
+    assert.throws(() => w.argmax(-2), /argmax: attempt to get argmax of an empty array/);
+    // Sanity that this really is argmax-specific: `sum` over the same axis is fine.
+    const summed = w.sum(1);
+    try {
+      assertShapeEqual([2, 3], summed.shape as readonly number[], "sum over the same size-0 axis stays well-defined");
+    } finally {
+      summed.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+// --- cross-surface MESSAGE parity, word-for-word (T4, M3) -----------------
+// Same technique as the item/stack stem tests above: a plain, non-`const`
+// shape variable widens past the compile-time guard so the call actually
+// reaches the runtime throw under test.
+
+test("cross-surface message parity: argmax empty-array stem (full reduction), word-for-word (T4, M3)", () => {
+  const shape: number[] = [0];
+  const nd = NDArray.fromArray(shape, []);
+  const wnd = WNDArray.fromArray(core, shape, []);
+  try {
+    const ndMsg = throwMessage(() => nd.argmax());
+    const wndMsg = throwMessage(() => wnd.argmax());
+    assert.strictEqual(ndMsg, "argmax: attempt to get argmax of an empty array", "sanity: exact expected wording");
+    assert.strictEqual(wndMsg, ndMsg, "argmax empty-array stem must be word-for-word identical across surfaces");
+  } finally {
+    wnd.dispose();
+  }
+});
+
+test("cross-surface message parity: argmax empty-array stem (zero-length axis), word-for-word (T4, M3)", () => {
+  const shape: number[] = [2, 0, 3];
+  const nd = NDArray.fromArray(shape, []);
+  const wnd = WNDArray.fromArray(core, shape, []);
+  try {
+    const ndMsg = throwMessage(() => nd.argmax(1));
+    const wndMsg = throwMessage(() => wnd.argmax(1));
+    assert.strictEqual(ndMsg, "argmax: attempt to get argmax of an empty array", "sanity: exact expected wording");
+    assert.strictEqual(wndMsg, ndMsg, "argmax zero-length-axis stem must be word-for-word identical across surfaces");
+  } finally {
+    wnd.dispose();
+  }
+});
+
+test("cross-surface message parity: argmax out-of-range axis stem, word-for-word (T4, M3)", () => {
+  const shape: number[] = [2, 3];
+  const nd = NDArray.fromArray(shape, [1, 2, 3, 4, 5, 6]);
+  const wnd = WNDArray.fromArray(core, shape, [1, 2, 3, 4, 5, 6]);
+  try {
+    const ndMsg = throwMessage(() => nd.argmax(5));
+    const wndMsg = throwMessage(() => wnd.argmax(5));
+    assert.strictEqual(ndMsg, "reduce: axis 5 is out of range for shape [2,3] (rank 2)", "sanity: exact expected wording");
+    assert.strictEqual(wndMsg, ndMsg, "argmax out-of-range-axis stem must be word-for-word identical across surfaces");
+    // The negative-axis normalization is shared too.
+    assert.strictEqual(throwMessage(() => wnd.argmax(-3)), throwMessage(() => nd.argmax(-3)), "negative out-of-range axis stem must match too");
+  } finally {
+    wnd.dispose();
+  }
+});
+
+// --- D1(3): oracle-FREE cross-surface SHAPE pin ---------------------------
+// No `keepDimsShape`, no `argmaxRuntime` — just "the two surfaces agree".
+// Blind to a SHARED `keepDimsShape` bug by construction; the structural
+// invariants above and the existing `keepdims.test.ts` pins cover that.
+{
+  const rng = makeRng(0x414d41585f584653n); // "AMAX_XFS"
+  for (let c = 0; c < 24; c++) {
+    const shape = genShape(rng, 1, 4);
+    const data = genData(rng, shape);
+    const rank = shape.length;
+    const positiveAxis = rng.nextInt(0, rank - 1);
+    const axis = rng.nextBool() ? positiveAxis - rank : positiveAxis;
+    const keepdims = rng.nextBool();
+
+    test(`cross-surface shape pin (oracle-free) case ${c}: shape=[${shape.join(",")}] axis=${axis} keepdims=${keepdims}`, () => {
+      const nd = NDArray.fromArray(shape, data).argmax(axis, keepdims);
+      const w = WNDArray.fromArray(core, shape, Array.from(data));
+      try {
+        const got = w.argmax(axis, keepdims);
+        try {
+          assert.deepStrictEqual(
+            [...(got.shape as readonly number[])],
+            [...nd.shape],
+            `argmax shape must be identical across surfaces (shape=[${shape.join(",")}] axis=${axis} keepdims=${keepdims})`,
+          );
+          assert.deepStrictEqual(Array.from(got.toArray()), Array.from(nd.data), "…and so must the indices");
+        } finally {
+          got.dispose();
+        }
+      } finally {
+        w.dispose();
+      }
+    });
+  }
+}
+
+// =============================================================================
+// D7 (Verify-Runde addendum, docs/wasm-parity-argmax-spec.md): a call large
+// enough to actually trigger `memory.grow` STRICTLY DURING `argmax(0)` —
+// not during the preceding `fromArray()`. Baustein B built this case itself
+// against the real artifact ([4, 2000000], growth confirmed to happen
+// during the argmax(0) call, not before) and measured 0/2,000,000
+// deviations: the "never cache memory.buffer or its views" discipline
+// (project house rule; shared memory fails SILENTLY on a stale reference —
+// wrong length, no detach) held, but there was no committed regression test
+// for it, despite `stack` already having one (above, "a large call that
+// actually triggers memory.grow mid-loop…"). This is the same regression
+// class, re-dimensioned much smaller for speed while preserving the exact
+// distinguishing property.
+//
+// Uses its OWN fresh core (not this file's shared `core`) so the result is
+// deterministic regardless of how much the shared core has already grown
+// from earlier tests in this file. A disposable "prime" allocation is made
+// first to establish a small, page-exact free block that the real input
+// then reuses (proving fromArray needs no growth); disposing it does NOT
+// shrink `core.memory.buffer` (WASM memory only ever grows), so the freed
+// block remains reusable capacity. `argmax(0)`'s own scratch + output
+// allocations then need MORE than what's left, forcing a fresh grow. Sizes
+// verified empirically against the real artifact (throwaway probe script,
+// not committed) to reproduce this before/after signature deterministically
+// across repeated runs, with headroom inside the verified working range
+// (a prime/input ratio of 1.0005-1.10 all reproduced identically) rather
+// than sitting at its edge.
+// =============================================================================
+
+test("argmax(axis): a call large enough to trigger memory.grow STRICTLY DURING the call (not during the preceding fromArray) stays correct (D7 Verify-Runde addendum)", async () => {
+  const freshCore = await initCore();
+
+  // Prime: allocate-then-free a buffer bigger than the real input, to leave
+  // an exactly-reusable free block behind.
+  const primeElems = 205000;
+  const prime = WNDArray.fromArray(freshCore, [primeElems], new Float64Array(primeElems));
+  prime.dispose();
+
+  const rows = 2;
+  const cols = 100000;
+  const n = rows * cols;
+  const inputData = new Float64Array(n);
+  for (let i = 0; i < n; i++) inputData[i] = ((i * 37) % 997) - 500; // real varied signed values
+
+  const beforeFrom = freshCore.memory.buffer.byteLength;
+  const a = WNDArray.fromArray(freshCore, [rows, cols], inputData);
+  const afterFrom = freshCore.memory.buffer.byteLength;
+  assert.strictEqual(
+    afterFrom,
+    beforeFrom,
+    `precondition: fromArray() must NOT need to grow memory here (before=${beforeFrom}, after=${afterFrom}) — ` +
+      `otherwise this case would not isolate argmax's OWN growth from the receiver's`,
+  );
+
+  try {
+    const beforeArgmax = freshCore.memory.buffer.byteLength;
+    const got = a.argmax(0);
+    const afterArgmax = freshCore.memory.buffer.byteLength;
+    try {
+      assert.notStrictEqual(
+        afterArgmax,
+        beforeArgmax,
+        `precondition: this case must actually trigger memory.grow STRICTLY DURING the argmax() call ` +
+          `(before=${beforeArgmax}, after=${afterArgmax}) — otherwise the regression class would not be exercised`,
+      );
+      const ref = argmaxRuntime([rows, cols], inputData, 0);
+      assertShapeEqual(ref.shape, got.shape as readonly number[], "argmax memory.grow case shape");
+      assertIndexBitsIdentical(
+        ref.data,
+        got.toArray(),
+        "argmax memory.grow case data — the result must reflect the POST-growth buffer, not a stale/detached reference cached across the grow",
+      );
+    } finally {
+      got.dispose();
+    }
+  } finally {
+    a.dispose();
+  }
+});
+
+// --- T4 / Arbeitsregel 2: real-tsc diagnostic pin for `WNDArray.argmax` ---
+// The house rule for overload sets is to pin the diagnostic's CONTENT, not
+// merely the existence of an error — and `argmax` is a three-overload set
+// whose guard-carrying candidate must be declared LAST to own the diagnostic.
+// The `@ts-expect-error` pins in `spike/tests/ndarray.test-d.ts` prove the
+// call is rejected; this proves WHERE (the axis argument's exact column) and
+// WITH WHAT WORDING, and that the three well-formed calls beside it resolve
+// cleanly. Runs the real compiler on a throwaway fixture OUTSIDE the repo, so
+// the deliberately-broken code never joins any type corpus (and costs the
+// `check:diag` pins nothing). Mirrors special-values.test.ts's own S1 probe.
+
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+test("diagnostic quality (T4, WASM parity S4): an out-of-range literal axis is rejected AT the axis argument, with the shape-naming reduce stem", () => {
+  const dir = mkdtempSync(join(tmpdir(), "numtype-argmax-diag-pin-"));
+  try {
+    const residentPath = fileURLToPath(new URL("../src/wasm/resident.ts", import.meta.url).href);
+    const ambientPath = fileURLToPath(new URL("../src/ambient.d.ts", import.meta.url).href);
+    const repoRoot = fileURLToPath(new URL("../..", import.meta.url).href);
+    // Line 3 is the ONLY bad call. `BAD_LINE`/`BAD_COL` are derived from the
+    // fixture text below, never hand-copied from an observed tsc run.
+    const badCall = `a.argmax(5); // deliberate: axis 5 is out of range for rank 3`;
+    const BAD_LINE = 3;
+    const BAD_COL = badCall.indexOf("5") + 1; // 1-based column of the axis argument
+    writeFileSync(
+      join(dir, "probe.ts"),
+      `import type { WNDArray } from ${JSON.stringify(residentPath)};\n` +
+        `declare const a: WNDArray<[2, 3, 4]>;\n` +
+        `${badCall}\n` +
+        `a.argmax(1, true);   // must stay clean\n` +
+        `a.argmax();          // niladic -> number, must stay clean\n` +
+        `a.argmax(undefined, true); // full reduction with keepdims, must stay clean\n`,
+    );
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "bundler",
+          noEmit: true,
+          allowImportingTsExtensions: true,
+          skipLibCheck: true,
+          noUncheckedIndexedAccess: true,
+          exactOptionalPropertyTypes: true,
+        },
+        include: ["probe.ts", ambientPath],
+      }),
+    );
+    const res = spawnSync("pnpm", ["exec", "tsc", "--noEmit", "-p", dir], { cwd: repoRoot, encoding: "utf8" });
+    const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
+    assert.notStrictEqual(res.status, 0, `fixture must fail to compile:\n${out}`);
+    const probeErrors = out.split("\n").filter((l) => l.includes("probe.ts(") && l.includes("error TS"));
+    assert.strictEqual(probeErrors.length, 1, `expected exactly ONE fixture error (the three well-formed argmax calls must resolve cleanly):\n${out}`);
+    assert.ok(
+      out.includes(`reduce: axis 5 is out of range for shape [2,3,4] (rank 3)`),
+      `the shape-naming reduce stem must survive overload resolution on WNDArray.argmax:\n${out}`,
+    );
+    // The rejection sits AT the axis ARGUMENT, not at the receiver or the call.
+    assert.ok(
+      (probeErrors[0] ?? "").includes(`probe.ts(${BAD_LINE},${BAD_COL})`),
+      `the error must be reported at line ${BAD_LINE}, column ${BAD_COL} (the axis argument itself):\n${probeErrors[0]}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

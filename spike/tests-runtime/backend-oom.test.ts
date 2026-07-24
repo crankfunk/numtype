@@ -122,6 +122,13 @@ function makeMockCore(failAtCall?: number): MockCore {
     nt_scalar_sub_strided: notImplemented("nt_scalar_sub_strided"),
     nt_scalar_mul_strided: notImplemented("nt_scalar_mul_strided"),
     nt_scalar_div_strided: notImplemented("nt_scalar_div_strided"),
+    // WASM parity S4 (docs/wasm-parity-argmax-spec.md): not used by
+    // backend.ts's v1 ops either (argmax only exists on the resident/threaded
+    // backends). Arbeitsregel 10: this literal is exhaustively structurally
+    // typed, so a missing stub fails `check:diag` with TS2739 while STILL
+    // printing a plausible `Instantiations:` line.
+    nt_argmax_all_strided: notImplemented("nt_argmax_all_strided"),
+    nt_argmax_axis_strided: notImplemented("nt_argmax_axis_strided"),
   };
 
   return { core, allocs, frees };
