@@ -452,6 +452,17 @@ it is part of the Definition of Done, not optional:
    Einzeiler + IST-Zahlen) und hängt ihr volles Narrativ an docs/projekt-log.md an — nie mehr
    als Absatz-Append in diese Datei. CLAUDE.md trägt Regeln + aktuellen Stand, das Log die
    Historie.
+   **Ergänzung 2026-07-24 (zweimal nachweislich verpasst, deshalb explizit):** Ändert eine
+   Scheibe, WO eine Op läuft (neue Fläche, neues Backend, Kernel dazu/weg), gehört die
+   **README** in dieselbe Liste — sie ist das einzige public-facing Dokument und macht
+   ausdrückliche Verfügbarkeits-Zusagen („TypeScript-runtime only, no WASM kernel yet"). Die
+   WASM-Paritäts-Kampagne hat diese Zusagen zweimal in Folge veralten lassen: Commit `755d9ac`
+   war der nachträgliche Fix für S0–S2, und S3 (`b34df0a`) ließ `stack`/`item` erneut als
+   „TypeScript-runtime only" stehen, obwohl beide resident laufen. Die interne Doku war beide
+   Male vollständig — die Regel selbst nannte die README nur nicht. Prüf-Kommando:
+   `grep -n "TypeScript-runtime only\|no WASM kernel" README.md`; die Behauptungen danach
+   EMPIRISCH gegen `spike/src/index.ts` verifizieren (ein Wegwerf-Skript im Scratchpad mit
+   absoluten Importen — relative lösen gegen das Skript-Verzeichnis auf), nicht nur lesen.
 
 ## Key TS limits to respect (researched on TS 5.x, sourced in docs/wettbewerbsanalyse-und-usp.md §4)
 

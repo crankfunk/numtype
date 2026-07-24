@@ -182,9 +182,10 @@ a.slice(9);                      // ❌ compile error: index 9 out of bounds for
 The five ops added in 0.2.0 all came from one place: the friction log of the RAG example below,
 built against 0.1.1. They shipped as TypeScript-runtime surface only (no WASM kernel), which is why
 they are shown here rather than in the bit-for-bit block above. Since then the WASM-resident twin
-has caught up for three of them — `sqrt`, the scalar overloads, and `mean` now run in WASM too, each
-proven bit-identical to the TypeScript reference by differential tests; `argmax`/`topk`, `stack` and
-`item` remain TypeScript-runtime only (see [What's implemented](#whats-implemented)):
+has caught up for all but two of them — `sqrt`, the scalar overloads, `mean`, `stack` and `item` now
+work on WASM-resident arrays too, each proven bit-identical to the TypeScript reference by
+differential tests; only `argmax`/`topk` remain TypeScript-runtime only (see
+[What's implemented](#whats-implemented)):
 
 ```ts
 const scores = NDArray.fromArray([4], [0.2, 0.9, 0.1, 0.7]);
@@ -332,16 +333,19 @@ bit-identical to the TypeScript reference by differential tests, on the threaded
 vectors — the `np.stack`/`np.array([...])` reflex, and a statically-shaped one: stacking two
 literal `[3]` rows infers `NDArray<[2, 3]>`, a mismatched row length is a compile error at the
 `rows` argument, and an array of unknown length degrades honestly to `NDArray<[number, D]>`.
-Same disclosed asymmetry as `argmax`/`topk` above: **TypeScript-runtime only, no WASM kernel yet**.
+Available on WASM-resident arrays too, via `backend("wasm").stack(rows)` (or the threaded backend's
+own copy) — **without a new kernel**: stacking is pure data movement, so it reuses the frozen
+`nt_materialize` gather once per row, writing each into its own slot of a single output buffer.
 
 **`x.item(...indices)`** is the direct scalar read — NumPy's own `x.item(i, j, ...)` — full
 indexing only (exactly one index per axis, rank 0 included: `x.item()` reads the sole element).
 A literal index provably out of bounds for its axis (NumPy-style negative indexing included) or
 a non-integer literal (`1.5`) is a compile error at that argument; a wrong number of indices for
 a statically-known rank is a native TypeScript arity error. No kernel at all here — `item` is a
-plain strided read, not an op with a kernel to write in the first place — so this one has no WASM
-counterpart to be asymmetric with (FOLLOWUPS tracks the eventual `WNDArray.item` for residency
-symmetry, not for correctness).
+plain strided read, not an op with a kernel to write in the first place. It works on WASM-resident
+arrays too: there it reads the single `f64` straight out of the core's linear memory (offset from
+the handle's own strides, so transposed and sliced views read correctly), which means no WASM code
+executes for it at all — and it is still held to bit-identity with the TypeScript reference.
 
 For the full per-phase specifications, results, and the competitive analysis, start at the
 [research-notes reading guide](docs/README.md) (curated entry points by interest) or the
