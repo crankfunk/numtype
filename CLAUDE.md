@@ -195,9 +195,12 @@ echten Datenwerten durch einen neuen Kernel; byte-exakt bewiesen (zwei nicht-kan
 Muster, contiguous + gestridet + threaded + cargo). check:diag **237.379 @ 140** (Δ+7.551
 gegen ≤+8.000, **nur 449 Marge** — engster Stand der Kampagne), null Order-Noise.
 **Kostenbefund, dreifach unabhängig bestätigt:** der Treiber ist NICHT `topk` (+130), sondern
-der Vier-View-Klassen-Block mit **+3.926** (52 % der Scheibe), getrieben von
-literal-argumentigen `.slice()`-Aufrufstellen, die je die volle `SliceSpecsGuard`-Maschinerie
-zahlen — FOLLOWUPS-Hebel für künftige Arbeitsregel-12-Blöcke.
+der Vier-View-Klassen-Block mit **+3.926** (52 % der Scheibe). **Zuschreibung 2026-07-25
+korrigiert** (Gegenprüfung am zweiten Korpus, docs/slice-literal-budget-ergebnisse.md): davon
+sind **2.232 = 57 %** slice-getrieben, der Rest sind gewöhnliche Testinhalts-Kosten; und die
+Blockkosten sind KEINE Eigenschaft der Blockklasse — der strukturell identische S4/argmax-
+View-Block kostet nur 734 (Faktor 5,3). Die frühere Formulierung „getrieben von
+literal-argumentigen `.slice()`-Aufrufstellen" überzeichnete beides.
 **Zwei Prozess-Lehren, wertvoller als die Optimierung selbst:** (1) Die informelle Vorab-Sondage
 lag um mehr als eine Größenordnung daneben (0,60 gegen gemessene 1,050 bei `k = n`; bei `k = n/2`
 sogar mit falschem Vorzeichen) — live nachgestellt, Ursachen im Sondage-Quelltext belegt
@@ -291,12 +294,14 @@ Session-Zustand).
   in vier Stufen dekomponiert: ① CoreExports-Member + beide Mock-Stubs **Δ0** (fünfte
   Bestätigung des S0/D10-Gewinns), ② `WNDArray.topk` +130, ③ Test-Anhänge +6,958,
   ④ Typ-Pins +463. **Der Kostentreiber ist NICHT die Op** (+130), sondern der
-  Vier-View-Klassen-Block mit **+3,926** = 52 % der Scheibe — getrieben von
-  literal-argumentigen `.slice()`-Aufrufstellen, die je die volle `SliceSpecsGuard`/
-  `SliceShape`-Maschinerie zahlen; dreifach unabhängig durch Ausbau des Blocks gemessen
-  (Implementierer, Baustein A, Baustein B — alle exakt 233,453 @ 140 ohne ihn). Für
-  Laufzeittests kauft ein literales Slice-Spec nichts → FOLLOWUPS-Hebel.
-  Details docs/wasm-parity-topk-ergebnisse.md. **Vorheriger Stand: 229,828 @ 140** (seit
+  Vier-View-Klassen-Block mit **+3,926** = 52 % der Scheibe; dreifach unabhängig durch Ausbau
+  des Blocks gemessen (Implementierer, Baustein A, Baustein B — alle exakt 233,453 @ 140 ohne
+  ihn), 2026-07-25 ein viertes Mal reproduziert. **Die ZUSCHREIBUNG war überzeichnet und ist
+  korrigiert:** slice-getrieben sind davon 2,232 (57 %), nicht der volle Betrag, und der
+  strukturell identische S4/argmax-View-Block kostet nur 734 — die Zahl ist ein Ausreißer,
+  keine Eigenschaft der Blockklasse. Für Laufzeittests kauft ein literales Slice-Spec
+  weiterhin nichts (bestätigt: null Typ-Ebenen-Assertionen in den betroffenen Dateien).
+  Details docs/wasm-parity-topk-ergebnisse.md + docs/slice-literal-budget-ergebnisse.md. **Vorheriger Stand: 229,828 @ 140** (seit
   WASM-Parität S4/argmax 2026-07-24, von 226,690 @ 140 — **Δ+3,138**, Dateiset unverändert 140 (kein neues File, **null
   Order-Noise**), in fünf Stufen dekomponiert: ① CoreExports-Member + beide Mock-Stubs **Δ0**
   (dritte Bestätigung des S0/D10-Gewinns: ein neuer Member kostet +0 statt +7, nach n=4 in S1 und

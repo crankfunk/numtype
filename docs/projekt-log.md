@@ -986,6 +986,11 @@ ganzen Scheibe. Getrieben nicht von der Op, sondern von den literal-argumentigen
 zahlen. Für Laufzeittests kauft ein literales Slice-Spec nichts. Die Zahl ist dreifach
 unabhängig durch Ausbau des Blocks bestätigt (Implementierer, Baustein A, Baustein B — alle
 exakt 233.453 @ 140 ohne ihn) und wird als Hausregel-Kandidat weitergetragen.
+> **Korrektur 2026-07-25 (Gegenprüfung am zweiten Korpus):** der Betrag +3.926 hält (ein
+> viertes Mal reproduziert), die beiden Schlussfolgerungen dieses Absatzes nicht. Nur 2.232
+> davon (57 %) sind slice-getrieben, und der strukturell identische S4/argmax-View-Block
+> kostet lediglich 734 — die Zahl ist ein Ausreißer, keine Eigenschaft der Blockklasse.
+> Details im eigenen Abschnitt weiter unten und in docs/slice-literal-budget-ergebnisse.md.
 
 **Baustein B fand einen Testkommentar, der mehr behauptete als sein Test beweist** — zum
 dritten Mal in dieser Kampagne dieselbe Klasse. Der cargo-Test zum zweiten ABI-Regionscheck

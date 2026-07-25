@@ -416,3 +416,37 @@ laufende CI-`freeze`-Job, dessen Plattform-Unabhängigkeit bis dahin ein unbemer
 Nebeneffekt war und sich hier als load-bearing erwies. Und: dass ein Prüfskript einen
 bequemen Ausweg anbietet („neuer Plattform-Pin"), heißt nicht, dass er hier gemeint ist —
 wo eine Plattform vorher identisch baute, ist die Abweichung ein Befund und kein Pin-Anlass.
+
+## Nachtrag 2: die Zuschreibung des Kostenbefunds war überzeichnet (2026-07-25)
+
+Der Kostenbefund oben (Abschnitt „Pin-Protokoll (D8) — und der eigentliche Kostenbefund")
+wurde am zweiten Korpus gegengeprüft, bevor daraus eine Hausregel wurde. Der **Betrag** hält:
+der Ausbau des Vier-View-Klassen-Blocks ergibt ein viertes Mal exakt **233.453 @ 140**,
+also +3.926. Zwei **Schlussfolgerungen** daraus halten nicht.
+
+**Erstens: die Slices sind nicht der ganze Treiber.** Werden nur die fünf `.slice()`-Specs
+des Blocks gewidet (statt den Block auszubauen), sinkt der Zähler auf 235.147 — das sind
+**2.232 = 57 %** der Blockkosten. Die restlichen 1.694 sind gewöhnliche Testinhalts-Kosten.
+Die Formulierung „getrieben von literal-argumentigen `.slice()`-Aufrufstellen" las sich, als
+sei der volle Betrag slice-getrieben.
+
+**Zweitens: der Befund verallgemeinert nicht auf die Blockklasse.** Der S4/argmax-View-Block
+ist der strukturelle Zwilling — gleiche Länge, dieselben vier View-Klassen, dieselben drei
+Slice-Formen — und kostet ausgebaut nur **734** (236.645 @ 140), Faktor 5,3 weniger. Warum,
+ist **ungeklärt**; die zwei rank-1-Stellen des S5-Blocks tragen zusammen 1.881 und sind damit
+die teuersten, ein Mechanismus dafür ist nicht bewiesen.
+
+**Drittens, und das erklärt den Abschnitt „Eine Zahl bleibt ungeklärt" oben nachträglich:**
+die Kosten sind stark **super-additiv**. Drei View-Blöcke einzeln gewidet ergeben 549 + 579 +
+549, zusammen aber **3.034**; alle 32 betroffenen Stellen über sieben Dateien zusammen
+**11.751**, gegen eine Teilsummen-Erwartung von rund 8.500. Eine einzelne Stelle allein
+gewidet kann den Zähler sogar **erhöhen** (Site 2087: +207, zweimal reproduziert). Das ist
+derselbe Fresh-vs-Cached-Partitionsmechanismus, den die Mess-Regeln bisher nur für
+Order-Noise beim Hinzufügen von Dateien beschrieben — hier tritt er **innerhalb eines fixen
+File-Sets** auf. Die oben dokumentierte Streuung ≈95–149 für „die Kosten einer Aufrufstelle"
+war deshalb kein Messfehler, sondern die korrekte Beobachtung, dass eine solche Zahl gar
+nicht existiert.
+
+**Folge für die abgeleitete Marge:** die FOLLOWUPS-Notiz „hätte die Gate-Marge von 449 auf
+≈4.400 gehoben" verwechselte Ausbau mit Widen. Richtig: 7.551 − 2.232 = 5.319, Marge
+**≈2.681**. Alle Zahlen und das Messprotokoll: `docs/slice-literal-budget-ergebnisse.md`.
