@@ -241,8 +241,10 @@ Session-Zustand).
 ## Aktuelle Pins & Gates (IST-Zahlen; Historie im Projekt-Log)
 
 - **Artefakt-Hash** (Clean-Rebuild, SHA256 von `spike/src/wasm/numtype_core.wasm`):
-  `146afdf629694318a5dcca87c5bb980ae6280e875ae5d9b5ddef045a00c0c324` — **NEU seit WASM-Parität
-  S5/topk 2026-07-25**, von `eba6ba7a…`. Der neue `nt_topk_strided`-Kernel ändert den Hash
+  `2a54d9fdba55e4e88a9d54cb3b01e111c2717abf13017f778b90accd5cff87e4` — **NEU seit WASM-Parität
+  S5/topk 2026-07-25**, von `eba6ba7a…`. Zwischenstand `146afdf6…` war nur wenige Stunden gepinnt
+  und ist zurückgezogen — er stammte aus einer Fassung mit `slice::sort_by`, die einen unmapped
+  Toolchain-Pfad ins Artefakt einbettete (s. Arbeitsregel 14). Der neue `nt_topk_strided`-Kernel ändert den Hash
   legitim; additive-only-Dekomposition (neues File `kernels/topk.rs`, EIN abi.rs-Anhang strikt
   ans tatsächliche Dateiende — nach dem Testmodul `mod s4_argmax_abi_tests`, nicht nach der
   letzten realen Funktion; ein `kernels/mod.rs`-Anhang; `shape.rs`/`matmul_blocked.rs`/`sum.rs`/
@@ -491,6 +493,24 @@ Session-Zustand).
   einer Session passiert). Die Befunde existieren dann, sind aber unberichtet. Entweder den Lauf
   selbst im Haupt-Loop überwachen oder den Agenten per SendMessage gezielt zum Nachbericht
   auffordern — nie annehmen, dass ein gestarteter Lauf auch dokumentiert wurde.
+- **Arbeitsregel 14 (aus dem S5-Abschluss, 2026-07-25 — CI-Fund, lokal unsichtbar):** **Ein neu
+  benutztes std-GENERIKUM kann Host-Pfade ins WASM-Artefakt einschleppen und die
+  cross-host-Byte-Identität brechen.** `topk` benutzte als erste Stelle im ganzen Crate
+  `slice::sort_by`; damit landeten die Panic-Sites von Rusts Sortier-Maschinerie im Binary, und
+  eine davon (`core/src/slice/sort/stable/quicksort.rs`) wurde NICHT auf `/rustc/<hash>/…`
+  remapped, sondern zeigte in den lokal installierten `rust-src`-Baum — inklusive Benutzername
+  und Host-Triple. Folge: Linux-CI baute deterministisch einen anderen Hash (zweimal
+  reproduziert), und `build:dist` hätte den Pfad in den npm-Tarball getragen. **Lokal war das
+  unsichtbar** — jeder Gate-Block war grün; gefunden hat es ausschließlich der cross-host
+  laufende CI-`freeze`-Job, dessen Plattform-Unabhängigkeit bis dahin ein unbemerkter
+  Nebeneffekt war. **Regel:** wer eine neue std-Abhängigkeit in den Kernel zieht (Sortierung,
+  Formatierung, Collections), prüft danach `strings -a <artefakt> | grep -E "/Users/|/home/|rustup"`
+  — erwartet ist LEER, zulässig sind nur remappte `/rustc/<hash>/…`-Pfade. Und: das Skript
+  `check-freeze-hash.mjs` bietet an, einen abweichenden Hash als „neuen Plattform-Pin"
+  aufzunehmen — das ist NUR für eine echte Erstplattform gedacht; wo eine Plattform vorher
+  identisch baute, ist die Abweichung ein Befund und kein Pin-Anlass. Fix hier: eigene
+  Heapsort-Sortierung statt `slice::sort_by` (O(k log k) erhalten, keine Extra-Allokation,
+  Artefakt −11,5 %); Stabilität war irrelevant, weil die Ordnung eine strikte Totalordnung ist.
 - **Arbeitsregeln aus der WASM-Parität-Kampagne (2026-07-23, gelten für S3–S5):** (10) **Jeder neue
   `CoreExports`-Member braucht einen `notImplemented(...)`-Stub in jedem EXHAUSTIV hand-getippten
   Mock — aber nicht in einem, der einen echten Core per Spread (`...real`) übernimmt** (der erbt

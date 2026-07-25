@@ -1027,3 +1027,47 @@ fünf Dogfooding-Ops; die README trägt keine „TypeScript-runtime only"-Ausnah
 gegen `spike/src/index.ts` verifiziert.
 
 Details: docs/wasm-parity-topk-spec.md v2, docs/wasm-parity-topk-ergebnisse.md.
+
+### Nachtrag zu S5: der CI-Fund, den kein lokales Gate sehen konnte (2026-07-25)
+
+Der committete Stand `6fc2d47` war in acht von neun CI-Jobs grün und rot auf `freeze` —
+lokal hatte jedes Gate gehalten. Die Ursache: `order.sort_by(...)` war der erste Gebrauch
+von `core::slice::sort` im ganzen Crate. Damit landeten erstmals die Panic-Sites von Rusts
+Sortier-Maschinerie im Artefakt, und eine davon war nicht auf `/rustc/<hash>/…` remapped,
+sondern zeigte in den lokal installierten `rust-src`-Baum — inklusive Benutzername und
+Host-Triple. Linux baute deshalb deterministisch einen anderen Hash (Rerun bestätigte
+denselben Wert), und `build:dist` hätte den Pfad in den npm-Tarball getragen.
+
+Vor jeder Entscheidung wurde geprüft statt angenommen, ob je etwas geleakt ist: das
+publizierte `numtype@0.2.0` frisch aus der Registry gezogen (null Treffer auf `/Users/`
+oder `rustup`, drin nur der remappte `/rustc/…/raw_vec/mod.rs`), und die gesamte
+git-Historie — es wurde nie ein `.wasm` committet, `.gitignore` greift, und `git grep` über
+`git rev-list --all` findet in keiner getrackten Datei einen Host-Pfad. Der Leak existierte
+ausschließlich in der lokalen Binärdatei.
+
+Die bequeme Auflösung wäre gewesen, den Linux-Hash als zweiten Plattform-Pin einzutragen —
+was `check-freeze-hash.mjs` in seiner Fehlermeldung sogar ausdrücklich anbietet. Das wäre
+falsch gewesen: der Hinweis ist für eine echte Erstplattform gedacht, hier baute Linux
+vorher nachweislich identisch, also war die Abweichung ein Befund und kein Pin-Anlass —
+und ein zweiter Pin hätte ein Artefakt festgeschrieben, das nicht reproduzierbar ist und
+einen Home-Pfad trägt.
+
+Stattdessen wurde die Ursache entfernt: ein selbst geschriebener In-Place-Heapsort auf dem
+ohnehin vorhandenen Max-Heap ersetzt die std-Sortierung. O(k log k) bleibt erhalten (eine
+Insertion Sort war ausdrücklich ausgeschlossen — bei `k = n`, einem getesteten Aufruf, wäre
+der Kernel quadratisch geworden), der temporäre Vec entfällt, das Artefakt schrumpft um
+11,5 %. Dass Heapsort instabil ist, spielt nachweislich keine Rolle — genau diese Scheibe
+hatte bewiesen, dass die Ordnung eine strikte Totalordnung auf paarweise verschiedenen
+Indizes ist, es also keine Gleichstände gibt, zwischen denen Stabilität entscheiden könnte.
+Der tragende Befund der Spec zahlte sich unmittelbar aus.
+
+Die Testinhalte wurden nicht angefasst — sie sind der Beweis und blieben unverändert grün.
+Der Mutanten-Beweis ist ungewöhnlich scharf: die Vergleichsrichtung in `sift_down` gedreht
+fällte unter anderem `topk_k_equals_n_is_the_whole_vector_sorted`, und bei `k = n` treten
+null Evictions auf — dieser Test durchläuft also ausschließlich den neuen Sortierpfad.
+
+Die Lehre steht als Arbeitsregel 14 in CLAUDE.md. Sie hat zwei Hälften: ein neu benutztes
+std-Generikum kann Host-Pfade einschleppen, und lokal ist das unsichtbar. Gefunden hat es
+ausschließlich der cross-host laufende CI-`freeze`-Job, dessen Plattform-Unabhängigkeit bis
+dahin ein unbemerkter Nebeneffekt war — hier erwies sie sich als load-bearing. Neuer
+Freeze-Pin `2a54d9fdba55e4e88a9d54cb3b01e111c2717abf13017f778b90accd5cff87e4`.

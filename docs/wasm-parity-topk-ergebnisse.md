@@ -342,3 +342,77 @@ Entscheidung steht hier, statt still getroffen zu werden.
 Skalar-Overloads, `mean`, `item`, `stack`, `argmax`, `topk`. Die README trägt keine
 „TypeScript-runtime only"-Ausnahme mehr — empirisch gegen `spike/src/index.ts` verifiziert,
 nicht nur gelesen.
+
+## Nachtrag: der CI-Fund nach dem Commit (2026-07-25)
+
+Der erste CI-Lauf des committeten Stands `6fc2d47` war in **acht von neun Jobs** grün und
+**rot auf `freeze`** — lokal war alles grün gewesen. Der Befund gehört hierher, weil er die
+Scheibe inhaltlich korrigiert hat.
+
+**Ursache, belegt:** `order.sort_by(...)` war der **erste Gebrauch von `core::slice::sort`
+im gesamten Crate** (per Grep über `crates/core/src/` verifiziert — jeder andere Kernel,
+auch `argmax` und `matmul`, nutzt ausschließlich Handschleifen). Damit landeten erstmals die
+Panic-Sites von Rusts Sortier-Maschinerie im Artefakt. Panic-Sites tragen ihren
+Quelldateipfad als String im Binary; zwei davon waren sauber auf `/rustc/<commit-hash>/…`
+remapped, **einer nicht**:
+
+```
+/Users/marvinmuegge/.rustup/toolchains/1.95.0-aarch64-apple-darwin/…/slice/sort/stable/quicksort.rs
+```
+
+Auf Linux lautet derselbe Pfad `/home/runner/.rustup/toolchains/1.95.0-x86_64-unknown-linux-gnu/…`
+— andere Bytes, anderer Hash. Ein Rerun desselben Commits lieferte exakt denselben
+Linux-Hash: **deterministisch host-abhängig**, kein Build-Nichtdeterminismus.
+
+**Zwei Folgen, beide real:** (1) die cross-host-Byte-Identität war gebrochen, die für alle
+vorherigen Kernel galt und in FOLLOWUPS als empirisch bestätigt dokumentiert war;
+(2) `build:dist` kopiert genau dieses Artefakt in den npm-Tarball — der Pfad inklusive
+Benutzername wäre mitveröffentlicht worden.
+
+**Was NICHT passiert ist, geprüft statt angenommen:** `numtype@0.2.0` frisch aus der
+Registry gezogen und durchsucht — **null** Treffer auf `/Users/` oder `rustup`, drin ist
+genau der eine remappte `/rustc/…/raw_vec/mod.rs`. Ebenso die gesamte git-Historie: es wurde
+**nie** ein `.wasm` committet (`git log --all --diff-filter=A -- '*.wasm'` ist leer,
+`.gitignore:9` greift), und `git grep` über `git rev-list --all` findet in keiner getrackten
+Datei einen Host-Pfad. Der Commit `6fc2d47` enthält nur Quelltext, Tests und Doku; die eine
+artefaktbezogene Zeile ist ein SHA-256, kein Pfad. Der Leak existierte ausschließlich in der
+lokalen Binärdatei.
+
+**Fix (Owner-entschieden): Ursache entfernen statt kaschieren.** Die naheliegende Abkürzung
+— den Linux-Hash als zweiten Plattform-Pin eintragen, was `check-freeze-hash.mjs` sogar
+ausdrücklich anbietet — hätte ein Artefakt festgeschrieben, das nicht reproduzierbar ist und
+einen Home-Pfad trägt. Stattdessen ersetzt ein **selbst geschriebener In-Place-Heapsort**
+die std-Sortierung:
+
+- Er läuft auf dem **bereits vorhandenen** Max-Heap der „Schlechtigkeit" und nutzt dessen
+  Sift-Down-Routine (in eine gemeinsame Funktion extrahiert, Verhalten unverändert).
+- **O(k log k) bleibt erhalten.** Eine Insertion Sort war ausdrücklich ausgeschlossen: bei
+  `k = n` — ein legitimer, getesteter Aufruf — wäre der Kernel quadratisch geworden.
+- Der temporäre `order`-Vec entfällt vollständig, **keine zusätzliche Allokation**.
+- **Dass Heapsort instabil ist, spielt nachweislich keine Rolle** — genau diese Scheibe hat
+  bewiesen, dass die Ordnung eine strikte Totalordnung auf paarweise verschiedenen Indizes
+  ist, es also gar keine Gleichstände gibt, zwischen denen Stabilität entscheiden könnte.
+  Der tragende Befund der Spec zahlt sich hier direkt aus.
+
+**Verifikation:** `grep` über `crates/core/src/` findet kein `sort_by`/`sort_unstable`/
+`.sort(` mehr (Exit 1) · `strings -a` auf dem Artefakt findet **null** Host-Pfade (Exit 1),
+übrig bleibt genau der remappte `/rustc/…/raw_vec/mod.rs` — **dasselbe Pfad-Profil wie das
+publizierte 0.2.0** · Artefakt **106.647 → 94.358 Bytes** (−11,5 %) · **die Testinhalte
+wurden nicht angefasst** und sind unverändert grün (cargo 222+1, test:resident 6122+2,
+test:threaded 139), inklusive Gleichstands-Raster, vier View-Klassen und NaN-Payload ·
+alle TS-seitigen Pins Δ0 (check:diag, stress, browser, bench:editor) · neuer Freeze-Pin
+`2a54d9fdba55e4e88a9d54cb3b01e111c2717abf13017f778b90accd5cff87e4`, doppelt clean-rebuilt.
+
+**Der Mutanten-Beweis ist ungewöhnlich scharf:** die Vergleichsrichtung in `sift_down`
+gedreht fällte 8 von 18 topk-cargo-Tests, darunter namentlich
+`topk_k_equals_n_is_the_whole_vector_sorted`. Bei `k = n` treten **null** Evictions auf (der
+Heap füllt sich exakt bis `size == k == n`, der Eviction-Zweig wird nie betreten) — dieser
+Test durchläuft also ausschließlich den **neuen** Sortierpfad. Sein Fehlschlag beweist, dass
+speziell die neue Sortierung nicht-vakuös getestet ist, nicht nur die Selektion darum herum.
+
+**Die eigentliche Lehre steht als Arbeitsregel 14 in CLAUDE.md:** lokal war der Fehler
+unsichtbar — jeder Gate-Block war grün. Gefunden hat ihn ausschließlich der cross-host
+laufende CI-`freeze`-Job, dessen Plattform-Unabhängigkeit bis dahin ein unbemerkter
+Nebeneffekt war und sich hier als load-bearing erwies. Und: dass ein Prüfskript einen
+bequemen Ausweg anbietet („neuer Plattform-Pin"), heißt nicht, dass er hier gemeint ist —
+wo eine Plattform vorher identisch baute, ist die Abweichung ein Befund und kein Pin-Anlass.

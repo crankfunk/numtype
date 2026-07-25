@@ -101,6 +101,35 @@ fn read_logical(data: &[f64], offset: u32, stride: u32, i: u32) -> f64 {
     data.get((offset + i * stride) as usize).copied().unwrap_or(0.0)
 }
 
+/// Sift the element at index `start` DOWN a max-heap-of-"badness" of length
+/// `heap_size` until the heap invariant — `cmp(parent, child) >= 0` for every
+/// parent/child pair, i.e. no child ever sorts BEFORE its parent — is
+/// restored. Shared by two call sites in `topk_strided`: the eviction step
+/// during selection (replacing the root with a better candidate,
+/// runtime.ts:739-756) and the final in-place heapsort below (the per-step
+/// re-heapify after swapping the root to the end of the shrinking heap) —
+/// same comparator, same shape, only the heap size at the call site differs.
+fn sift_down(heap_val: &mut [f64], heap_idx: &mut [u32], heap_size: usize, start: usize) {
+    let mut j = start;
+    loop {
+        let l = 2 * j + 1;
+        let r = 2 * j + 2;
+        let mut worst = j;
+        if l < heap_size && cmp(heap_val[l], heap_idx[l], heap_val[worst], heap_idx[worst]) > 0 {
+            worst = l;
+        }
+        if r < heap_size && cmp(heap_val[r], heap_idx[r], heap_val[worst], heap_idx[worst]) > 0 {
+            worst = r;
+        }
+        if worst == j {
+            break;
+        }
+        heap_val.swap(j, worst);
+        heap_idx.swap(j, worst);
+        j = worst;
+    }
+}
+
 /// Top-`k` values + indices of a rank-1 strided view, in the pinned total
 /// order (module doc). Returns `(values, indices)`; `indices` carries f64-
 /// encoded LOGICAL indices, because this library is f64-only throughout and
@@ -162,43 +191,39 @@ pub fn topk_strided(shape: &[u32], strides: &[u32], offset: u32, data: &[f64], k
             heap_val[0] = v;
             heap_idx[0] = i;
             // sift down (runtime.ts:739-756)
-            let mut j = 0usize;
-            loop {
-                let l = 2 * j + 1;
-                let r = 2 * j + 2;
-                let mut worst = j;
-                if l < size && cmp(heap_val[l], heap_idx[l], heap_val[worst], heap_idx[worst]) > 0 {
-                    worst = l;
-                }
-                if r < size && cmp(heap_val[r], heap_idx[r], heap_val[worst], heap_idx[worst]) > 0 {
-                    worst = r;
-                }
-                if worst == j {
-                    break;
-                }
-                heap_val.swap(j, worst);
-                heap_idx.swap(j, worst);
-                j = worst;
-            }
+            sift_down(&mut heap_val, &mut heap_idx, size, 0);
         }
     }
 
-    // Final O(k log k) sort of the held indices under the SAME order, with
-    // every value RE-READ from the view (never a cached heap value) — the
-    // transliteration of runtime.ts:776-781. `sort_by` is a comparison sort
-    // and the order is a strict total order on distinct indices, so its
-    // result is the unique correct one regardless of the algorithm it uses
-    // internally (module doc).
-    let mut order: Vec<u32> = heap_idx[..size].to_vec();
-    order.sort_by(|&ia, &ib| {
-        cmp(
-            read_logical(data, offset, stride, ia),
-            ia,
-            read_logical(data, offset, stride, ib),
-            ib,
-        )
-        .cmp(&0)
-    });
+    // Final O(k log k) sort of the held indices under the SAME order — a
+    // SELF-WRITTEN heapsort, never `core::slice::sort*` (that call would be
+    // this crate's first and only use of libcore's sort machinery, and one
+    // of ITS panic sites embeds an un-remapped host path — see the freeze-
+    // hash discipline in CLAUDE.md). `heap_val`/`heap_idx` are ALREADY a
+    // valid max-heap of "badness": `sift_down` above maintains the full heap
+    // invariant at EVERY level, not merely "root is worst" — so classic
+    // in-place heapsort applies directly. Repeatedly swap the root (the
+    // current worst remaining element under the shared total order) with the
+    // highest surviving index, shrink the heap by one, and `sift_down` the
+    // new root — reusing the exact routine the eviction step above already
+    // exercises and this file's tests already cover. Because the root always
+    // holds the worst remaining element, each swap permanently places it at
+    // the highest surviving index, so after the loop index `0` holds the
+    // BEST element (sorts first) and index `size - 1` holds the WORST (sorts
+    // last) — exactly the output order. O(k log k), zero extra allocation:
+    // `order` below is simply `heap_idx` itself, now sorted in place. The
+    // order is a strict total order on the pairwise-distinct indices (module
+    // doc), so this is the unique correct result regardless of which
+    // O(k log k) comparison sort produced it — heapsort's instability is
+    // immaterial (module doc, "Warum Stabilität hier egal ist").
+    let mut heap_size = size;
+    while heap_size > 1 {
+        heap_size -= 1;
+        heap_val.swap(0, heap_size);
+        heap_idx.swap(0, heap_size);
+        sift_down(&mut heap_val, &mut heap_idx, heap_size, 0);
+    }
+    let order = heap_idx;
 
     // `values[i]` is a PURE ELEMENT COPY out of the view — never a heap
     // value, never the result of any arithmetic (runtime.ts:785-789 does
