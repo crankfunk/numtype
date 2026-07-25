@@ -23,7 +23,7 @@ import { NDArray } from "../src/ndarray.ts";
 import { elementwiseBinary, itemRuntime, keepDimsShape, matmulRuntime, meanRuntime, stackRuntime, sumRuntime, transposeRuntime } from "../src/runtime.ts";
 import { initCore } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
-import { assertDataBitIdentical, assertShapeEqual, wideSpecs } from "./assert-helpers.ts";
+import { assertDataBitIdentical, assertShapeEqual, naturalStrides, wideSpecs } from "./assert-helpers.ts";
 import { genBroadcastShapes, genData, makeRng, type Rng } from "./prng.ts";
 
 const core = await initCore();
@@ -479,6 +479,9 @@ for (const axis of [0, 1, undefined] as const) {
       try {
         const view = w.transpose(); // O(1) view, reversed strides
         try {
+          assert.deepStrictEqual([...(view.shape as readonly number[])], [4, 3], `resident mean transpose view: precondition — view shape`);
+          assert.deepStrictEqual([...view.describe().strides], [1, 4], `resident mean transpose view: precondition — EXACT strides; this is what makes it the view class the test name claims`);
+          assert.strictEqual(view.describe().offset, 0, `resident mean transpose view: precondition — EXACT offset`);
           assertMeanViewMatches(view, axis, keepdims, `resident mean transpose view axis=${axis} keepdims=${keepdims}`);
         } finally {
           view.dispose();
@@ -500,6 +503,9 @@ for (const axis of [0, 1, undefined] as const) {
       try {
         const view = w.slice(...wideSpecs({ step: 2 }, null)); // O(1) view, non-natural strides
         try {
+          assert.deepStrictEqual([...(view.shape as readonly number[])], [2, 3], `resident mean sliced view: precondition — view shape`);
+          assert.deepStrictEqual([...view.describe().strides], [6, 1], `resident mean sliced view: precondition — EXACT strides; this is what makes it the view class the test name claims`);
+          assert.strictEqual(view.describe().offset, 0, `resident mean sliced view: precondition — EXACT offset`);
           assertMeanViewMatches(view, axis, keepdims, `resident mean sliced view axis=${axis} keepdims=${keepdims}`);
         } finally {
           view.dispose();
@@ -520,6 +526,9 @@ for (const axis of [0, -1, undefined] as const) {
       try {
         const view = w.slice(...wideSpecs({ start: 2 })); // O(1) view, offset 6, natural strides
         try {
+          assert.deepStrictEqual([...(view.shape as readonly number[])], [3, 3], `resident mean offset window: precondition — view shape`);
+          assert.deepStrictEqual([...view.describe().strides], [3, 1], `resident mean offset window: precondition — EXACT strides; this is what makes it the view class the test name claims`);
+          assert.strictEqual(view.describe().offset, 6, `resident mean offset window: precondition — EXACT offset`);
           assertMeanViewMatches(view, axis, keepdims, `resident mean offset window axis=${axis} keepdims=${keepdims}`);
         } finally {
           view.dispose();
@@ -543,6 +552,9 @@ for (const axis of [0, 1, 2, undefined] as const) {
         try {
           const view = t.slice(...wideSpecs(null, { start: 1 }, null));
           try {
+            assert.deepStrictEqual([...(view.shape as readonly number[])], [4, 2, 2], `resident mean composed view: precondition — view shape`);
+            assert.deepStrictEqual([...view.describe().strides], [1, 4, 12], `resident mean composed view: precondition — EXACT strides; this is what makes it the view class the test name claims`);
+            assert.strictEqual(view.describe().offset, 4, `resident mean composed view: precondition — EXACT offset`);
             assertMeanViewMatches(view, axis, keepdims, `resident mean composed view axis=${axis} keepdims=${keepdims}`);
           } finally {
             view.dispose();
@@ -635,6 +647,9 @@ function assertItemMatches(view: AnyWNDArray, indices: readonly number[], ctx: s
         const view = w.transpose();
         try {
           const indices = genValidItemIndices(rng, view.shape as readonly number[]);
+          assert.deepStrictEqual([...(view.shape as readonly number[])], [4, 3], `item transpose view: precondition — view shape`);
+          assert.deepStrictEqual([...view.describe().strides], [1, 4], `item transpose view: precondition — EXACT strides; this is what makes it the view class the test name claims`);
+          assert.strictEqual(view.describe().offset, 0, `item transpose view: precondition — EXACT offset`);
           assertItemMatches(view, indices, `item transpose view case ${c} indices=[${indices.join(",")}]`);
         } finally {
           view.dispose();
@@ -658,6 +673,9 @@ function assertItemMatches(view: AnyWNDArray, indices: readonly number[], ctx: s
         const view = w.slice(...wideSpecs({ step: 2 }, null));
         try {
           const indices = genValidItemIndices(rng, view.shape as readonly number[]);
+          assert.deepStrictEqual([...(view.shape as readonly number[])], [2, 3], `item sliced view: precondition — view shape`);
+          assert.deepStrictEqual([...view.describe().strides], [6, 1], `item sliced view: precondition — EXACT strides; this is what makes it the view class the test name claims`);
+          assert.strictEqual(view.describe().offset, 0, `item sliced view: precondition — EXACT offset`);
           assertItemMatches(view, indices, `item sliced view case ${c} indices=[${indices.join(",")}]`);
         } finally {
           view.dispose();
@@ -681,6 +699,9 @@ function assertItemMatches(view: AnyWNDArray, indices: readonly number[], ctx: s
         const view = w.slice(...wideSpecs({ start: 2 }));
         try {
           const indices = genValidItemIndices(rng, view.shape as readonly number[]);
+          assert.deepStrictEqual([...(view.shape as readonly number[])], [3, 3], `item offset window: precondition — view shape`);
+          assert.deepStrictEqual([...view.describe().strides], [3, 1], `item offset window: precondition — EXACT strides; this is what makes it the view class the test name claims`);
+          assert.strictEqual(view.describe().offset, 6, `item offset window: precondition — EXACT offset`);
           assertItemMatches(view, indices, `item offset window case ${c} indices=[${indices.join(",")}]`);
         } finally {
           view.dispose();
@@ -706,6 +727,9 @@ function assertItemMatches(view: AnyWNDArray, indices: readonly number[], ctx: s
           const view = t.slice(...wideSpecs(null, { start: 1 }, null));
           try {
             const indices = genValidItemIndices(rng, view.shape as readonly number[]);
+            assert.deepStrictEqual([...(view.shape as readonly number[])], [4, 2, 2], `item composed view: precondition — view shape`);
+            assert.deepStrictEqual([...view.describe().strides], [1, 4, 12], `item composed view: precondition — EXACT strides; this is what makes it the view class the test name claims`);
+            assert.strictEqual(view.describe().offset, 4, `item composed view: precondition — EXACT offset`);
             assertItemMatches(view, indices, `item composed view case ${c} indices=[${indices.join(",")}]`);
           } finally {
             view.dispose();
@@ -1346,6 +1370,9 @@ for (const axis of [0, 1, undefined] as const) {
         const view = w.transpose(); // O(1) view, reversed strides
         try {
           const ctx = `resident argmax transpose view axis=${axis} keepdims=${keepdims}`;
+          assert.deepStrictEqual([...(view.shape as readonly number[])], [4, 3], `resident argmax transpose view: precondition — view shape`);
+          assert.deepStrictEqual([...view.describe().strides], [1, 4], `resident argmax transpose view: precondition — EXACT strides; this is what makes it the view class the test name claims`);
+          assert.strictEqual(view.describe().offset, 0, `resident argmax transpose view: precondition — EXACT offset`);
           assertArgmaxMatches(view, axis, keepdims, ctx);
           assertArgmaxNiladicMatches(view, `${ctx} (niladic)`);
         } finally {
@@ -1369,6 +1396,9 @@ for (const axis of [0, 1, undefined] as const) {
         const view = w.slice(...wideSpecs({ step: 2 }, null)); // O(1) view, non-natural strides
         try {
           const ctx = `resident argmax sliced view axis=${axis} keepdims=${keepdims}`;
+          assert.deepStrictEqual([...(view.shape as readonly number[])], [2, 3], `resident argmax sliced view: precondition — view shape`);
+          assert.deepStrictEqual([...view.describe().strides], [6, 1], `resident argmax sliced view: precondition — EXACT strides; this is what makes it the view class the test name claims`);
+          assert.strictEqual(view.describe().offset, 0, `resident argmax sliced view: precondition — EXACT offset`);
           assertArgmaxMatches(view, axis, keepdims, ctx);
           assertArgmaxNiladicMatches(view, `${ctx} (niladic)`);
         } finally {
@@ -1391,6 +1421,9 @@ for (const axis of [0, -1, undefined] as const) {
         const view = w.slice(...wideSpecs({ start: 2 })); // O(1) view, offset 6, natural strides
         try {
           const ctx = `resident argmax offset window axis=${axis} keepdims=${keepdims}`;
+          assert.deepStrictEqual([...(view.shape as readonly number[])], [3, 3], `resident argmax offset window: precondition — view shape`);
+          assert.deepStrictEqual([...view.describe().strides], [3, 1], `resident argmax offset window: precondition — EXACT strides; this is what makes it the view class the test name claims`);
+          assert.strictEqual(view.describe().offset, 6, `resident argmax offset window: precondition — EXACT offset`);
           assertArgmaxMatches(view, axis, keepdims, ctx);
           assertArgmaxNiladicMatches(view, `${ctx} (niladic)`);
         } finally {
@@ -1416,6 +1449,9 @@ for (const axis of [0, 1, 2, undefined] as const) {
           const view = t.slice(...wideSpecs(null, { start: 1 }, null));
           try {
             const ctx = `resident argmax composed view axis=${axis} keepdims=${keepdims}`;
+            assert.deepStrictEqual([...(view.shape as readonly number[])], [4, 2, 2], `resident argmax composed view: precondition — view shape`);
+            assert.deepStrictEqual([...view.describe().strides], [1, 4, 12], `resident argmax composed view: precondition — EXACT strides; this is what makes it the view class the test name claims`);
+            assert.strictEqual(view.describe().offset, 4, `resident argmax composed view: precondition — EXACT offset`);
             assertArgmaxMatches(view, axis, keepdims, ctx);
             assertArgmaxNiladicMatches(view, `${ctx} (niladic)`);
           } finally {
@@ -1468,6 +1504,11 @@ for (const axis of [0, 1, 2, undefined] as const) {
       try {
         const view = base.transpose();
         try {
+          // The shape alone cannot discriminate here: SHAPES contains [2,2,2,2],
+          // which is transposition-INVARIANT. Only the reversed strides do.
+          assert.deepStrictEqual([...(view.shape as readonly number[])], shape, `${ctx}: precondition — the involution view's logical shape`);
+          assert.deepStrictEqual([...view.describe().strides], [...naturalStrides(baseShape)].reverse(), `${ctx}: precondition — a transposed view must carry REVERSED strides`);
+          assert.strictEqual(view.describe().offset, 0, `${ctx}: precondition — the involution view starts at offset 0`);
           assertArgmaxMatches(view, axis, keepdims, ctx);
           assertArgmaxNiladicMatches(view, `${ctx} (niladic)`);
         } finally {
@@ -2086,6 +2127,9 @@ function kRaster(n: number): number[] {
       try {
         const view = base.slice(...wideSpecs({ step: 3 })) as AnyWNDArray;
         try {
+          assert.deepStrictEqual([...(view.shape as readonly number[])], [n], `${ctx}: precondition — the stride-3 view is length n`);
+          assert.deepStrictEqual([...view.describe().strides], [3], `${ctx}: precondition — EXACT stride 3; this is what makes it a strided view`);
+          assert.strictEqual(view.describe().offset, 0, `${ctx}: precondition — EXACT offset 0`);
           assertTopkMatches(view, k, ctx);
         } finally {
           view.dispose();

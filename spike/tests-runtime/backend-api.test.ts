@@ -230,14 +230,36 @@ test("Interop: WNDArray.toArray() -> NDArray.fromArray(shape, ...), bit-identica
   }
 });
 
-test("Interop: WNDArray.slice() (view) -> toArray() -> NDArray.fromArray(shape, ...), bit-identical", async () => {
+// The point of this test is the FACADE reach: `NDArray.backend("wasm")` ->
+// `fromArray` -> `slice` -> `toArray` is the only path here that takes a slice
+// view through the public backend surface (the neighbours above cover the
+// facade for `fromArray` and `transpose`, never for `slice`). The bit-identity
+// claim itself is covered far more broadly by slice.test.ts's randomized
+// WNDArray-vs-NDArray differential — so the oracle below must be INDEPENDENT
+// of the receiver. It used to build its reference from `wndSlice.toArray()`
+// and compare that against itself, which no mutation could ever break.
+// Residual shared dependency, disclosed rather than overclaimed: both sides
+// still go through the SAME `normalizeSliceSpecs` (runtime.ts) — a deliberate,
+// pre-existing differential blind spot documented on that function itself. The
+// oracle is independent of the RECEIVER, not of the spec-normalisation path.
+test("Interop: WNDArray.slice() (view) -> toArray(), bit-identical to an independently sliced NDArray (facade reach)", async () => {
+  const baseData = Array.from({ length: 16 }, (_, i) => i);
   const backend = await NDArray.backend("wasm");
-  const wnd = backend.fromArray([4, 4], Array.from({ length: 16 }, (_, i) => i));
+  const wnd = backend.fromArray([4, 4], baseData);
   const wndSlice = wnd.slice(...wideSpecs({ start: 1, stop: 3 }, { start: 1, stop: 3 })); // O(1) view — not yet materialized
   try {
-    const nd = NDArray.fromArray(wndSlice.shape, wndSlice.toArray());
-    assertShapeEqual(wndSlice.shape, [...nd.shape], "interop WNDArray(slice)->NDArray shape");
-    assertDataBitIdentical(wndSlice.toArray(), nd.data, "interop WNDArray(slice)->NDArray data");
+    assert.deepStrictEqual([...(wndSlice.shape as readonly number[])], [2, 2],
+      "interop facade slice: precondition — view shape");
+    assert.deepStrictEqual([...wndSlice.describe().strides], [4, 1],
+      "interop facade slice: precondition — EXACT strides (the view keeps the base's row stride)");
+    assert.strictEqual(wndSlice.describe().offset, 5,
+      "interop facade slice: precondition — EXACT offset 1*4 + 1*1");
+
+    // Independent reference: the naive NDArray path, built from the base data,
+    // never from the receiver.
+    const ref = NDArray.fromArray([4, 4], baseData).slice(...wideSpecs({ start: 1, stop: 3 }, { start: 1, stop: 3 }));
+    assertShapeEqual([...ref.shape], wndSlice.shape, "interop facade slice shape");
+    assertDataBitIdentical(ref.data, wndSlice.toArray(), "interop facade slice data");
   } finally {
     wndSlice.dispose();
     wnd.dispose();

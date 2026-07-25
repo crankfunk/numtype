@@ -51,3 +51,13 @@ export function assertDataBitIdentical(expected: Float64Array, actual: Float64Ar
 export function wideSpecs(...specs: readonly SliceSpecInput[]): readonly SliceSpecInput[] {
   return specs;
 }
+
+/** Row-major (natural, contiguous) strides for a shape — the layout a fresh
+ * `fromArray` produces. Used by the view preconditions to state what a
+ * transposed view's strides MUST be; a wrong implementation here fails
+ * immediately on the unmutated run, so it cannot hide silently. */
+export function naturalStrides(shape: readonly number[]): number[] {
+  const out = new Array<number>(shape.length).fill(1);
+  for (let i = shape.length - 2; i >= 0; i--) out[i] = (out[i + 1] ?? 1) * (shape[i + 1] ?? 1);
+  return out;
+}

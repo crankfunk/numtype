@@ -1217,3 +1217,62 @@ Vorregistrierung nachprüfbar bleibt: die Umsetzung traf den vorab im Worktree g
 Nebengates Δ0 (stress, browser, alle acht Editor-Pins, Freeze-Hash, cargo), alle übrigen
 Testzahlen zahlengleich. Daraus **Arbeitsregel 16** — inklusive der Empfänger-Bedingung und der
 Warnung, dass Einzelsite-Messungen in diesem Zähler nicht existieren.
+
+## View-Preconditions: ein Testname ist kein Beleg (2026-07-25/26)
+
+Aus D7 der Budget-Scheibe wurde eine eigene Scheibe. Der Befund dort lautete „13 Stellen mit
+selbstreferentiellem Orakel"; real waren es **304 Testfälle in 13 Blöcken**, und die
+**transpose**-Untervarianten fehlten in der Ursprungsnotiz vollständig — sie waren nur deshalb
+nicht aufgefallen, weil die Vorgänger-Scheibe zufällig ausschließlich Slice-Zeilen angefasst
+hatte.
+
+Klassifiziert wurde nach Arbeitsregel 15 über eine orthogonale Achse: statt 60 Aufrufstellen
+einzeln zu prüfen, wurden die View-Primitive selbst mutiert (`slice` ignoriert seine Specs;
+`transpose` ist die Identität). Die Kontrollgruppe fiel dabei so sauber aus, wie man es sich
+nur wünschen kann: der `topk`-Vier-View-Block ist der einzige mit Precondition-Assertions und
+der einzige, der beide Mutanten fängt. Der Fix war damit nie eine Erfindung, sondern lag
+bereits im Repo.
+
+**Baustein 0 fing zwei Blocker vor der ersten Codezeile, beide meine Fehler und beide in der
+BEWEISFÜHRUNG statt im Design.** Erstens war der Geltungsbereich zu klein: `elementwise.test.ts`
+fehlte, obwohl FOLLOWUPS die Stellen namentlich nannte — Auslöser war eine Formulierung, die
+aus dem korrekten Teilbefund „`sqrt` fängt" den falschen Gesamteindruck „elementwise ist
+abgedeckt" machte. Das Signal lag sogar in meiner eigenen Messung (`n=6, gefallen=2`), ich hatte
+den Mischwert bemerkt und nicht verfolgt. Zweitens waren die Kontrollgruppen-Zahlen um Faktor 2
+zu hoch, weil der Test-Reporter Fehlschläge zweimal druckt und `grep -c` sie doppelt zählt —
+ausgerechnet in der Tabelle, die die Spec selbst „der tragende Teil des Beweises" nannte.
+
+Der Fix sind 17 rein additive Einfügestellen: exakte Pins auf Shape, vollständigen
+Strides-Vektor und Offset, direkt nach der View-Konstruktion. Ungleichungen wären zu schwach
+gewesen (sie fangen keinen Off-by-eine-Konstante), und ein geteilter Assertions-Helfer wurde
+bewusst NICHT gebaut — die Vorgänger-Scheibe musste gerade erst reparieren, dass genau so eine
+Single-Point-of-Failure-Fläche entsteht. Alle 17 Sollwerte stimmten im ersten Lauf.
+
+**Der teuerste Ertrag war ein Prozess-Befund.** Ich hatte Baustein A und B parallel dispatcht
+und beiden erlaubt, Mutanten im HAUPT-Working-Tree anzuwenden. Beide taten es gleichzeitig. B
+bemerkte ein fremdes `// MUTANT S` in `resident.ts`, verwarf seine Messung und baute sie in
+isolierten Worktrees neu auf. Bei A war die Rückwirkung größer: er hatte eine unerklärte
+Diskrepanz (zwei identische Läufe, 669 gegen 654 Fehlschläge, Differenz genau ein Block, den
+der Mutant strukturell nicht treffen kann) als „nicht-deterministische Test-Harness-
+Kontamination" verbucht — also als vorbestehenden Infrastruktur-Mangel. Auf Nachfrage zog er
+die Deutung zurück. **Ohne die Aufdeckung wäre ein Phantom-Befund über die Test-Infrastruktur
+ins Projekt gewandert.** Die KB trägt zu dieser Falle bereits eine Notiz; ich habe sie vor dem
+Dispatch nicht konsultiert. Beide Verifier hielten sich übrigens korrekt an „Mutant nur als
+sofort revertierter Edit mit Backup-Beweis" — die Regel ist für einen Schreiber richtig und für
+zwei wertlos, weil ein Backup nur belegt, dass man auf den eigenen Schnappschuss zurückgesetzt
+hat, nicht dass der Schnappschuss unverfälscht war.
+
+Alle entscheidenden Zahlen wurden danach in einem Zustand neu erhoben, in dem nur der
+Orchestrator schreibt, mit einer Vorbedingungsprüfung vor jedem Mutanten. Dabei wurde auch die
+letzte offene Lücke geschlossen: B hatte angemerkt, dass sein Off-by-one-Mutant in 11 Blöcken
+nur deshalb fiel, weil er den Lesezugriff aus dem Puffer schob (`.toArray()` warf, bevor eine
+Assertion lief), sodass eine **kleine, in-bounds** Korruption ungeprüft blieb. Ein eigens
+konstruierter Mutant O (`offset += Math.max(0, spec.start * stride - 1)`, garantiert in-bounds)
+löste **93 Fehlschläge aus, die namentlich `precondition — EXACT offset` nennen** — der Pin
+leistet die Arbeit selbst.
+
+**Endstand:** `check:diag` **225.983 @ 140**, Δ+312 gegen ≤+4.000, dekomponiert in +4 für die
+Preconditions (sie benutzen ausschließlich bereits instanziierte Typen) und +308 für den
+D3-Umbau. Alle Nebengates Δ0, alle Testzahlen zahlengleich. Daraus die Verschärfung von
+Arbeitsregel 12: der View-Fall muss seine Klasse EXPLIZIT assertieren, nicht nur im Testnamen
+behaupten.

@@ -401,6 +401,10 @@ for (const op of SCALAR_OPS) {
     const refData = new Float64Array([1, -2.5, 3, 4, -5, 6]);
     const { arr: view, owners } = makeView(shape, refData);
     try {
+      // makeView builds the involution: base [2,3] -> transpose -> [3,2] strides [1,3].
+      assert.deepStrictEqual([...(view.shape as readonly number[])], [3, 2], `${op}(s) transposed view: precondition — view shape`);
+      assert.deepStrictEqual([...view.describe().strides], [1, 3], `${op}(s) transposed view: precondition — EXACT reversed strides`);
+      assert.strictEqual(view.describe().offset, 0, `${op}(s) transposed view: precondition — EXACT offset`);
       assertScalarOpMatches(op, view, 2.5, `${op}(s) transposed view`);
     } finally {
       for (const h of owners) h.dispose();
@@ -415,6 +419,9 @@ for (const op of SCALAR_OPS) {
     try {
       const view = w.slice(...wideSpecs({ step: 2 }, null)); // O(1) view, non-natural strides
       try {
+        assert.deepStrictEqual([...(view.shape as readonly number[])], [2, 3], `${op}(s) sliced view: precondition — view shape`);
+        assert.deepStrictEqual([...view.describe().strides], [6, 1], `${op}(s) sliced view: precondition — EXACT strides`);
+        assert.strictEqual(view.describe().offset, 0, `${op}(s) sliced view: precondition — EXACT offset`);
         assertScalarOpMatches(op, view, 2.5, `${op}(s) sliced view`);
       } finally {
         view.dispose();
@@ -432,6 +439,9 @@ for (const op of SCALAR_OPS) {
     try {
       const view = w.slice(...wideSpecs({ start: 2 })); // O(1) view, offset 2
       try {
+        assert.deepStrictEqual([...(view.shape as readonly number[])], [4], `${op}(s) offset window: precondition — view shape`);
+        assert.deepStrictEqual([...view.describe().strides], [1], `${op}(s) offset window: precondition — EXACT stride`);
+        assert.strictEqual(view.describe().offset, 2, `${op}(s) offset window: precondition — EXACT offset`);
         assertScalarOpMatches(op, view, 2.5, `${op}(s) offset window`);
       } finally {
         view.dispose();

@@ -288,7 +288,14 @@ Session-Zustand).
   Pin — test:threaded beweist seine Bit-Identität zum stable Core. CI-Gate `check:freeze` mit
   plattform-gelabelter Pin-Menge. **Vorheriger Stand:** `24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2`
   (seit WASM-Parität S0/sqrt 2026-07-23, von `0b9df4f1…` Kern 11).
-- **check:diag** Haupt-Pin **225,671 @ 140 Files** (nur Root-Korpus; seit der
+- **check:diag** Haupt-Pin **225,983 @ 140 Files** (nur Root-Korpus; seit der
+  View-Precondition-Scheibe 2026-07-25, von 225,671 @ 140 — **Δ+312** gegen ein vorregistriertes
+  ≤+4,000, zweistufig dekomponiert: die 17 Precondition-Blöcke selbst kosten **+4** (sie benutzen
+  ausschließlich bereits instanziierte Typen), die restlichen **+308** stammen aus dem
+  D3-Umbau des tautologischen Interop-Tests, der eine unabhängige `NDArray`-Referenzkette dazu
+  bekommt. Dateiset unverändert 140, alle Nebengates Δ0, alle Testzahlen zahlengleich.
+  Details docs/view-precondition-spec.md v2 + -ergebnisse.md. **Vorheriger Stand:
+  225,671 @ 140** (seit der
   `slice`-Literal-Budget-Scheibe 2026-07-25, von 237,379 @ 140 — **Δ−11,708 = −4,93 %**, der
   erste RÜCKGANG dieser Größenordnung im Projekt. Dateiset unverändert 140, kein Order-Noise,
   keine Verhaltensänderung: 32 literal-argumentige `.slice()`-Aufrufstellen in sieben
@@ -600,7 +607,15 @@ Session-Zustand).
   `fromArray`-contiguous.** Die S2-Erst-Fassung prüfte `mean` ausschließlich contiguous (Offset 0,
   natürliche Strides); der interessante Fall eines residenten Ops ist die transponierte/geslicte/
   offset/komponierte View. Verify-B fand die Lücke (0 Mismatches, also Coverage-Claim statt Live-Bug)
-  — die Spec muss View-Fälle explizit fordern, sonst fallen sie weg. (13) **Eine Hover-/Diagnose-Norm
+  — die Spec muss View-Fälle explizit fordern, sonst fallen sie weg. **Verschärfung 2026-07-25
+  (View-Precondition-Scheibe): der View-Fall muss seine Klasse EXPLIZIT ASSERTIEREN, nicht nur im
+  Testnamen behaupten** — exakter Shape, exakter Strides-Vektor, exakter Offset, direkt nach der
+  View-Konstruktion. Ohne das ist der Block vakuös, wenn sein Orakel aus dem View stammt: 304
+  Fälle in 13 Blöcken überlebten eine Mutation, die `slice`/`transpose` zur Identität machte —
+  der einzige Block mit solchen Assertions (topk) war der einzige, der fing. Ungleichungen
+  (`stride !== 1`) genügen NICHT; sie fangen keinen Off-by-eine-Konstante. Und: eine
+  transpositions-invariante Shape wie `[2,2,2,2]` macht die Shape-Assertion wirkungslos, dort
+  trägt allein der Strides-Vektor. (13) **Eine Hover-/Diagnose-Norm
   wird GEMESSEN, nicht gelesen.** M3 verlangt saubere Klassen-Hover; S3 verletzte das an der einzigen
   konsumentenseitig erreichbaren Fläche, weil ein Top-Level-Typ-Alias in RÜCKGABE-Position von der
   Quick Info namentlich erhalten wird (ein Alias in TYP-ARGUMENT-Position dagegen aufgelöst — `add`s
