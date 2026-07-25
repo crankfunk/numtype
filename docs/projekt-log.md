@@ -1071,3 +1071,68 @@ std-Generikum kann Host-Pfade einschleppen, und lokal ist das unsichtbar. Gefund
 ausschließlich der cross-host laufende CI-`freeze`-Job, dessen Plattform-Unabhängigkeit bis
 dahin ein unbemerkter Nebeneffekt war — hier erwies sie sich als load-bearing. Neuer
 Freeze-Pin `2a54d9fdba55e4e88a9d54cb3b01e111c2717abf13017f778b90accd5cff87e4`.
+
+---
+
+## COVENANT v6: elf Auslegungsfragen in einem Zug (2026-07-25)
+
+Eine reine Vertrags-Scheibe, ohne eine Zeile Produktivcode. Über die Kampagnen W1–W5 und
+S0–S5 waren Stellen aufgelaufen, an denen der Vertragstext die gelebte Praxis nicht abdeckte
+— sämtlich aus `covenant-verify`- oder Baustein-0-Befunden, sämtlich in FOLLOWUPS getrackt,
+keine davon ein offener Normbruch. Sie in Einzelscheiben abzuarbeiten wäre teurer gewesen als
+der Nutzen; gebündelt liest sich der Vertrag danach als ein Stück.
+
+**Zwei Punkte waren echte Owner-Entscheidungen, der Rest Konsolidierung.** Die erste betraf
+M3 und war unangenehm, weil sie rückwirkend war: der Wortlaut deckte nur Klassen-Hover, aber
+S3 hatte einen Methoden-Rückgabetyp als echte M3-Verletzung gewertet, dafür +5.498
+Instantiations bezahlt und das Scheiben-Gate eigens von +8.000 auf +13.000 angehoben — mit
+Owner-Abnahme. Entweder war die Einstufung zu weit, oder der Vertrag beschrieb die gehaltene
+Norm nicht. Entscheidung: M3 erweitern, S3 war richtig. Damit beschreibt der Vertrag, was das
+Projekt nachweislich hält — es hat zweimal danach gehandelt und einmal echtes Budget gezahlt.
+Preis: die LSP-Messung wird für solche Flächen Pflicht statt Kür, was angesichts der
+S3-Erfahrung (drei Leser übersahen die Verletzung, nur der Messende fand sie) folgerichtig ist.
+
+Die zweite ging andersherum aus: die „insertion-only"-Disziplin für TS-Klassenkörper bleibt
+bewusst Hausregel und wandert NICHT in den Vertrag. M4s Begründung ist ein
+Artefakt-Byte-Argument — eine Zeilenverschiebung ändert `#[track_caller]`-Metadaten und damit
+die kompilierten Bytes unberührter Funktionen —, und dieser Mechanismus hat in TypeScript
+keinen Gegenpart. v6 sagt das jetzt ausdrücklich, statt die Frage jede Scheibe neu aufkommen
+zu lassen.
+
+**Die Verifikation lief mit umgedrehter Frage.** Der übliche `covenant-verify` prüft „hält der
+Code den Vertrag" — hier wäre das zirkulär gewesen, denn der Vertrag war der Diff. Die
+relevante Frage lautete: stimmt jede neue Klausel faktisch? Ein Vertragstext, der etwas
+Falsches über den Code behauptet, vergiftet ab sofort jede Scheiben-Prüfung, weil er
+maschinell gelesen und angewendet wird. Der Verifier prüfte deshalb jede Klausel einzeln am
+Code — Op-Zuordnung der NaN-Payload-Klassen, Existenz der behaupteten Tests, die
+Rang-Cliff-Zahlen, ob `w8` wirklich im `editor-gate`-Job mitläuft — und reproduzierte den
+W2-Overload-Grenzfall sogar empirisch mit einer eigenen `tsc`-Probe.
+
+Ergebnis: keine einzige falsche Tatsachenbehauptung, aber drei Präzisionslücken, alle vor dem
+Commit korrigiert. Die wichtigste betraf meinen eigenen Änderungslog: ich hatte geschrieben,
+alle Normen blieben inhaltlich unverändert „mit einer Ausnahme". Der Verifier zeigte, dass es
+**zwei** sind — die Z2-Erweiterung legalisiert eine Praxis, die vom bisherigen Wortlaut
+wörtlich abwich, was das Scale-Probe-Ergebnisdoc selbst so schreibt. Dazu: eine Zeitangabe war
+als Spanne formuliert, obwohl nur ein Einzelwert gemessen ist (68,51 s), und `transpose` war
+zweideutig — der Rust-Kern `nt_transpose` kopiert wirklich, `WNDArray.transpose()` ist eine
+kernel-lose O(1)-View.
+
+**Eine Prozess-Lehre fiel nebenbei ab.** Nach dem Schließen der zehn Kandidaten lief ein
+Kontroll-Grep — und fand einen elften COVENANT-Eintrag, der derselben Sache galt, aber
+„v6-Präzisierungs-Kandidat" statt „v6-Kandidat" hieß und deshalb durch meine Extraktion
+gefallen war. Der Verifier hatte denselben blinden Fleck, weil er dieselbe Suche benutzte:
+er bestätigte ausdrücklich „alle zehn mappen sauber". Ein Verifier, der die Suchmethode des
+Geprüften erbt, erbt auch deren Lücken — die Gegenmaßnahme war nicht mehr Sorgfalt beim
+Suchen, sondern eine Kontrolle über eine ANDERE Achse (Zählung aller offenen COVENANT-Einträge
+statt Suche nach dem erwarteten Stichwort).
+
+Ein zwölfter Kandidat fiel beim Schreiben auf und wurde bewusst NICHT eigenmächtig
+eingebaut, sondern dem Owner vorgelegt: nach dem
+Host-Pfad-Fund im S5-Abschluss ist an M4 offen, WESSEN Clean-Rebuild den bindenden
+Freeze-Beweis liefert, seit das Artefakt host-abhängig werden kann. Ein Vertrag darf nicht
+dadurch wachsen, dass dem Schreibenden beim Schreiben noch etwas einfällt. **Der Owner hat
+ihn aufgenommen** — v6 enthält ihn als zweite M4-Präzisierung: „Clean-Rebuild" heißt
+host-unabhängiger Clean-Rebuild, und eine Abweichung auf einer vorher identisch bauenden
+Plattform ist ein Befund, kein Pin-Anlass. Die Nuance, die dabei benannt gehört: die
+EIGENSCHAFT galt schon (der CI-Job prüfte seit Item 12 Linux gegen einen macOS-Pin), nur die
+daraus folgende REGEL stand nirgends.

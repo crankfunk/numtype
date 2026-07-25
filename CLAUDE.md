@@ -207,8 +207,21 @@ VIERMAL gebrochen, bevor sie messen durfte — zwei der Fassungen stammten vom O
 gefunden ausnahmslos dadurch, dass Verifier sie als Skript nachbauten und gegen tausende
 synthetische Raster laufen ließen statt sie zu lesen.
 FOLLOWUPS-Minis nebenher; Trusted Publishing optional (Fakten in FOLLOWUPS). **COVENANT-v6-Bündel
-steht bei ZEHN Kandidaten** — überfällig für eine eigene kleine Vertrags-Scheibe, zwei davon
-mit fertigem Wortlaut aus Baustein C. S4 fügte keinen hinzu, präzisierte aber einen: der
+ist als **COVENANT v6 GESCHRIEBEN (2026-07-25)** — elf aufgelaufene Auslegungsfragen in einer
+eigenen Vertrags-Scheibe geschlossen — zwölf mit der zuletzt aufgenommenen (3× M1, 2× M2,
+3× M3, 2× M4, 1× Z2, plus ein spät gefundenes Duplikat des M2-Rang-Cliff-Kandidaten). **Zwei davon sind mehr als Klarstellung
+und im Änderungslog ausdrücklich so benannt:** die M3-Erweiterung auf Methoden-Rückgabetypen
+(Owner-entschieden, bestätigt die S3-Einstufung rückwirkend, macht die LSP-Messung für solche
+Flächen zur Pflicht) und die Z2-Erweiterung (legalisiert eine Praxis, die vom bisherigen
+Wortlaut wörtlich abwich). M4 wurde bewusst NICHT ausgeweitet: die TS-Insertion-only-Disziplin
+bleibt Hausregel, weil M4s Artefakt-Byte-Argument in TypeScript keinen Gegenmechanismus hat
+(Owner-entschieden). **Als Letztes aufgenommen, auf Owner-Entscheidung:** „Clean-Rebuild" in
+M4 heißt host-UNABHÄNGIGER Clean-Rebuild — weicht eine Plattform ab, die vorher identisch
+baute, ist das ein Befund und kein Anlass für einen zweiten Pin (die Eigenschaft galt seit
+Item 12 mechanisch, die Regel stand nirgends; s. Arbeitsregel 14). Verify-Befund: alle Klauseln faktisch korrekt, drei Präzisionslücken
+(Zeitangabe als Einzelwert statt Spanne, `transpose`-Zweideutigkeit Kern vs. View,
+unvollständige Präzedenzliste) vor dem Commit korrigiert. **Historie unten:** das Bündel stand
+zuvor bei zehn Kandidaten. S4 fügte keinen hinzu, präzisierte aber einen: der
 NaN-Payload-Vorbehalt an M1 kann für `argmax` strukturell nicht greifen (die Ausgabe ist stets
 ein ganzzahliger Index) — er beißt erst bei `topk`. **S5 fügte zwei hinzu und schärfte den
 NaN-Kandidaten, statt ihn zu schließen** (Baustein-C-Korrektur einer Orchestrator-Annahme):
