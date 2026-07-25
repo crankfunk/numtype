@@ -19,7 +19,7 @@ import { NDArray } from "../src/ndarray.ts";
 import { computeStrides, transposeRuntime, type SliceSpec } from "../src/runtime.ts";
 import { initCore } from "../src/wasm/loader.ts";
 import { getResidentFreeCount, WNDArray } from "../src/wasm/resident.ts";
-import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
+import { assertDataBitIdentical, assertShapeEqual, wideSpecs } from "./assert-helpers.ts";
 import { genData, makeRng, type Rng } from "./prng.ts";
 
 const core = await initCore();
@@ -180,7 +180,7 @@ test("flatten view-routing: a contiguous handle's flatten shares the buffer (sam
 
 test("reshape view-routing: reshaping a VIEW of a view still shares the ORIGINAL buffer", () => {
   const base = WNDArray.fromArray(core, [4, 3], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-  const view = base.slice(null, { start: 0 }); // full-axis range slice: still contiguous [4,3]
+  const view = base.slice(...wideSpecs(null, { start: 0 })); // full-axis range slice: still contiguous [4,3]
   const beforeFree = getResidentFreeCount();
   const r = view.reshape([12]);
   try {
@@ -218,7 +218,7 @@ test("reshape materialize-routing: a transposed (non-contiguous) view materializ
 
 test("flatten materialize-routing: a step-2 sliced (non-contiguous) view materializes a FRESH buffer", () => {
   const base = WNDArray.fromArray(core, [8], [1, 2, 3, 4, 5, 6, 7, 8]);
-  const sliced = base.slice({ step: 2 }); // shape [4], non-contiguous (stride 2)
+  const sliced = base.slice(...wideSpecs({ step: 2 })); // shape [4], non-contiguous (stride 2)
   const beforeFree = getResidentFreeCount();
   const f = sliced.flatten();
   try {

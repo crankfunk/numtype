@@ -79,7 +79,7 @@ import assert from "node:assert";
 import { test } from "node:test";
 import { NDArray } from "../src/ndarray.ts";
 import { computeStrides, elementwiseBinary, itemRuntime, meanRuntime, sumRuntime } from "../src/runtime.ts";
-import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
+import { assertDataBitIdentical, assertShapeEqual, wideSpecs } from "./assert-helpers.ts";
 import { genData, genDataSpecial, makeRng, nextF64Special, SPECIAL_VALUES, type Rng } from "./prng.ts";
 
 type ScalarOp = "add" | "sub" | "mul" | "div";
@@ -638,7 +638,7 @@ test("sqrt(): transposed and sliced receivers stay correct (non-contiguous-in-or
   assertShapeEqual([3, 2], transposed.shape, "transpose() shape");
   assert.deepStrictEqual(Array.from(transposed.sqrt().data), Array.from(transposed.data).map((v) => Math.sqrt(v)));
 
-  const sliced = base.slice(1); // NDArray<[3]>, row 1: [16, 25, 36]
+  const sliced = base.slice(...wideSpecs(1)); // NDArray<[3]>, row 1: [16, 25, 36]
   assertShapeEqual([3], sliced.shape, "slice(1) shape");
   assert.deepStrictEqual(Array.from(sliced.sqrt().data), [4, 5, 6]);
 });
@@ -1138,7 +1138,7 @@ test("item(): transposed receiver — reads agree across a distinct materialized
 
 test("item(): sliced receiver — item reads into the freshly-copied slice buffer, not the parent's", () => {
   const m = NDArray.fromArray([3, 3], [1, 2, 3, 4, 5, 6, 7, 8, 9]);
-  const row = m.slice(1); // shape [3]: [4, 5, 6]
+  const row = m.slice(...wideSpecs(1)); // shape [3]: [4, 5, 6]
   assert.strictEqual(row.item(0), 4, "sliced row item(0)");
   assert.strictEqual(row.item(1), 5, "sliced row item(1)");
   assert.strictEqual(row.item(2), 6, "sliced row item(2)");

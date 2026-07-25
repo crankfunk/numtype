@@ -1,7 +1,21 @@
 # Mini-Scheibe: `slice`-Literal-Budget — bindende Spec
 
-**Version:** v1 (2026-07-25)
-**Status:** entworfen, wartet auf Owner-Richtungsabnahme → dann Baustein 0
+**Version:** v2 (2026-07-25)
+**Status:** Owner-Richtungsabnahme erteilt (D1 Scope 32, D2 Form C, D3 ja, Stufe 2–3 ohne
+Baustein C) · Baustein 0 gelaufen, Befunde eingearbeitet → bereit für die Implementierung
+
+**Änderungslog v1 → v2** (alle Punkte aus der adversarialen Spec-Verifikation, keiner davon
+eine Richtungsänderung — der Geltungsbereich der 32 Stellen bleibt unverändert):
+- **D1** bekommt die fehlende **Empfänger-Bedingung**; drei Stellen, die dem v1-Wortlaut
+  genügten, aber nichts einbringen, sind jetzt ausdrücklich ausgeschlossen und belegt.
+- **D2** ergänzt den in v1 vergessenen `SliceSpecInput`-Import im Helfer-Rezept.
+- **D4** korrigiert die zu pauschale Charakterisierung von `slice.test.ts`.
+- **D6/Arbeitsregel 16** erbt die Empfänger-Bedingung aus D1.
+- **Die Nicht-Vakuitäts-Pflicht** benennt jetzt konkrete, geprüfte Stellen — die v1-Fassung
+  („eine der vier View-Klassen") hätte mit 41 % Wahrscheinlichkeit einen Scheinbeweis
+  geliefert.
+- **Neu: D7** — ein vorbestehender Testqualitäts-Befund, den Baustein 0 nebenbei aufdeckte.
+
 **Vorgeschichte:** FOLLOWUPS „`slice`-Literal-Kosten als Budget-Hebel" ·
 Gegenprüfung `docs/slice-literal-budget-ergebnisse.md` (Messteil, bereits gelaufen) ·
 korrigierter Ursprungsbefund `docs/wasm-parity-topk-ergebnisse.md`, Nachtrag 2
@@ -35,13 +49,26 @@ reproduziert.
 | `test:resident` | 6122 + 2 skipped | 6122 + 2 skipped | 0 |
 | Freeze-Hash | `2a54d9fd…` | unberührt (kein Rust-File) | 0 |
 
-**Noch nicht gemessen:** `test:threaded` (139) — braucht die pinned nightly. Zwei der 32
-Stellen liegen in `threaded.test.ts`. **Pflicht in der Umsetzung.**
+**`test:threaded` (139):** in v1 als ungemessen offengelassen (braucht die pinned nightly; zwei
+der 32 Stellen liegen in `threaded.test.ts`). **Baustein 0 hat es nachgeholt: 139/139 pass,
+Exit 0**, auf der vollen 32-Stellen-Migration inklusive echtem `cargo build`. Das ist eine
+Fremdmessung — sie bleibt **Pflicht in der Umsetzung**, wird dort aber voraussichtlich nur
+bestätigt.
 
 ## D1 — Geltungsbereich: 32 Stellen in 7 Dateien
 
 Betroffen ist genau die Menge „Aufrufstelle von `NDArray.slice`/`WNDArray.slice` mit
-literalen Spec-Argumenten in einer Datei ohne Typ-Ebenen-Assertionen".
+literalen Spec-Argumenten **auf einem Empfänger mit statisch bekanntem Rang**, in einer Datei
+ohne Typ-Ebenen-Assertionen".
+
+**Die Empfänger-Bedingung ist tragend** (v2-Ergänzung, Baustein-0-Befund). `spike/src/slice.ts`
+prüft in **beiden** Einstiegspunkten `RankUnknowable<S>` **vor** jeder Betrachtung von `Specs`
+(`SliceShape` Zeile 110, `SliceSpecsGuard` Zeile 225). Steht der Empfänger auf einer dynamisch
+getippten Shape (`number[]`), nimmt die Maschinerie den No-Claim-Pfad also **schon vorher** —
+literale Specs kosten dort nichts, und ein `wideSpecs()` darum wäre reine Mühe. Drei Stellen in
+`resident.test.ts` (925, 1145, 2216) genügen dem v1-Wortlaut, fallen aber genau darunter;
+**gemessen: ihr Widening bringt Δ−35 über drei Stellen** (237.344 @ 140), gegen einen
+Durchschnitt von ≈368 pro echter Stelle. Sie sind **nicht** Teil der 32.
 
 | Datei | Zeilen (Stand `2d38f67`) | n |
 |---|---|---|
@@ -57,8 +84,11 @@ Alle sieben Dateien haben **null** Treffer auf `Equal<` / `Expect<` / `expectTyp
 `assertType` — mechanisch geprüft, das ist die tragende Voraussetzung.
 
 **Nicht betroffen, geprüft:** `resident-lifecycle.test.ts` (16 Treffer, alle
-`Array.prototype.slice` auf einfachen Arrays) und `argmax-topk.test.ts` (die zwei
-NDArray-Stellen benutzen bereits den gewideten Spread `.slice(...specs)`).
+`Array.prototype.slice` auf einfachen Arrays) · `argmax-topk.test.ts` (die zwei NDArray-Stellen
+benutzen bereits den gewideten Spread `.slice(...specs)`) · `vector.test.ts` (3 Treffer, alle
+schon `...specs` über eine `SliceSpec[]`-typisierte Variable) · `s1-import-guard.test.ts`
+(2 Treffer, beides `String.prototype.slice`). Die letzten beiden fehlten in v1 und sind hier
+nur der Vollständigkeit halber ergänzt — an der Menge ändert sich nichts.
 
 ## D2 — Die Schreibweise: geteilter `wideSpecs(...)`-Helfer
 
@@ -76,6 +106,8 @@ Hausregel zählt, der künftige Beiträge folgen sollen. Der Helfer wird an `spi
 assert-helpers.ts` **angehängt** (Insertion, kein Edit an Bestandsinhalt):
 
 ```ts
+import type { SliceSpecInput } from "../src/slice.ts"; // v2: in v1 vergessen
+
 /** Widen a literal slice spec list so `SliceSpecsGuard`/`SliceShape` take the
  * no-claim path. Runtime tests check RUNTIME behaviour; the type-level claims
  * live in `spike/tests/slice.test-d.ts`. Paying the literal machinery here
@@ -114,13 +146,19 @@ Gate-Tabelle) — nicht bloß „grün", sondern zahlengleich.
 
 ## D4 — Was bewusst NICHT umgestellt wird
 
-`spike/tests-runtime/slice.test.ts` (43 literale Stellen) bleibt **unangetastet**. Dort sind
-die literalen Specs **tragend**: sie kodieren die Semantik-Tabelle aus
-`docs/kern-05-slicing-spec.md` Zeile für Zeile (`base.slice(1, { start: 1 })` mit
-danebenstehendem erwarteten Ergebnis) und sie markieren die bewusste Typ-/Laufzeit-Grenze —
-die dortigen `5 as number` / `{ step: 0 as number }`-Widenings existieren gerade deshalb, weil
-die Typ-Ebene das Literal sonst ablehnen würde. Ein pauschales Widening würde diese Grenze
-verwischen.
+`spike/tests-runtime/slice.test.ts` bleibt **unangetastet**. v1 nannte alle 43 Stellen pauschal
+„tragend"; das war zu grob. Die Datei ist eine **Mischung aus drei Klassen** (Baustein-0-Befund),
+und jede fällt aus einem eigenen Grund heraus:
+
+1. **Echte Semantik-Pins** — kodieren die Tabelle aus `docs/kern-05-slicing-spec.md` Zeile für
+   Zeile (`base.slice(1, { start: 1 })` mit danebenstehendem erwarteten Ergebnis). Hier ist das
+   Literal die Aussage.
+2. **Bewusste Typ-/Laufzeit-Grenzfälle** — die vorhandenen `5 as number` /
+   `{ step: 0 as number }`-Widenings existieren gerade deshalb, weil die Typ-Ebene das Literal
+   sonst ablehnen würde. Ein pauschales Widening verwischt genau die Grenze, die sie markieren.
+3. **Bereits dynamische Stellen** — teils `...specs`-Spreads (die randomisierten
+   Differentialtests), teils dynamische Empfänger wie Zeile 718–724, die per Kommentar
+   ausdrücklich „the runtime backstop" prüfen. Die kosten nach D1 ohnehin nichts.
 
 **Was dabei liegen bleibt, offengelegt:** die Datei kostet insgesamt **10.683** (per
 empty-then-fill obenbegrenzt). Wie viel davon literal-getrieben ist, ist **nicht gemessen**.
@@ -137,15 +175,48 @@ Blöcke prüfen ihre Voraussetzungen bereits zur Laufzeit nach (`assert.deepStri
 weggeworfenem Literaltyp). Aber es ist eine Verlagerung, keine Nullkosten, und sie gehört
 benannt.
 
+## D7 — Vorbestehender Testqualitäts-Befund (NICHT Gegenstand dieser Scheibe)
+
+Baustein 0 fand nebenbei etwas, das mit dem Umbau nichts zu tun hat, aber wichtiger sein
+könnte als er: **an 13 der 32 Stellen ist das Test-Orakel selbstreferentiell.** Die
+Helferfunktionen `assertMeanViewMatches`, `assertScalarOpMatches` und (an Stellen ohne
+Precondition) `assertTopkMatches` bilden ihre Referenz aus dem `.toArray()` **des bereits
+konstruierten Views**. Wird der Spec verfälscht, entsteht ein anderer View — aber Referenz und
+Kandidat rechnen beide konsistent über diesen anderen View weiter, und die Assertion kann den
+Unterschied strukturell nie sehen.
+
+Betroffen: `resident.test.ts` 501, 521, 544, 658, 681, 706, 1369, 1391, 1416 (die S2/mean-,
+S3/item- und S4/argmax-View-Blöcke), 2087; `elementwise.test.ts` 416, 433;
+`backend-api.test.ts` 236 (dort vergleicht der Test tautologisch gegen sich selbst).
+
+**Was das praktisch heißt:** Die Tests sind nicht falsch — `mean`/`argmax`/`item` werden dort
+korrekt gegen die naive Referenz geprüft. Verloren ist die **Coverage-Aussage**: dass der
+Empfänger die View-Klasse ist, die der Testname behauptet. Ausgerechnet Arbeitsregel 12
+(„Residente Op-Tests müssen VIEWS treffen") stützt sich auf diese Blöcke. Der S5/topk-Block ist
+die Ausnahme — dort hat der Autor Precondition-Assertions gesetzt
+(`assert.notStrictEqual(view.describe().strides[0], 1, "precondition: …")`), und genau die
+machen ihn mutationssensitiv.
+
+**Befund ist selbst nachgestellt** (`resident.test.ts:501`, `{step:2}` → `{step:1}`:
+6122 pass / 0 fail). **Er ist vorbestehend und wird durch die Migration weder verursacht noch
+verschlimmert** — er besteht mit und ohne `wideSpecs` identisch. Deshalb: **out of scope für
+diese Scheibe**, geht als eigener FOLLOWUPS-Eintrag raus (Vorschlag: die neun Blöcke bekommen
+die Precondition-Assertions, die S5 schon hat). Innerhalb dieser Scheibe wirkt er nur als
+Einschränkung des Mutations-Orts (siehe Nicht-Vakuitäts-Pflicht).
+
 ## D6 — Hausregel, die daraus wird
 
 Aufnahme in CLAUDE.md als **Arbeitsregel 16**:
 
 > **Laufzeittests bauen Views mit `wideSpecs(...)`, nicht mit literalen Specs.** Ein
-> literales Slice-Spec in einer `*.test.ts` bezahlt die volle `SliceSpecsGuard`/
-> `SliceShape`-Maschinerie, ohne dass eine Zusicherung davon abhängt — die Typ-Ebenen-Pins
-> liegen in `spike/tests/*.test-d.ts`. Ausnahme: `slice.test.ts` selbst (dort sind die
-> Literale die Aussage). **Und die Kosten sind super-additiv:** aus „Block X kostet N" folgt
+> literales Slice-Spec in einer `*.test.ts` **auf einem Empfänger mit statisch bekanntem Rang**
+> bezahlt die volle `SliceSpecsGuard`/`SliceShape`-Maschinerie, ohne dass eine Zusicherung davon
+> abhängt — die Typ-Ebenen-Pins liegen in `spike/tests/*.test-d.ts`. **Die Empfänger-Bedingung
+> gehört dazu:** steht der Empfänger auf einer dynamischen Shape (`number[]`), greift
+> `RankUnknowable` schon vor der Spec-Prüfung, das Literal kostet nichts, und ein `wideSpecs()`
+> wäre verschwendete Mühe (gemessen: Δ−35 über drei solche Stellen). Ausnahme:
+> `slice.test.ts` selbst (dort sind die Literale die Aussage bzw. markieren die Typ-/
+> Laufzeit-Grenze). **Und die Kosten sind super-additiv:** aus „Block X kostet N" folgt
 > NICHT „Aufrufstelle kostet N/k"; eine einzelne Stelle isoliert zu messen kann das Vorzeichen
 > umkehren. Nur Alles-oder-nichts-Messungen sind aussagekräftig.
 
@@ -166,9 +237,25 @@ wird auf **Exaktheit** vorregistriert — jede Abweichung ist ein Befund:
 
 Der Umbau ist per Konstruktion verhaltensneutral — genau deshalb kann er **stillschweigend
 einen Test entschärfen**. Pflicht: ein Mutant, der beweist, dass die umgestellten Stellen
-noch beißen. Konkret in einer der vier View-Klassen den Spec verfälschen (`{ step: 2 }` →
-`{ step: 1 }`) und belegen, dass benannte Tests fehlschlagen; Revert per **Backup-Kopie mit
-`diff`-Beweis**, nie `git checkout` (Arbeitsregel 1).
+noch beißen; Revert per **Backup-Kopie mit `diff`-Beweis**, nie `git checkout`
+(Arbeitsregel 1).
+
+**v1s Anweisung („in einer der vier View-Klassen den Spec verfälschen") war unbrauchbar** und
+hätte mit hoher Wahrscheinlichkeit einen **Scheinbeweis** geliefert. Grund ist D7: an 13 der 32
+Stellen ist das Test-Orakel selbstreferentiell, ein verfälschter Spec ist dort strukturell
+unsichtbar. Selbst nachgestellt: `resident.test.ts:501` von `{ step: 2 }` auf `{ step: 1 }`
+gedreht — was aus dem gestrideten View einen contiguous macht, also genau die Eigenschaft
+zerstört, für die der Block existiert — ergibt **6122 pass / 0 fail**, kein einziger Test merkt
+es.
+
+**Bindend: der Mutant läuft an mindestens zwei Stellen mit nachgewiesen unabhängigem Orakel.**
+Zulässige Kandidaten (Baustein 0 hat sie direkt mutations-getestet, je 3 benannte Fehlschläge):
+
+- `resident.test.ts:2036` — verketteter topk-View, hat eine eigene Precondition-Assertion.
+- `threaded.test.ts:1429` — Referenz kommt aus `topkRuntime` über die unabhängigen Rohdaten.
+- alternativ `elementwise.test.ts:267` — Referenz ist ein separat gebautes `NDArray`.
+
+Die Stellen aus D7 sind als Mutations-Ort **ausgeschlossen**.
 
 ## Berührte Covenant-Invarianten
 
@@ -201,3 +288,34 @@ der Hausregel trotzdem laufen lassen).
 Der gesamte Umbau ist ein einziger, rein mechanischer Diff: 32 Aufrufstellen + 7
 Import-Zeilen + eine Insertion in `assert-helpers.ts`. Rückbau = `git revert` des einen
 Commits; der einzige Pin, der zurückwandert, ist `check:diag` auf 237.379 @ 140.
+
+## Adversariale Spec-Verifikation (Addendum, Baustein 0 — 2026-07-25)
+
+EIN `brainroute:deep`-Agent, frischer Kontext, gegen v1 dieser Spec und den echten Code;
+Auftrag aus `docs/verify-runde-template.md` „Baustein 0". Der Verifier hat die Migration in
+einem eigenen Worktree tatsächlich gebaut, alle Gates gefahren und **sieben Mutanten** laufen
+lassen.
+
+**Verdikt: kein Blocker.** Der Geltungsbereich der 32 Stellen ist im praktischen Ergebnis
+korrekt — der vorregistrierte Zielwert 225.599 @ 140 wurde unabhängig exakt reproduziert,
+ebenso stress/browser Δ0 und die volle Verhaltensparität inklusive `test:threaded` 139/0.
+
+**Zwei Befunde mit Schweregrad MAJOR, beide in v2 eingearbeitet:**
+1. D1s schriftliches Kriterium fehlte die **Empfänger-Bedingung** — die Liste war richtig, die
+   Herleitungsregel nicht. Hätte über D6 als Dauerregel ins Projekt wandern können.
+2. Die **Nicht-Vakuitäts-Pflicht war ortsabhängig** und hätte bei naiver Ortswahl einen
+   Scheinbeweis geliefert (13 der 32 Stellen sind mutations-blind). Daraus wurde D7.
+
+**Selbst nachgeprüft, weil beide Befunde folgenreich sind** (Fremdbefunde gelten hier nicht
+ungeprüft): Der Vakuitäts-Befund ist bestätigt — `resident.test.ts:501` von `{step:2}` auf
+`{step:1}`, also gestridet → contiguous, ergibt 6122 pass / 0 fail. Die
+Empfänger-Bedingung ist bestätigt, **die Zahl des Verifiers dazu jedoch nicht**: er berichtete
+Δ−1 für die drei dynamischen Stellen, gemessen sind **Δ−35** (237.344 @ 140). Der Unterschied
+ändert die Schlussfolgerung nicht (−35 gegen ≈368 pro echter Stelle), ist aber ein weiterer
+Beleg dafür, dass Einzelsite-Zahlen in diesem Zähler nicht belastbar sind (Befund 3 der
+Ergebnis-Doku).
+
+**Übernommen ohne eigene Nachprüfung** (klein, plausibel, verankert): die drei
+Dokumentationslücken (fehlender `SliceSpecInput`-Import im Helfer-Rezept, `vector.test.ts` und
+`s1-import-guard.test.ts` in der Ausschlussliste, die Dreiteilung von `slice.test.ts`) sowie
+`test:threaded` 139/0. Alle vier stehen als Fremdmessung markiert.

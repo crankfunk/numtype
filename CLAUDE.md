@@ -288,7 +288,18 @@ Session-Zustand).
   Pin — test:threaded beweist seine Bit-Identität zum stable Core. CI-Gate `check:freeze` mit
   plattform-gelabelter Pin-Menge. **Vorheriger Stand:** `24a048c767f3949ad0a8747cecccc0e25e25bdad859c5deb45e218a39d70cea2`
   (seit WASM-Parität S0/sqrt 2026-07-23, von `0b9df4f1…` Kern 11).
-- **check:diag** Haupt-Pin **237,379 @ 140 Files** (nur Root-Korpus; seit WASM-Parität S5/topk
+- **check:diag** Haupt-Pin **225,671 @ 140 Files** (nur Root-Korpus; seit der
+  `slice`-Literal-Budget-Scheibe 2026-07-25, von 237,379 @ 140 — **Δ−11,708 = −4,93 %**, der
+  erste RÜCKGANG dieser Größenordnung im Projekt. Dateiset unverändert 140, kein Order-Noise,
+  keine Verhaltensänderung: 32 literal-argumentige `.slice()`-Aufrufstellen in sieben
+  Laufzeit-Testdateien laufen jetzt über `wideSpecs(...)` und nehmen damit den
+  `IsDynamicLength`-No-Claim-Pfad. **Zweistufig:** die Umsetzung traf den VOR ihr im Worktree
+  gemessenen und als Absolutwert vorregistrierten Wert **225,599 exakt**; die Verify-Runde legte
+  +72 drauf (zwei neue Tests für den geteilten Helfer, Baustein-B-Befund). Alle Nebengates Δ0
+  (stress 116,053, browser 2,142, alle acht `bench:editor`-Pins, Freeze-Hash, cargo 222+1),
+  alle übrigen Testzahlen zahlengleich.
+  Details docs/slice-literal-budget-spec.md v2 + -ergebnisse.md. **Vorheriger Stand:
+  237,379 @ 140** (seit WASM-Parität S5/topk
   2026-07-25, von 229,828 @ 140 — **Δ+7,551** gegen ein vorregistriertes ≤+8,000, also nur
   **449 Marge — der engste Stand der Kampagne**. Dateiset unverändert 140, null Order-Noise,
   in vier Stufen dekomponiert: ① CoreExports-Member + beide Mock-Stubs **Δ0** (fünfte
@@ -379,7 +390,10 @@ Session-Zustand).
   noch der View-Coverage-Nachtrag rühren es (browser kompiliert weder threaded.ts noch die
   Test-Runtime-/Typ-Pin-Dateien, in denen `mean`s Anhänge landen), Δ0, gemessen; stress/browser
   ungated by design, `pnpm check` compoundet alle drei).
-- **Testzahlen:** test:core 1591 · test:resident **6122+2** (+256 aus WASM-Parität S5/topk
+- **Testzahlen:** test:core 1591 · test:resident **6124+2** (+2 aus der
+  `slice`-Literal-Budget-Scheibe 2026-07-25: zwei direkte Tests für den geteilten
+  `wideSpecs`-Helfer — Baustein-B-Befund, dass ein Bug IM Helfer an 22 von 32 Aufrufstellen
+  symmetrisch unsichtbar bleibt; davor 6122+2, +256 aus WASM-Parität S5/topk
   2026-07-25: 529 volle Differential-Vergleiche über contiguous + vier View-Klassen ×
   k-Raster {0,1,n/2,n} + Spezialwert-Raster + **konstruiertes Gleichstands-Raster**,
   11 Hand-Referenz-Pins, 24 orakelfreie Cross-Surface-Vergleiche, NaN-Payload byte-exakt
@@ -540,6 +554,23 @@ Session-Zustand).
   sein) statt einer erneuten Stichwortsuche. **Regel:** wer eine Menge abarbeitet, prüft am
   Ende die RESTMENGE über ein anderes Merkmal, nicht die Trefferliste über dasselbe. Das ist
   billig und ersetzt „mehr Sorgfalt beim Suchen", was hier nachweislich nicht gereicht hätte.
+- **Arbeitsregel 16 (aus der `slice`-Literal-Budget-Scheibe, 2026-07-25):** **Laufzeittests
+  bauen Views mit `wideSpecs(...)` (aus `spike/tests-runtime/assert-helpers.ts`), nicht mit
+  literalen Specs.** Ein literales Slice-Spec in einer `*.test.ts` **auf einem Empfänger mit
+  statisch bekanntem Rang** bezahlt die volle `SliceSpecsGuard`/`SliceShape`-Maschinerie, ohne
+  dass eine Zusicherung davon abhängt — die Typ-Ebenen-Pins liegen in `spike/tests/*.test-d.ts`,
+  und `slice.test-d.ts:8-11` sagt selbst, dass das Pinning über `NDArray` auch `WNDArray.slice`
+  abdeckt. **Die Empfänger-Bedingung gehört zur Regel:** steht der Empfänger auf einer
+  dynamischen Shape (`number[]`), greift `RankUnknowable` schon VOR der Spec-Prüfung
+  (slice.ts:110/225), das Literal kostet nichts, und ein `wideSpecs()` wäre verschwendete Mühe
+  (gemessen: Δ−35 über drei solche Stellen). **Ausnahme:** `slice.test.ts` selbst — dort sind
+  die Literale die Aussage bzw. markieren die bewusste Typ-/Laufzeit-Grenze.
+  **Und der Mess-Teil der Regel:** diese Kosten sind stark SUPER-ADDITIV. Aus „Block X kostet N"
+  folgt NICHT „Aufrufstelle kostet N/k" — drei Blöcke einzeln 549+579+549, zusammen 3.034; eine
+  einzelne Stelle isoliert zu widen kann den Zähler sogar ERHÖHEN (+207, zweimal reproduziert).
+  Nur Alles-oder-nichts-Messungen sind aussagekräftig. Das ist derselbe
+  Fresh-vs-Cached-Partitionsmechanismus wie beim Order-Noise, aber **innerhalb eines fixen
+  File-Sets**, also ohne dass eine Datei dazukommt.
 - **Arbeitsregeln aus der WASM-Parität-Kampagne (2026-07-23, gelten für S3–S5):** (10) **Jeder neue
   `CoreExports`-Member braucht einen `notImplemented(...)`-Stub in jedem EXHAUSTIV hand-getippten
   Mock — aber nicht in einem, der einen echten Core per Spread (`...real`) übernimmt** (der erbt

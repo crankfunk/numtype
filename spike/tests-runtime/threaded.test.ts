@@ -36,7 +36,7 @@ import {
   threadedMatmul,
   ThreadedPool,
 } from "../src/wasm/threaded.ts";
-import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
+import { assertDataBitIdentical, assertShapeEqual, wideSpecs } from "./assert-helpers.ts";
 import { genBroadcastShapes, genData, genDataSpecial, makeRng, type Rng } from "./prng.ts";
 
 const stableCore: CoreExports = await initCore();
@@ -1176,7 +1176,7 @@ function buildStackRows(core: CoreExports, rowsData: readonly Float64Array[], as
       for (let k = 0; k < d; k++) baseData.push(data[k]!, 0);
       const base = WNDArray.fromArray(core, baseShape, baseData);
       owners.push(base);
-      rows.push(base.slice(null, 0));
+      rows.push(base.slice(...wideSpecs(null, 0)));
     } else {
       rows.push(WNDArray.fromArray(core, rowShape, data));
     }
@@ -1426,7 +1426,7 @@ function makeTopkOperand(core: CoreExports, asView: boolean, refData: Float64Arr
   for (let i = 0; i < padded.length; i++) padded[i] = -12345.5;
   for (let i = 0; i < refData.length; i++) padded[i * 3] = refData[i] ?? 0;
   const base = WNDArray.fromArray(core, [refData.length * 3], padded);
-  const view = base.slice({ step: 3 }) as AnyWNDArray;
+  const view = base.slice(...wideSpecs({ step: 3 })) as AnyWNDArray;
   return { arr: view, owners: [base, view] };
 }
 

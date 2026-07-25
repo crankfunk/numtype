@@ -19,7 +19,7 @@ import { NDArray } from "../src/ndarray.ts";
 import { elementwiseBinary, scalarElementwiseRuntime, sqrtRuntime, transposeRuntime } from "../src/runtime.ts";
 import { initCore } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
-import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
+import { assertDataBitIdentical, assertShapeEqual, wideSpecs } from "./assert-helpers.ts";
 import { genBroadcastShapes, genData, makeRng } from "./prng.ts";
 
 const core = await initCore();
@@ -264,12 +264,12 @@ test("sqrt: sliced view (step slice, non-contiguous strides, offset 0)", () => {
   // [4,3] -> rows {0,2} via step 2 -> shape [2,3], strides [6,1] (non-natural).
   const baseShape = [4, 3];
   const baseData = Array.from({ length: 12 }, (_, i) => (i + 1) * (i + 1));
-  const refView = NDArray.fromArray(baseShape, baseData).slice({ step: 2 }, null); // trusted naive slice
+  const refView = NDArray.fromArray(baseShape, baseData).slice(...wideSpecs({ step: 2 }, null)); // trusted naive slice
   const ref = refView.sqrt();
 
   const w = WNDArray.fromArray(core, baseShape, baseData);
   try {
-    const view = w.slice({ step: 2 }, null); // O(1) view, non-natural strides
+    const view = w.slice(...wideSpecs({ step: 2 }, null)); // O(1) view, non-natural strides
     try {
       const got = view.sqrt();
       try {
@@ -290,12 +290,12 @@ test("sqrt: offset window (1-D, nonzero base offset, natural stride)", () => {
   // [6] -> rows 2.. -> shape [4], offset 2, stride 1 (natural, just shifted).
   const baseShape = [6];
   const baseData = [0, 1, 4, 9, 16, 25];
-  const refView = NDArray.fromArray(baseShape, baseData).slice({ start: 2 }); // trusted naive slice
+  const refView = NDArray.fromArray(baseShape, baseData).slice(...wideSpecs({ start: 2 })); // trusted naive slice
   const ref = refView.sqrt();
 
   const w = WNDArray.fromArray(core, baseShape, baseData);
   try {
-    const view = w.slice({ start: 2 }); // O(1) view, offset 2
+    const view = w.slice(...wideSpecs({ start: 2 })); // O(1) view, offset 2
     try {
       const got = view.sqrt();
       try {
@@ -413,7 +413,7 @@ for (const op of SCALAR_OPS) {
     const baseData = Array.from({ length: 12 }, (_, i) => (i + 1) * (i + 1));
     const w = WNDArray.fromArray(core, baseShape, baseData);
     try {
-      const view = w.slice({ step: 2 }, null); // O(1) view, non-natural strides
+      const view = w.slice(...wideSpecs({ step: 2 }, null)); // O(1) view, non-natural strides
       try {
         assertScalarOpMatches(op, view, 2.5, `${op}(s) sliced view`);
       } finally {
@@ -430,7 +430,7 @@ for (const op of SCALAR_OPS) {
     const baseData = [0, 1, 4, 9, 16, 25];
     const w = WNDArray.fromArray(core, baseShape, baseData);
     try {
-      const view = w.slice({ start: 2 }); // O(1) view, offset 2
+      const view = w.slice(...wideSpecs({ start: 2 })); // O(1) view, offset 2
       try {
         assertScalarOpMatches(op, view, 2.5, `${op}(s) offset window`);
       } finally {

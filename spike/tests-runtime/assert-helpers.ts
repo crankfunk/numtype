@@ -15,6 +15,7 @@
  * `bitsOf` directly instead of this function.
  */
 import assert from "node:assert";
+import type { SliceSpecInput } from "../src/slice.ts";
 
 export function assertShapeEqual(expected: readonly number[], actual: readonly number[], context: string): void {
   assert.deepStrictEqual([...actual], [...expected], `${context}: shape mismatch, expected [${expected.join(",")}] got [${actual.join(",")}]`);
@@ -37,4 +38,16 @@ export function assertDataBitIdentical(expected: Float64Array, actual: Float64Ar
       );
     }
   }
+}
+
+/** Widen a literal slice spec list so `SliceSpecsGuard`/`SliceShape` take the
+ * no-claim path (`IsDynamicLength`). Runtime tests check RUNTIME behaviour;
+ * the type-level claims live in `spike/tests/slice.test-d.ts`, which pins
+ * `NDArray.slice` and states that this covers `WNDArray.slice` too. Paying
+ * the literal machinery at a runtime call site therefore buys nothing and is
+ * measurably expensive — see docs/slice-literal-budget-spec.md. Only applies
+ * to receivers of statically known rank; on a dynamic shape `RankUnknowable`
+ * already short-circuits and this wrapper is pointless. */
+export function wideSpecs(...specs: readonly SliceSpecInput[]): readonly SliceSpecInput[] {
+  return specs;
 }

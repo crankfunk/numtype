@@ -113,8 +113,9 @@ Zwei unabhängige Belege, beide mechanisch geprüft statt behauptet:
 
 Verhaltensneutralität, gemessen auf der vollen Umstellung: `pnpm check` (drei Legs) Exit 0 ·
 `test:core` **1591 pass / 0 fail** · `test:resident` **6122 pass / 0 fail / 2 skipped** —
-beide exakt die gepinnten Zahlen. `test:threaded` (139) ist **nicht gemessen** (braucht die
-pinned nightly); zwei der 32 Stellen liegen dort und sind damit noch ungeprüft.
+beide exakt die gepinnten Zahlen. `test:threaded` (139) war zum Zeitpunkt dieser Gegenprüfung
+**nicht gemessen** (braucht die pinned nightly); zwei der 32 Stellen liegen dort.
+→ **In Teil 2 nachgeholt: 139/139 pass**, dreifach (Baustein 0, Umsetzung, Baustein A).
 
 ## Befund 5 — die Schreibweise wurde gemessen, nicht gewählt
 
@@ -156,3 +157,164 @@ Scheibe". Der große Hebel ist die **einmalige** Umstellung aller 32 Stellen: �
 des Root-Korpus, deutlich mehr als die Summe der Einzelscheiben-Ersparnisse. Genau deshalb ist
 sie eine eigene Scheibe wert — die bindende Spec liegt als
 `docs/slice-literal-budget-spec.md` v1 vor.
+
+---
+
+# Teil 2: die Umsetzung (2026-07-25)
+
+Basis `76bf101`. Spec `docs/slice-literal-budget-spec.md` **v2** (Owner-Richtungsabnahme für
+Scope 32 / Form C / Disziplin-Entscheidung ja / Eskalationsstufe ohne Baustein C; Baustein 0
+gelaufen, Befunde vor der ersten Codezeile eingearbeitet).
+
+## Was gebaut wurde
+
+Ein einziger mechanischer Diff über acht Dateien: `wideSpecs(...)` als Insertion ans Ende von
+`spike/tests-runtime/assert-helpers.ts` (plus ein `import type { SliceSpecInput }`), und 32
+Aufrufstellen in sieben Laufzeit-Testdateien von literalen Specs auf den Spread umgestellt.
+`wideSpecs` wurde in jeder Datei in den **bestehenden** `assert-helpers`-Import gemergt, keine
+Datei bekam ein zweites Import-Statement.
+
+```ts
+const view = w.slice({ step: 2 }, null);               // vorher
+const view = w.slice(...wideSpecs({ step: 2 }, null)); // nachher
+```
+
+Kein `spike/src`, kein `crates/`, keine Datei unter der Append-/Insertion-only-Disziplin.
+
+## Gate-Block: jeder vorregistrierte Absolutwert exakt getroffen
+
+Die Spec hat die Zielwerte **vor** der Umsetzung registriert (gemessen im Worktree, nicht
+geschätzt), damit jede Abweichung ein Befund ist statt einer nachträglichen Rechtfertigung.
+Es gab keine.
+
+| Gate | vorregistriert | gemessen |
+|---|---|---|
+| `check:diag` | 225.599 @ 140 | **225.599 @ 140** |
+| `check:diag:stress` | 116.053 @ 82 | 116.053 @ 82 |
+| `check:diag:browser` | 2.142 @ 75 | 2.142 @ 75 |
+| `bench:editor` | 8 Pins unverändert | alle 8 exakt, Hard CI gate PASS |
+| `check:freeze` | `2a54d9fd…` | unverändert |
+| `cargo test` | 222 + 1 | 222 + 1 |
+| `test:core` · `:resident` · `:threaded` | 1591 · 6122+2 · 139 | zahlengleich, je 0 fail |
+| `pnpm check` (3 Legs) · `graph-a-lama query lint` | Exit 0 | Exit 0 |
+
+Damit ist `check:diag` von 237.379 auf **225.599 @ 140** gefallen — **Δ−11.780 = −4,96 %**, der
+erste Rückgang dieser Größenordnung im Projekt, und der einzige Pin, der sich bewegt.
+
+## Nicht-Vakuitäts-Beweis
+
+Spec v2 verlangt den Mutanten an mindestens zwei Stellen mit **nachgewiesen unabhängigem
+Orakel** — die v1-Fassung („eine der vier View-Klassen") hätte wegen D7 mit 41 %
+Wahrscheinlichkeit einen Scheinbeweis geliefert. Gefahren:
+
+- `resident.test.ts:2036` (`{step:2}` → `{step:1}`): **3 benannte Fehlschläge**.
+- `threaded.test.ts:1429` (`{step:3}` → `{step:1}`): **3 benannte Fehlschläge**.
+
+Beide per Backup-Kopie revertiert, `diff` je identisch, danach beide Suiten wieder exakt auf
+den Pins. Kein `git checkout` (Arbeitsregel 1 — der Haupt-Tree trug die uncommittete Scheibe).
+
+## Offengelegte Abweichung von der Spec
+
+**D2, Helfer-Kommentar (minor, additiv).** Der ausgelieferte JSDoc ist länger als der wörtliche
+Block in D2: er ergänzt `IsDynamicLength` als Mechanismus-Namen, die Belegstelle
+`slice.test-d.ts:8-11`, einen Verweis auf die Spec und die Empfänger-Bedingung. Signatur und
+Rumpf sind byte-gleich zum Rezept. Von Baustein A als Drift gemeldet und hier offengelegt statt
+stillschweigend geglättet; die Spec wurde dafür **nicht** nachträglich geändert (Hausregel:
+keine stillen Spec-Anpassungen). Baustein A hat die beiden neu zitierten Belegstellen selbst am
+Code geprüft — sie stimmen.
+
+## Verify-Runde (Baustein A + B, parallel, frische Kontexte)
+
+Eskalationsstufe nach Owner-Entscheidung: Baustein 0 vorab, dann A + B, **kein Baustein C** —
+die Scheibe berührt keinen Kernel, kein Verhalten und keine Konsumenten-API. Baustein A hat
+diese Einstufung geprüft und bestätigt.
+
+### Baustein A (Spec-Konformität): CONFIRMED, kein Blocker
+
+Alle elf Gates unabhängig frisch gefahren, alle exakt auf den vorregistrierten Werten. Scope
+32/32 exakt gegen D1 abgeglichen, inklusive der drei Ausschluss-Stellen der Empfänger-Bedingung.
+Insertion-Disziplin am Helfer bestätigt (nur `+`-Zeilen), Import-Merge in allen sieben Dateien
+bestätigt.
+
+Sein Pflicht-Mutant saß bewusst **außerhalb** der drei von der Spec benannten Beweisstellen
+(`keepdims.test.ts:202`) und fing drei benannte Fehlschläge. Zusätzlich hat er D7 an einer
+**anderen** Stelle als die Spec unabhängig reproduziert (`elementwise.test.ts:416`, 0 fail) —
+die Vakuitäts-Klassifikation ist damit zweifach belegt.
+
+Ein Minor: der ausgelieferte Helfer-Kommentar weicht additiv vom wörtlichen Rezept in D2 ab
+(siehe „Offengelegte Abweichung"). A hat die beiden neu zitierten Belegstellen selbst am Code
+nachgeprüft.
+
+### Baustein B (adversarial): ein MAJOR, geschlossen
+
+**Der Befund:** ein Bug **im geteilten Helfer selbst** ist an **22 von 32** Aufrufstellen
+unsichtbar. 13 davon waren als D7 bekannt; **neun sind neu** und entstehen aus einem
+strukturell anderen Mechanismus, den D7 nicht abdeckt:
+
+- **Acht Stellen, „gepaarte Selbst-Slice-Referenz"** (`elementwise.test.ts` 267/272/293/298,
+  `keepdims.test.ts` 197/202/224/231): die naive `NDArray`-Referenz und der residente Kandidat
+  bauen ihren View über **denselben** Helfer mit **denselben** Argumenten. Ein Helfer-Bug wirkt
+  auf beide Seiten identisch und hebt sich symmetrisch auf — beide Seiten bleiben bit-identisch,
+  obwohl beide das Slicing vollständig verloren haben.
+- **Eine Stelle, trivialer No-Op** (`reshape.test.ts:183`): die Specs `null, {start:0}` auf
+  `[4,3]` sind selbst schon eine identitätserhaltende Full-View.
+
+**Selbst nachgeprüft, nicht übernommen:** `return specs` → `return []` — der destruktivste
+denkbare Helfer-Bug, der an jeder Aufrufstelle sämtliche Specs verwirft — schlägt sich in nur
+**2/1591 + 21/6124 = 23 Fällen** nieder. Der Befund stimmt.
+
+Wichtige Einschränkung, die B selbst gemessen hat: ein **Tippfehler an einer einzelnen**
+Aufrufstelle (das realistischere Risiko) wird an diesen neun Stellen sehr wohl gefangen. Die
+Blindheit gilt ausschließlich für einen Bug im Helfer — der aber laut Arbeitsregel 16 ab jetzt
+der Standardweg für alle künftigen Laufzeittests ist, die Angriffsfläche wächst also.
+
+**Schließung, in dieser Scheibe:** zwei direkte Tests für `wideSpecs` am Ende von
+`resident.test.ts` (Identität auf der Spec-Liste über alle drei Eingabe-Arten, plus der leere
+Fall). Sie schließen alle 22 blinden Stellen auf einmal. **Nicht-Vakuität bewiesen** am
+subtileren Mutanten `return specs.slice(0, -1)` (nur das letzte Spec fällt weg): der neue Test
+schlägt benannt fehl. Revert per Backup-Kopie mit `diff`-Beweis.
+
+Bewusst **ans Dateiende** angehängt, damit sämtliche Zeilennummern der D1-Tabelle gültig
+bleiben.
+
+Alle übrigen Angriffsflächen hielten: B hat die Compile→Runtime-Verlagerung für alle drei
+Kategorien (Arity, Out-of-Bounds, invalider Step) empirisch bestätigt statt nur gelesen — D5
+nannte nur Arity als Beispiel und unterschätzte damit den Umfang der eigenen, akzeptierten
+Verlagerung leicht. Die Helfer-Signatur bleibt auf der **Struktur**-Ebene scharf
+(`wideSpecs("nope")` ist weiterhin TS2345); es geht nur die Literal-WERT-Ebene verloren. Keine
+neuen typmaskierenden Casts, keine S1-Verletzung, `test:package` unberührt.
+
+## Endstand nach der Verify-Runde
+
+| Gate | Wert | gegen |
+|---|---|---|
+| `check:diag` | **225.671 @ 140** | 237.379 vor der Scheibe = **Δ−11.708 (−4,93 %)** |
+| `check:diag:stress` | 116.053 @ 82 | Δ0 |
+| `check:diag:browser` | 2.142 @ 75 | Δ0 |
+| `bench:editor` | 8 Pins exakt, Hard CI gate PASS | Δ0 |
+| `check:freeze` | `2a54d9fd…` | unverändert |
+| `cargo test` | 222 + 1 | unverändert |
+| `test:core` | 1591 / 0 fail | unverändert |
+| `test:resident` | **6124 + 2 skipped** / 0 fail | +2 (die neuen Helfer-Tests) |
+| `test:threaded` | 139 / 0 fail | unverändert |
+| `pnpm check` (3 Legs) · `graph-a-lama query lint` | Exit 0 | — |
+
+Die Umsetzung traf den vorregistrierten Wert **225.599 exakt**; die Verify-Runde legte **+72**
+für die zwei neuen Tests drauf. Beide Stufen sind getrennt gemessen und hier getrennt
+ausgewiesen, damit die Vorregistrierung nachprüfbar bleibt.
+
+## Was diese Scheibe gelehrt hat
+
+1. **Eine Zahl aus einer Messung ist eine Beobachtung, keine Regel.** Der Ursprungsbefund war
+   korrekt gemessen und dreifach bestätigt — und trotzdem in zwei Schlüssen falsch, weil niemand
+   ihn an einem zweiten Fall geprüft hatte. Die Gegenprüfung kostete einen halben Tag; die
+   Hausregel wäre mit einer 39 % zu hohen Erwartung ins Projekt gewandert.
+2. **Ein geteilter Helfer verschiebt die Beweislast.** 32 Aufrufstellen durch eine Funktion zu
+   führen macht den Code besser lesbar und die Kosten kleiner — und erzeugt eine neue
+   Single-Point-of-Failure-Fläche, gegen die genau die Tests blind sind, die sie benutzen. Der
+   Fix ist eine Zeile, aber man kommt nur darauf, wenn jemand gezielt den Helfer angreift statt
+   die Aufrufstellen.
+3. **Selbstreferentielle Test-Orakel bestehen jeden Gate-Block.** D7 war die ganze Zeit da,
+   über mehrere Scheiben hinweg, und keine Verify-Runde hat sie gefunden — weil niemand den
+   Slice-Spec mutiert hatte, sondern immer die Op. Sichtbar wurde es erst, als eine Scheibe
+   ausgerechnet diese Zeilen anfasste.

@@ -30,7 +30,7 @@ import { NDArray } from "../src/ndarray.ts";
 import { checkThreadedEnv, WasmBackend } from "../src/wasm/backend-api.ts";
 import { initCore } from "../src/wasm/loader.ts";
 import { getResidentFreeCount, WNDArray } from "../src/wasm/resident.ts";
-import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
+import { assertDataBitIdentical, assertShapeEqual, wideSpecs } from "./assert-helpers.ts";
 import { genData, makeRng } from "./prng.ts";
 
 // --- Fassaden-Äquivalenz: fromArray/zeros/ones bit-identical ----------------
@@ -233,7 +233,7 @@ test("Interop: WNDArray.toArray() -> NDArray.fromArray(shape, ...), bit-identica
 test("Interop: WNDArray.slice() (view) -> toArray() -> NDArray.fromArray(shape, ...), bit-identical", async () => {
   const backend = await NDArray.backend("wasm");
   const wnd = backend.fromArray([4, 4], Array.from({ length: 16 }, (_, i) => i));
-  const wndSlice = wnd.slice({ start: 1, stop: 3 }, { start: 1, stop: 3 }); // O(1) view — not yet materialized
+  const wndSlice = wnd.slice(...wideSpecs({ start: 1, stop: 3 }, { start: 1, stop: 3 })); // O(1) view — not yet materialized
   try {
     const nd = NDArray.fromArray(wndSlice.shape, wndSlice.toArray());
     assertShapeEqual(wndSlice.shape, [...nd.shape], "interop WNDArray(slice)->NDArray shape");

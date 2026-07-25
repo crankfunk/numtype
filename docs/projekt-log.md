@@ -1141,3 +1141,79 @@ host-unabhängiger Clean-Rebuild, und eine Abweichung auf einer vorher identisch
 Plattform ist ein Befund, kein Pin-Anlass. Die Nuance, die dabei benannt gehört: die
 EIGENSCHAFT galt schon (der CI-Job prüfte seit Item 12 Linux gegen einen macOS-Pin), nur die
 daraus folgende REGEL stand nirgends.
+
+## `slice`-Literal-Budget: eine Gegenprüfung, die ihren eigenen Anlass widerlegte (2026-07-25)
+
+Die Scheibe begann als FOLLOWUPS-Eintrag aus WASM-Parität S5: der Vier-View-Klassen-Block in
+`resident.test.ts` koste +3.926 Instantiations = 52 % der Scheibe, getrieben von
+literal-argumentigen `.slice()`-Aufrufstellen — Kandidat für eine Hausregel. Der Owner hat
+nicht die Regel bestellt, sondern die **Gegenprüfung an einem zweiten Korpus**. Das war die
+richtige Entscheidung, und sie hat sich sofort ausgezahlt.
+
+**Der Betrag hielt, die Schlüsse nicht.** Der Ausbau des Blocks reproduzierte 233.453 @ 140 auf
+die Ziffer — ein viertes Mal nach den drei Messungen in S5. Aber der strukturell identische
+S4/argmax-View-Block, gleicher Aufbau, gleiche vier View-Klassen, gleiche drei Slice-Formen,
+kostet nur **734**. Faktor 5,3. Aus einer Einzelbeobachtung war eine Aussage über eine
+Codeklasse geworden, und die hielt nicht. Zweitens: von den +3.926 sind nur **2.232 = 57 %**
+slice-getrieben, der Rest sind gewöhnliche Testinhalts-Kosten. Und drittens war die abgeleitete
+Marge falsch — „hätte 449 auf ≈4.400 gehoben" verwechselte Ausbau des Blocks mit Widen seiner
+Specs; richtig sind ≈2.681.
+
+**Der eigentlich neue Befund ist methodisch: diese Kosten sind stark super-additiv.** Drei
+strukturgleiche Blöcke einzeln gemessen ergeben 549 + 579 + 549; zusammen gemessen **3.034**.
+Alle 32 Stellen über sieben Dateien zusammen **11.780**, rund 3.200 über der Teilsummen-
+Erwartung. Und eine einzelne Stelle isoliert zu widen kann den Zähler sogar **erhöhen** (+207
+an Zeile 2087, zweimal reproduziert). Damit ist die in der Notiz implizit verwendete
+Pro-Aufrufstelle-Rechnung nicht bloß ungenau, sondern **undefiniert** — es ist derselbe
+Fresh-vs-Cached-Partitionsmechanismus wie beim Order-Noise, nur innerhalb eines fixen
+File-Sets, ohne dass eine Datei dazukommt. Das erklärt nachträglich einen Befund aus S5, der
+dort als „eine Zahl bleibt ungeklärt" stehen geblieben war: die Literal-Mehrkosten *einer*
+Aufrufstelle waren dreimal gemessen worden und hatten drei verschiedene Werte ergeben
+(≈122/≈149/≈95). Kein Messfehler — eine solche Zahl existiert nicht.
+
+**Die Prämisse hielt trotzdem, und daraus wurde die Scheibe.** Die sieben betroffenen Dateien
+enthalten null Typ-Ebenen-Assertionen, und `slice.test-d.ts` sagt in seinem eigenen Dateikopf,
+dass `WNDArray.slice` über das NDArray-Pinning mitabgedeckt ist. Die literalen Specs kaufen
+dort also nachweislich nichts. Die Schreibweise wurde **gemessen statt gewählt**: drei
+Kandidaten, der geteilte `wideSpecs(...)`-Helfer gewinnt gleichzeitig auf Kosten (225.599),
+Kürze und Lesbarkeit.
+
+**Baustein 0 fing zwei Dinge vor der ersten Codezeile.** Erstens fehlte D1s Kriterium die
+**Empfänger-Bedingung**: `RankUnknowable` greift in `slice.ts` schon VOR jeder Spec-Betrachtung,
+also kosten literale Specs auf dynamisch getippten Empfängern gar nichts (gemessen Δ−35 über
+drei solche Stellen). Die 32er-Liste war richtig, die aufgeschriebene Herleitungsregel nicht —
+und genau die wäre über D6 als Dauerregel ins Projekt gewandert. Zweitens war die
+Nicht-Vakuitäts-Pflicht **ortsabhängig** formuliert und hätte mit 41 % Wahrscheinlichkeit einen
+Scheinbeweis geliefert.
+
+**Daraus wurde D7, und das ist der teuerste Fund der Scheibe — obwohl er nicht zu ihr gehört.**
+An 13 der 32 Stellen ist das Test-Orakel selbstreferentiell: `assertMeanViewMatches` und
+Geschwister bilden ihre Referenz aus dem `.toArray()` des **bereits konstruierten** Views. Wird
+der Slice-Spec verfälscht, entsteht ein anderer View, aber Referenz und Kandidat rechnen beide
+konsistent darüber weiter. Selbst nachgestellt: `resident.test.ts:501` von `{step:2}` auf
+`{step:1}` gedreht — was aus dem gestrideten View einen contiguous macht und damit genau die
+Eigenschaft zerstört, für die der Block existiert — ergibt **6122 pass, 0 fail**. Die Tests
+sind nicht falsch; verloren ist die *Coverage-Aussage*, dass der Empfänger die View-Klasse ist,
+die der Testname behauptet. Ausgerechnet **Arbeitsregel 12** stützt sich auf diese Blöcke. Der
+S5/topk-Block ist die Ausnahme, weil sein Autor Precondition-Assertions gesetzt hat. Der Befund
+ist vorbestehend, wird durch die Migration weder verursacht noch verschlimmert, und wurde
+deshalb bewusst out of scope gehalten — er steht als eigener FOLLOWUPS-Eintrag.
+
+**Baustein B fand einen MAJOR, den die Scheibe selbst erzeugt hatte.** 32 Aufrufstellen durch
+einen geteilten Helfer zu führen macht den Code lesbarer und billiger — und erzeugt eine neue
+Single-Point-of-Failure-Fläche, gegen die **22 von 32** Stellen blind sind. Neun davon durch
+einen Mechanismus, den D7 nicht abdeckt: an ihnen bauen die naive Referenz UND der residente
+Kandidat ihren View über denselben Helfer mit denselben Argumenten, ein Helfer-Bug hebt sich
+also symmetrisch auf. Selbst nachgeprüft: `return specs` → `return []`, der destruktivste
+denkbare Helfer-Bug, schlägt sich in nur 23 von über 7.700 Fällen nieder. Geschlossen mit zwei
+direkten Tests für `wideSpecs` (Nicht-Vakuität am subtileren Mutanten `return specs.slice(0,
+-1)` bewiesen), bewusst ans Dateiende angehängt, damit die Zeilennummern der D1-Tabelle gültig
+bleiben.
+
+**Endstand:** `check:diag` **225.671 @ 140**, von 237.379 — **Δ−11.708 = −4,93 %**, der erste
+Rückgang dieser Größenordnung im Projekt. Zweistufig und getrennt ausgewiesen, damit die
+Vorregistrierung nachprüfbar bleibt: die Umsetzung traf den vorab im Worktree gemessenen Wert
+**225.599 exakt**, die Verify-Runde legte +72 für die zwei neuen Helfer-Tests drauf. Alle
+Nebengates Δ0 (stress, browser, alle acht Editor-Pins, Freeze-Hash, cargo), alle übrigen
+Testzahlen zahlengleich. Daraus **Arbeitsregel 16** — inklusive der Empfänger-Bedingung und der
+Warnung, dass Einzelsite-Messungen in diesem Zähler nicht existieren.

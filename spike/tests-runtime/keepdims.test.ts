@@ -18,7 +18,7 @@ import { NDArray } from "../src/ndarray.ts";
 import { product, sumRuntime } from "../src/runtime.ts";
 import { initCore } from "../src/wasm/loader.ts";
 import { WNDArray } from "../src/wasm/resident.ts";
-import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
+import { assertDataBitIdentical, assertShapeEqual, wideSpecs } from "./assert-helpers.ts";
 import { genData, makeRng, type Rng } from "./prng.ts";
 
 const core = await initCore();
@@ -194,12 +194,12 @@ function assertKeepShape(
   for (const axis of [0, -1, undefined] as const) {
     test(`keepdims on offset slice view: [3,4] rows 1.. axis=${axis}`, () => {
       const base = NDArray.fromArray([3, 4], Array.from({ length: 12 }, (_, i) => i * 2 + 1));
-      const ref = base.slice({ start: 1 }, null).sum(axis); // trusted non-keep reference chain
+      const ref = base.slice(...wideSpecs({ start: 1 }, null)).sum(axis); // trusted non-keep reference chain
       const ctx = `keepdims offset slice view axis=${axis}`;
 
       const w = WNDArray.fromArray(core, [3, 4], Array.from(base.data));
       try {
-        const view = w.slice({ start: 1 }, null); // O(1) view, offset 4
+        const view = w.slice(...wideSpecs({ start: 1 }, null)); // O(1) view, offset 4
         try {
           const got = view.sum(axis, true);
           try {
@@ -221,14 +221,14 @@ function assertKeepShape(
   // -> [4,2,2] with non-natural strides AND nonzero offset.
   test("keepdims on composed transpose+slice view: [2,3,4]^T sliced, axis=1", () => {
     const base = NDArray.fromArray([2, 3, 4], Array.from({ length: 24 }, (_, i) => i - 7));
-    const ref = base.transpose().slice(null, { start: 1 }, null).sum(1); // trusted non-keep reference chain
+    const ref = base.transpose().slice(...wideSpecs(null, { start: 1 }, null)).sum(1); // trusted non-keep reference chain
     const ctx = "keepdims composed view axis=1";
 
     const w = WNDArray.fromArray(core, [2, 3, 4], Array.from(base.data));
     try {
       const t = w.transpose();
       try {
-        const view = t.slice(null, { start: 1 }, null);
+        const view = t.slice(...wideSpecs(null, { start: 1 }, null));
         try {
           const got = view.sum(1, true);
           try {

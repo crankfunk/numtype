@@ -23,7 +23,7 @@ import { NDArray } from "../src/ndarray.ts";
 import { elementwiseBinary, itemRuntime, keepDimsShape, matmulRuntime, meanRuntime, stackRuntime, sumRuntime, transposeRuntime } from "../src/runtime.ts";
 import { initCore } from "../src/wasm/loader.ts";
 import { WNDArray, type AnyWNDArray } from "../src/wasm/resident.ts";
-import { assertDataBitIdentical, assertShapeEqual } from "./assert-helpers.ts";
+import { assertDataBitIdentical, assertShapeEqual, wideSpecs } from "./assert-helpers.ts";
 import { genBroadcastShapes, genData, makeRng, type Rng } from "./prng.ts";
 
 const core = await initCore();
@@ -498,7 +498,7 @@ for (const axis of [0, 1, undefined] as const) {
       const baseData = Array.from({ length: 12 }, (_, i) => (i + 1) * (i + 1));
       const w = WNDArray.fromArray(core, [4, 3], baseData);
       try {
-        const view = w.slice({ step: 2 }, null); // O(1) view, non-natural strides
+        const view = w.slice(...wideSpecs({ step: 2 }, null)); // O(1) view, non-natural strides
         try {
           assertMeanViewMatches(view, axis, keepdims, `resident mean sliced view axis=${axis} keepdims=${keepdims}`);
         } finally {
@@ -518,7 +518,7 @@ for (const axis of [0, -1, undefined] as const) {
       const baseData = Array.from({ length: 15 }, (_, i) => i - 7);
       const w = WNDArray.fromArray(core, [5, 3], baseData);
       try {
-        const view = w.slice({ start: 2 }); // O(1) view, offset 6, natural strides
+        const view = w.slice(...wideSpecs({ start: 2 })); // O(1) view, offset 6, natural strides
         try {
           assertMeanViewMatches(view, axis, keepdims, `resident mean offset window axis=${axis} keepdims=${keepdims}`);
         } finally {
@@ -541,7 +541,7 @@ for (const axis of [0, 1, 2, undefined] as const) {
       try {
         const t = w.transpose();
         try {
-          const view = t.slice(null, { start: 1 }, null);
+          const view = t.slice(...wideSpecs(null, { start: 1 }, null));
           try {
             assertMeanViewMatches(view, axis, keepdims, `resident mean composed view axis=${axis} keepdims=${keepdims}`);
           } finally {
@@ -655,7 +655,7 @@ function assertItemMatches(view: AnyWNDArray, indices: readonly number[], ctx: s
       const baseData = Array.from({ length: 12 }, (_, i) => (i + 1) * (i + 1));
       const w = WNDArray.fromArray(core, [4, 3], baseData);
       try {
-        const view = w.slice({ step: 2 }, null);
+        const view = w.slice(...wideSpecs({ step: 2 }, null));
         try {
           const indices = genValidItemIndices(rng, view.shape as readonly number[]);
           assertItemMatches(view, indices, `item sliced view case ${c} indices=[${indices.join(",")}]`);
@@ -678,7 +678,7 @@ function assertItemMatches(view: AnyWNDArray, indices: readonly number[], ctx: s
       const baseData = Array.from({ length: 15 }, (_, i) => i - 7);
       const w = WNDArray.fromArray(core, [5, 3], baseData);
       try {
-        const view = w.slice({ start: 2 });
+        const view = w.slice(...wideSpecs({ start: 2 }));
         try {
           const indices = genValidItemIndices(rng, view.shape as readonly number[]);
           assertItemMatches(view, indices, `item offset window case ${c} indices=[${indices.join(",")}]`);
@@ -703,7 +703,7 @@ function assertItemMatches(view: AnyWNDArray, indices: readonly number[], ctx: s
       try {
         const t = w.transpose();
         try {
-          const view = t.slice(null, { start: 1 }, null);
+          const view = t.slice(...wideSpecs(null, { start: 1 }, null));
           try {
             const indices = genValidItemIndices(rng, view.shape as readonly number[]);
             assertItemMatches(view, indices, `item composed view case ${c} indices=[${indices.join(",")}]`);
@@ -1366,7 +1366,7 @@ for (const axis of [0, 1, undefined] as const) {
       const baseData = [3, 14, 1, 5, 9, 2, 6, 53, 5, 8, 97, 9];
       const w = WNDArray.fromArray(core, [4, 3], baseData);
       try {
-        const view = w.slice({ step: 2 }, null); // O(1) view, non-natural strides
+        const view = w.slice(...wideSpecs({ step: 2 }, null)); // O(1) view, non-natural strides
         try {
           const ctx = `resident argmax sliced view axis=${axis} keepdims=${keepdims}`;
           assertArgmaxMatches(view, axis, keepdims, ctx);
@@ -1388,7 +1388,7 @@ for (const axis of [0, -1, undefined] as const) {
       const baseData = Array.from({ length: 15 }, (_, i) => ((i * 7) % 13) - 6);
       const w = WNDArray.fromArray(core, [5, 3], baseData);
       try {
-        const view = w.slice({ start: 2 }); // O(1) view, offset 6, natural strides
+        const view = w.slice(...wideSpecs({ start: 2 })); // O(1) view, offset 6, natural strides
         try {
           const ctx = `resident argmax offset window axis=${axis} keepdims=${keepdims}`;
           assertArgmaxMatches(view, axis, keepdims, ctx);
@@ -1413,7 +1413,7 @@ for (const axis of [0, 1, 2, undefined] as const) {
       try {
         const t = w.transpose();
         try {
-          const view = t.slice(null, { start: 1 }, null);
+          const view = t.slice(...wideSpecs(null, { start: 1 }, null));
           try {
             const ctx = `resident argmax composed view axis=${axis} keepdims=${keepdims}`;
             assertArgmaxMatches(view, axis, keepdims, ctx);
@@ -1963,7 +1963,7 @@ function kRaster(n: number): number[] {
     test(`resident topk on step-sliced view (stride 2, offset 0): k=${k}`, () => {
       const w = WNDArray.fromArray(core, [12], BASE.slice(0, 12));
       try {
-        const view = w.slice({ step: 2 }); // [6], stride 2
+        const view = w.slice(...wideSpecs({ step: 2 })); // [6], stride 2
         try {
           assert.deepStrictEqual([...(view.shape as readonly number[])], [6], "precondition: the step slice is a length-6 rank-1 view");
           assert.notStrictEqual(view.describe().strides[0], 1, "precondition: the view must be genuinely non-contiguous (stride != 1)");
@@ -1982,7 +1982,7 @@ function kRaster(n: number): number[] {
     test(`resident topk on offset window (stride 1, offset 4): k=${k}`, () => {
       const w = WNDArray.fromArray(core, [12], BASE.slice(0, 12));
       try {
-        const view = w.slice({ start: 4 }); // [8], offset 4
+        const view = w.slice(...wideSpecs({ start: 4 })); // [8], offset 4
         try {
           assert.deepStrictEqual([...(view.shape as readonly number[])], [8], "precondition: the window is a length-8 rank-1 view");
           assert.notStrictEqual(view.describe().offset, 0, "precondition: the window must have a nonzero offset");
@@ -2005,7 +2005,7 @@ function kRaster(n: number): number[] {
         try {
           const t = w.transpose(); // [6,4], strides [1,6]
           try {
-            const view = t.slice(row, null) as AnyWNDArray; // rank-1, stride 6, offset `row`
+            const view = t.slice(...wideSpecs(row, null)) as AnyWNDArray; // rank-1, stride 6, offset `row`
             try {
               assert.deepStrictEqual([...(view.shape as readonly number[])], [4], "precondition: a transposed row is a length-4 rank-1 view");
               assert.strictEqual(view.describe().strides[0], 6, "precondition: the row's stride must be the base's row length");
@@ -2031,9 +2031,9 @@ function kRaster(n: number): number[] {
       try {
         const t = w.transpose(); // [6,4]
         try {
-          const row = t.slice(3, null) as AnyWNDArray; // [4], stride 6, offset 3
+          const row = t.slice(...wideSpecs(3, null)) as AnyWNDArray; // [4], stride 6, offset 3
           try {
-            const view = row.slice({ step: 2 }) as AnyWNDArray; // [2], stride 12, offset 3
+            const view = row.slice(...wideSpecs({ step: 2 })) as AnyWNDArray; // [2], stride 12, offset 3
             try {
               assert.deepStrictEqual([...(view.shape as readonly number[])], [2], "precondition: the composed view is length 2");
               assert.strictEqual(view.describe().strides[0], 12, "precondition: composed stride");
@@ -2084,7 +2084,7 @@ function kRaster(n: number): number[] {
       for (let i = 0; i < n; i++) padded[i * 3] = data[i] ?? 0;
       const base = WNDArray.fromArray(core, [n * 3], padded);
       try {
-        const view = base.slice({ step: 3 }) as AnyWNDArray;
+        const view = base.slice(...wideSpecs({ step: 3 })) as AnyWNDArray;
         try {
           assertTopkMatches(view, k, ctx);
         } finally {
@@ -2537,4 +2537,24 @@ test("diagnostic quality (T4, WASM parity S5): topk's three error classes are al
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- wideSpecs: the shared widening helper itself (Verify-B finding) -------
+// `wideSpecs` is pure plumbing — it exists only to make `Specs` infer as an
+// array instead of a tuple — but 32 call sites now route through it, and a
+// bug INSIDE it is invisible at 22 of them: wherever the naive reference and
+// the resident candidate both build their view through the same helper with
+// the same arguments, a helper bug cancels out symmetrically and both sides
+// stay bit-identical while having silently lost the slicing. Measured: with
+// `return []` (drop every spec) only 23 cases across ~10 sites fail. These
+// two assertions close all 22 blind sites at once, so the helper can never
+// be the silent failure.
+test("wideSpecs returns its arguments unchanged, in order", () => {
+  const specs = wideSpecs(1, null, { start: 1, stop: 7, step: 3 }, { step: 2 });
+  assert.deepStrictEqual([...specs], [1, null, { start: 1, stop: 7, step: 3 }, { step: 2 }],
+    "wideSpecs must be an identity on its spec list — order, count and each spec's own shape");
+});
+
+test("wideSpecs on an empty spec list stays empty", () => {
+  assert.deepStrictEqual([...wideSpecs()], [], "wideSpecs() must not invent a spec");
 });
