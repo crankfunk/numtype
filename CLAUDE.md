@@ -748,6 +748,24 @@ Substanz hielt, aber globale standing orders und Prozess-Feinheiten verlor
   (Konformität, coverage-first, eigener Mutant), einer arbeitet adversarial
   (aktiv brechen: Grenzfälle, Messrandbedingungen, Mutanten auch abseits der
   Spec). Aufträge aus docs/verify-runde-template.md, nicht frei formulieren.
+  **Jeder MUTIERENDE Verifier bekommt einen EIGENEN isolierten Worktree, nie den
+  Haupt-Baum** (Mechanik: KB-Notiz `parallele-mutierende-verifier-worktree-patch`
+  — `git diff > slice.patch` außerhalb des Repos, `git apply` je Worktree,
+  node_modules symlinken). Grund, 2026-07-26 real reingelaufen: die
+  Einzel-Aktor-Regel „Mutant nur als revertierter Edit mit Backup-Beweis" ist bei
+  ZWEI Schreibern wertlos — ein Backup belegt nur, dass man auf den EIGENEN
+  Schnappschuss zurückgesetzt hat. Beide Agenten verhielten sich vorschriftsmäßig
+  und kontaminierten sich trotzdem; einer deutete die Folge als
+  „Test-Harness-Flakiness" und hätte einen Phantom-Befund berichtet. **Zwei
+  billige Vorkehrungen:** vor jedem Mutanten `git diff -- <quellpfad>` prüfen und
+  ABBRECHEN statt zu messen, wenn es nicht leer ist; und jede unerklärte
+  Diskrepanz zwischen zwei identischen Läufen als Kontaminationsverdacht
+  behandeln, nicht als Harness-Eigenschaft — besonders, wenn die Differenz auf
+  Bereiche fällt, die der eigene Mutant nicht erreichen kann.
+  **Zähl-Falle im selben Kontext:** der `node --test`-Reporter druckt Fehlschläge
+  ZWEIMAL (inline + Summary). `grep -c` auf den Rohoutput verdoppelt sie und lässt
+  Passes einfach — über EINDEUTIGE Testnamen zählen, sonst sind Mutanten-Tabellen
+  systematisch falsch (in dieser Session an einer Kontrollgruppe passiert).
 - **Covenant (seit v1, Commit 4db74e0):** COVENANT.md ist der stehende
   Produkt-Vertrag (S1, M1–M5, Z1–Z2 + Nicht-Ziele). Vor jeder „fertig"-Meldung
   einer substanziellen Scheibe zusätzlich: `graph-a-lama query lint` als
