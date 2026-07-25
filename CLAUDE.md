@@ -524,6 +524,17 @@ Session-Zustand).
   identisch baute, ist die Abweichung ein Befund und kein Pin-Anlass. Fix hier: eigene
   Heapsort-Sortierung statt `slice::sort_by` (O(k log k) erhalten, keine Extra-Allokation,
   Artefakt −11,5 %); Stabilität war irrelevant, weil die Ordnung eine strikte Totalordnung ist.
+- **Arbeitsregel 15 (aus der COVENANT-v6-Scheibe, 2026-07-25):** **Eine
+  Vollständigkeits-Prüfung darf nicht dieselbe Auffindungs-Methode benutzen wie die Arbeit,
+  die sie prüft.** Die v6-Kandidaten wurden per `grep "v6-Kandidat"` aus FOLLOWUPS extrahiert;
+  der Fresh-Context-Verifier prüfte die Vollständigkeit mit **derselben** Suche und bestätigte
+  ausdrücklich „alle zehn mappen sauber". Beide übersahen denselben Eintrag — er hieß
+  „v6-**Präzisierungs**-Kandidat". Frischer Kontext hilft dagegen NICHT: der blinde Fleck sitzt
+  in der Methode, nicht im Kontext. Gefunden hat ihn eine Kontrolle über eine ANDERE Achse —
+  eine Restmengen-Invariante (`grep -c "^- \[ \] \*\*COVENANT"` muss nach dem Abarbeiten 0
+  sein) statt einer erneuten Stichwortsuche. **Regel:** wer eine Menge abarbeitet, prüft am
+  Ende die RESTMENGE über ein anderes Merkmal, nicht die Trefferliste über dasselbe. Das ist
+  billig und ersetzt „mehr Sorgfalt beim Suchen", was hier nachweislich nicht gereicht hätte.
 - **Arbeitsregeln aus der WASM-Parität-Kampagne (2026-07-23, gelten für S3–S5):** (10) **Jeder neue
   `CoreExports`-Member braucht einen `notImplemented(...)`-Stub in jedem EXHAUSTIV hand-getippten
   Mock — aber nicht in einem, der einen echten Core per Spread (`...real`) übernimmt** (der erbt
