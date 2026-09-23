@@ -42,9 +42,9 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 ## Aktuelle Pins & Gates (IST; Historie im Archiv/Log)
 
 - **Freeze-Hash** (Clean-Rebuild, SHA256 `spike/src/wasm/numtype_core.wasm`): `2a54d9fdba55e4e88a9d54cb3b01e111c2717abf13017f778b90accd5cff87e4` (seit S5/topk). Threads-Artefakt bewusst ohne Pin — test:threaded beweist Bit-Identität. CI-Gate `check:freeze`; die Byte-Identität ist cross-host (macOS-arm64 = linux-x64).
-- **check:diag** Root **226,148 @ 140** · **stress 116,149 @ 82** · **browser 2,142 @ 75** (seit 0a/Release-0.3.0-Polish 2026-09-23: Root Δ+165, stress Δ+96 Klassen-Surface-Ripple) (stress/browser ungated, `pnpm check` compoundet alle drei).
-- **bench:editor** W1–W8 exact-match: `{w1 37.669, w2 39.502, w3 70.644, w4 37.824, w5 43.123, w6 44.317, w7 36.873, w8 44.562}` (0a: uniform +96 = stress-Δ); Latenz am 2x-Ceiling.
-- **Tests:** test:core 1591 · test:resident 6145+2 · test:threaded 139 · test:browser 4 · test:package 3 + zwei Konsumenten-Typ-Smokes (`consumer` skipLibCheck:true, `consumer-strict` skipLibCheck:false ohne @types/node) · cargo 222+1 · test:example (Registry-Install + 8 asserted Queries).
+- **check:diag** Root **226,220 @ 140** · **stress 116,220 @ 82** · **browser 2,142 @ 75** (seit Release-0.3.0-Vorbereitung 2026-09-23: 0a Root Δ+165 / stress Δ+96, dann inspect-Kürzung Root Δ+72 / stress Δ+71) (stress/browser ungated, `pnpm check` compoundet alle drei).
+- **bench:editor** W1–W8 exact-match: `{w1 37.740, w2 39.573, w3 70.715, w4 37.895, w5 43.194, w6 44.388, w7 36.944, w8 44.633}` (0a uniform +96, inspect-Kürzung uniform +71 — je = stress-Δ); Latenz am 2x-Ceiling.
+- **Tests:** test:core 1591 · test:resident 6151+2 · test:threaded 139 · test:browser 4 · test:package 3 + zwei Konsumenten-Typ-Smokes (`consumer` skipLibCheck:true, `consumer-strict` skipLibCheck:false ohne @types/node) · cargo 222+1 · test:example (Registry-Install + 8 asserted Queries).
 - Alle Werte am 2026-09-23 im frischen Worktree reproduziert (Toolchain: node 24.16, pnpm 11.6, tsc 7.0.2, rustc 1.95.0, nightly-2026-07-09).
 
 ## Mess-Regeln (tragend)

@@ -892,15 +892,20 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // `check:diag:stress` (116,053 -> 116,149) -- independent corroboration
 // that this is class-surface growth, not workload-specific. Measured twice
 // (both a contended and a quiet run), byte-identical both times.
+// Then uniform +71 again (inspect summarization, same release, 2026-09-23):
+// the `formatNDArrayDisplay` body in spike/src/runtime.ts grew (NumPy-style
+// `...` summarization); every workload compiles runtime.ts, and the identical
+// +71 shows up in `check:diag:stress` (116,149 -> 116,220). Measured twice,
+// byte-identical.
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 37669,
-  w2: 39502,
-  w3: 70644,
-  w4: 37824,
-  w5: 43123,
-  w6: 44317,
-  w7: 36873,
-  w8: 44562,
+  w1: 37740,
+  w2: 39573,
+  w3: 70715,
+  w4: 37895,
+  w5: 43194,
+  w6: 44388,
+  w7: 36944,
+  w8: 44633,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

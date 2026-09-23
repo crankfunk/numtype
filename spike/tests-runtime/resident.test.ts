@@ -2698,6 +2698,50 @@ test("NDArray inspect/toString: size-0", () => {
   assert.strictEqual(a.toString(), "NDArray<[0, 3]> []");
 });
 
+// --- inspect/toString summarization (NumPy defaults: threshold 1000, edgeitems 3) ---
+
+const iota = (n: number): number[] => Array.from({ length: n }, (_, i) => i);
+
+test("NDArray inspect/toString: exactly 1000 elements is NOT summarized (threshold is strictly greater)", () => {
+  const a = NDArray.fromArray([1000] as number[], iota(1000));
+  const s = a.toString();
+  assert.ok(!s.includes("..."), "1000 elements must print in full");
+  assert.strictEqual(s, `NDArray<[1000]> [${iota(1000).join(", ")}]`);
+});
+
+test("NDArray inspect/toString: 1001 elements, rank 1 -> first/last 3 around ...", () => {
+  const a = NDArray.fromArray([1001] as number[], iota(1001));
+  assert.strictEqual(inspectOf(a), "NDArray<[1001]> [0, 1, 2, ..., 998, 999, 1000]");
+  assert.strictEqual(a.toString(), "NDArray<[1001]> [0, 1, 2, ..., 998, 999, 1000]");
+});
+
+test("NDArray inspect/toString: rank 2 [40, 30] summarizes BOTH axes", () => {
+  const a = NDArray.fromArray([40, 30] as number[], iota(1200));
+  const row = (r: number): string => `[${r * 30}, ${r * 30 + 1}, ${r * 30 + 2}, ..., ${r * 30 + 27}, ${r * 30 + 28}, ${r * 30 + 29}]`;
+  assert.strictEqual(a.toString(), `NDArray<[40, 30]> [${row(0)}, ${row(1)}, ${row(2)}, ..., ${row(37)}, ${row(38)}, ${row(39)}]`);
+});
+
+test("NDArray inspect/toString: an axis of length <= 6 stays whole even when summarizing ([2, 600])", () => {
+  const a = NDArray.fromArray([2, 600] as number[], iota(1200));
+  assert.strictEqual(a.toString(), "NDArray<[2, 600]> [[0, 1, 2, ..., 597, 598, 599], [600, 601, 602, ..., 1197, 1198, 1199]]");
+});
+
+test("NDArray summarized display leaves toJSON complete", () => {
+  const a = NDArray.fromArray([1001] as number[], iota(1001));
+  assert.strictEqual(a.toJSON().data.length, 1001);
+});
+
+test("WNDArray inspect/toString: 1001 elements summarize identically to NDArray", () => {
+  const w = WNDArray.fromArray(core, [1001] as number[], iota(1001));
+  try {
+    assert.strictEqual(inspectOf(w), "WNDArray<[1001]> [0, 1, 2, ..., 998, 999, 1000]");
+    assert.strictEqual(w.toString(), "WNDArray<[1001]> [0, 1, 2, ..., 998, 999, 1000]");
+    assert.strictEqual(w.toJSON().data.length, 1001);
+  } finally {
+    w.dispose();
+  }
+});
+
 // --- NDArray: NaN -> null through JSON.stringify, pinned as documented -
 
 test("NDArray toJSON: NaN/Infinity serialize as null through JSON.stringify (documented, undodged)", () => {

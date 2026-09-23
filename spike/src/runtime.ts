@@ -1133,8 +1133,24 @@ export function stackValidateShapes(shapes: readonly (readonly number[])[]): { n
  * `toNestedArray()` reading its own backing store) — purely "how to print
  * a value": numbers via plain `String()` (`NaN` -> `"NaN"`, matching this
  * codebase's existing stem-formatting elsewhere), arrays joined with ", ".
+ *
+ * Large arrays are summarized the way NumPy's default print options do it:
+ * above 1000 elements in total, every axis longer than 6 shows only its
+ * first and last 3 entries around a literal `...`
+ * (`NDArray<[10000]> [0, 1, 2, ..., 9997, 9998, 9999]`). Display only —
+ * `toJSON()`/`toNestedArray()` stay complete.
  */
+const DISPLAY_SUMMARY_THRESHOLD = 1000;
+const DISPLAY_EDGE_ITEMS = 3;
 export function formatNDArrayDisplay(className: string, shape: readonly number[], nested: unknown): string {
-  const formatValue = (value: unknown): string => (Array.isArray(value) ? `[${value.map(formatValue).join(", ")}]` : String(value));
+  const summarize = product(shape) > DISPLAY_SUMMARY_THRESHOLD;
+  const formatValue = (value: unknown): string => {
+    if (!Array.isArray(value)) return String(value);
+    const parts =
+      summarize && value.length > 2 * DISPLAY_EDGE_ITEMS
+        ? [...value.slice(0, DISPLAY_EDGE_ITEMS).map(formatValue), "...", ...value.slice(-DISPLAY_EDGE_ITEMS).map(formatValue)]
+        : value.map(formatValue);
+    return `[${parts.join(", ")}]`;
+  };
   return `${className}<[${shape.join(", ")}]> ${formatValue(nested)}`;
 }

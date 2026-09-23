@@ -1317,3 +1317,15 @@ test:resident 6145+2 · Rest zahlengleich.
 bewegt — der Implementierer hat das selbst gemessen und die Tests in eine bestehende Datei
 gelegt (Δ+164). (2) Der Lint-Graph war zwei Monate alt; ein „0 Verstöße" auf einem veralteten
 Graph belegt nichts — vor dem Lint neu bauen (`graph-a-lama . --symbols`).
+
+**Nachtrag (selber Tag): inspect-Kürzung vor dem Release** (Owner-Entscheidung, Stufe 2 —
+FOLLOWUPS-Mini mit Anker `runtime.ts`, M1 inhaltlich nicht berührt, reine Anzeige).
+`formatNDArrayDisplay` fasst ab >1000 Elementen jede Achse >6 auf je 3 Randwerte um `...`
+zusammen (NumPy-Defaults); `toJSON`/`toNestedArray` bleiben vollständig. Offengelegt: der
+Helfer wurde im Körper geändert statt append-only ergänzt — er entstand in derselben,
+unveröffentlichten Release-Scheibe und ist keine Referenzfunktion (Orakel), deren Stabilität
+die Append-Konvention schützt. 6 neue Tests (Grenze genau 1000 vs. 1001, beide Achsen in
+Rang 2, kurze Achse bleibt ganz, toJSON vollständig, WNDArray-Parität); 2 Mutanten gefangen
+(`>=` statt `>`: 1 Test; Rand um eins verkürzt: 4 Tests), je per Backup-`diff` revertiert.
+check:diag 226,220 (Δ+72) · stress 116,220 (Δ+71) · bench:editor uniform +71 = stress-Δ,
+zweimal bestätigt · test:resident 6151+2 · Lint 0/0 auf frischem Graph.
