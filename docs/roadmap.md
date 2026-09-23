@@ -401,4 +401,7 @@ zweiten Parameter samt Promotionsregeln auf Typebene (Instantiation-Budget!); Ke
 Division durch 0 als eigene Semantik-Entscheidungen) → Covenant-Änderung. **Offene
 Reihenfolgefrage:** Jede Phase-2-Op, die vor dem dtype-Design landet, muss später nachgerüstet
 werden — Vorschlag: eine dtype-Design-Scheibe (3b, inkl. API-Form und Budget-Messung) vor
-Phase 2 einschieben. Owner-Entscheidung ausstehend.
+Phase 2 einschieben. **Entschieden (Owner, 2026-09-23): ja** — neue Reihenfolge
+**0a → 0b → dtype-Design (3b) → 2 → 3 → 1**. Die dtype-Scheibe liefert API-Form,
+Promotionsregeln, M1-Erweiterungsvorschlag (Covenant) und eine Budget-Messung, bevor Phase 2
+neue Ops auf die Fläche setzt.
