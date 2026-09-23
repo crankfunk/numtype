@@ -1276,3 +1276,44 @@ Preconditions (sie benutzen ausschließlich bereits instanziierte Typen) und +30
 D3-Umbau. Alle Nebengates Δ0, alle Testzahlen zahlengleich. Daraus die Verschärfung von
 Arbeitsregel 12: der View-Fall muss seine Klasse EXPLIZIT assertieren, nicht nur im Testnamen
 behaupten.
+
+## Stand-Review, Prozess-Kalibrierung und Release-Scheibe 0a (2026-09-23)
+
+**Anlass:** nach ≈2 Monaten Pause ein Stand-Review im Auftrag des Owners. Zwei parallele
+Agenten: Gate-Gesundheit am HEAD (alle Pins exakt reproduziert, CI grün) und ein
+Produkt-Review aus Konsumentensicht (gepackter Build + echtes npm-0.2.0-Tarball + Playground).
+Der tragende Befund war kein Code-Fehler, sondern eine Lücke zwischen Arbeit und Nutzer: die
+fertige WASM-Parität S0–S5 lag unveröffentlicht auf `main`, während die README sie bereits als
+verfügbar bewarb (npm 0.2.0: 0 Treffer für `mean`/`argmax`/`topk`/`item` in `resident.d.ts`).
+Dazu vier Konsumenten-Papercuts: `WNDArray` ohne exportierten Typnamen; `node:worker_threads`
+in der von `index.d.ts` erreichbaren Deklarationsmenge (TS2591 bei `skipLibCheck: false`);
+kein `toJSON`/`inspect` (`JSON.stringify` serialisierte `data` als Objekt); totes v1-`backend.ts`
+im Paket.
+
+**Owner-Entscheidungen:** Prozess neu kalibriert (CLAUDE.md 789 → 132 Zeilen, Vorfassung
+archiviert; neue Eskalationsstufe 3a „Routine-Scheibe" mit einem kombinierten Verifier,
+Baustein R); Klassifikations-Scheibe geparkt; Roadmap 0a → 0b → dtype-Design → 2 → 3 → 1;
+dtype: Option C (volles dtype).
+
+**0a (erste Scheibe auf Stufe 3a, docs/release-0.3.0-spec.md v1.1):** D1 `export type
+{ WNDArray }`; D2 lokales strukturelles `WorkerHandle` statt `Worker` an der
+Deklarationsgrenze (Laufzeit unverändert) + neuer Konsumenten-Smoke `consumer-strict`
+(`skipLibCheck: false`, ohne `@types/node`); D3 `toJSON()` → `{ shape, data }`, inspect-Symbol
+und `toString()` auf `NDArray`/`WNDArray` über einen geteilten `formatNDArrayDisplay`-Helfer
+(runtime.ts, append); D4 `backend.ts` aus dem Build + Emit-Gate; D5 README „New in 0.2.0"
+auf das tatsächlich Ausgelieferte zurückgeschnitten, „New in 0.3.0" neu.
+**Verifikation:** Verifier R (eigener Worktree) — Verdikt MERGE, alle Gates exakt
+reproduziert, 4/4 Mutanten gefangen (geteilter Helfer, `WNDArray.toJSON`-Offset, D2-Revert,
+D4-Revert), Freeze-Hash nach Clean-Rebuild byte-identisch `2a54d9fd…`, Hover
+`WNDArray<readonly [2, 3]>` per echtem `tsc --lsp --stdio` sauber, keine `node:`-Importe in der
+gesamten `dist/*.d.ts`-Menge; covenant-verify: S1/M1–M5/Z1/Z2 halten, keine Befunde. Zwei
+Verifier-Nits im selben Zug geschlossen (Rang-1-Pin für `WNDArray`-inspect; echter
+`fromArray`-Round-Trip in zwei View-Tests, deren Namen ihn behaupteten); zwei als FOLLOWUPS
+(Kürzung großer Arrays in inspect; Browser-Smoke für D3).
+**Zahlen:** check:diag 226,148 @ 140 (Δ+165 gegen ≤ +2,000) · stress 116,149 (Δ+96) · browser Δ0
+· bench:editor uniform +96 (= stress-Δ, unabhängige Bestätigung der Klassen-Surface-Ripple) ·
+test:resident 6145+2 · Rest zahlengleich.
+**Lehren:** (1) Eine neue Testdatei hätte check:diag allein durch Order-Noise um ≈+4,600
+bewegt — der Implementierer hat das selbst gemessen und die Tests in eine bestehende Datei
+gelegt (Δ+164). (2) Der Lint-Graph war zwei Monate alt; ein „0 Verstöße" auf einem veralteten
+Graph belegt nichts — vor dem Lint neu bauen (`graph-a-lama . --symbols`).

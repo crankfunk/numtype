@@ -30,10 +30,10 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 
 ## Status (IST, 2026-09-23)
 
-- **npm:** `numtype@0.2.0` (2026-07-21). Tags `v0.1.0`/`v0.1.1`/`v0.2.0`, Apache-2.0, Repo public, Rulesets `protect-main` + `protect-release-tags`.
+- **npm:** `numtype@0.2.0` (2026-07-21); `package.json` noch 0.2.0, README bereits auf v0.3 (D6: Version-Bump + Publish nach Owner-OK). Tags `v0.1.0`/`v0.1.1`/`v0.2.0`, Apache-2.0, Repo public, Rulesets `protect-main` + `protect-release-tags`.
 - **main ist unveröffentlicht voraus:** WASM-Parität S0–S5 (sqrt, Skalar-Overloads, mean, item+stack, argmax, topk auf `WNDArray`/threaded — alle dreifach verifiziert), topk-Heap, COVENANT v6, slice-Literal-Budget, View-Preconditions.
 - **Aktive Roadmap (Owner-entschieden 2026-09-23, docs/roadmap.md „Roadmap ab 2026-09-23"):**
-  0a Release 0.3.0 „Parity + Polish" (JETZT) → 0b typisiertes `toNestedArray` → dtype-Design
+  0a Release 0.3.0 „Parity + Polish" (umgesetzt + verifiziert, auf main; Publish wartet auf Owner-OK) → 0b typisiertes `toNestedArray` → dtype-Design
   (volles dtype, Option C) → 2 Op-Umfang „die ersten zehn Minuten" → 3 API-Flächen-Skala +
   Strukturumbau → 1 Verbreitung (bewusst ans Ende gestellt).
 - **Geparkt:** Klassifikation der View-Test-Restmenge (Spec v2.1 + Skripte als WIP committet;
@@ -42,9 +42,9 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 ## Aktuelle Pins & Gates (IST; Historie im Archiv/Log)
 
 - **Freeze-Hash** (Clean-Rebuild, SHA256 `spike/src/wasm/numtype_core.wasm`): `2a54d9fdba55e4e88a9d54cb3b01e111c2717abf13017f778b90accd5cff87e4` (seit S5/topk). Threads-Artefakt bewusst ohne Pin — test:threaded beweist Bit-Identität. CI-Gate `check:freeze`; die Byte-Identität ist cross-host (macOS-arm64 = linux-x64).
-- **check:diag** Root **225,983 @ 140** · **stress 116,053 @ 82** · **browser 2,142 @ 75** (stress/browser ungated, `pnpm check` compoundet alle drei).
-- **bench:editor** W1–W8 exact-match: `{w1 37.573, w2 39.406, w3 70.548, w4 37.728, w5 43.027, w6 44.221, w7 36.777, w8 44.466}`; Latenz am 2x-Ceiling.
-- **Tests:** test:core 1591 · test:resident 6124+2 · test:threaded 139 · test:browser 4 · test:package 3 + Typ-Smoke · cargo 222+1 · test:example (Registry-Install + 8 asserted Queries).
+- **check:diag** Root **226,148 @ 140** · **stress 116,149 @ 82** · **browser 2,142 @ 75** (seit 0a/Release-0.3.0-Polish 2026-09-23: Root Δ+165, stress Δ+96 Klassen-Surface-Ripple) (stress/browser ungated, `pnpm check` compoundet alle drei).
+- **bench:editor** W1–W8 exact-match: `{w1 37.669, w2 39.502, w3 70.644, w4 37.824, w5 43.123, w6 44.317, w7 36.873, w8 44.562}` (0a: uniform +96 = stress-Δ); Latenz am 2x-Ceiling.
+- **Tests:** test:core 1591 · test:resident 6145+2 · test:threaded 139 · test:browser 4 · test:package 3 + zwei Konsumenten-Typ-Smokes (`consumer` skipLibCheck:true, `consumer-strict` skipLibCheck:false ohne @types/node) · cargo 222+1 · test:example (Registry-Install + 8 asserted Queries).
 - Alle Werte am 2026-09-23 im frischen Worktree reproduziert (Toolchain: node 24.16, pnpm 11.6, tsc 7.0.2, rustc 1.95.0, nightly-2026-07-09).
 
 ## Mess-Regeln (tragend)

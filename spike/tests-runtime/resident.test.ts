@@ -2783,6 +2783,8 @@ test("WNDArray toJSON round-trips over a step-sliced view (non-natural strides, 
       const json = view.toJSON();
       assert.deepStrictEqual(json.shape, [2, 3]);
       assert.deepStrictEqual(json.data, [baseData[0], baseData[1], baseData[2], baseData[6], baseData[7], baseData[8]]);
+      const b = NDArray.fromArray(json.shape, json.data);
+      assert.deepStrictEqual(b.toNestedArray(), view.toNestedArray());
     } finally {
       view.dispose();
     }
@@ -2803,6 +2805,8 @@ test("WNDArray toJSON round-trips over an offset window (nonzero offset, natural
       const json = view.toJSON();
       assert.deepStrictEqual(json.shape, [3, 3]);
       assert.deepStrictEqual(json.data, baseData.slice(6));
+      const b = NDArray.fromArray(json.shape, json.data);
+      assert.deepStrictEqual(b.toNestedArray(), view.toNestedArray());
     } finally {
       view.dispose();
     }
@@ -2849,6 +2853,16 @@ test("WNDArray inspect/toString: rank 0", () => {
   try {
     assert.strictEqual(inspectOf(w), "WNDArray<[]> 42");
     assert.strictEqual(w.toString(), "WNDArray<[]> 42");
+  } finally {
+    w.dispose();
+  }
+});
+
+test("WNDArray inspect/toString: rank 1", () => {
+  const w = WNDArray.fromArray(core, [3], [1, 2.5, -4]);
+  try {
+    assert.strictEqual(inspectOf(w), "WNDArray<[3]> [1, 2.5, -4]");
+    assert.strictEqual(w.toString(), "WNDArray<[3]> [1, 2.5, -4]");
   } finally {
     w.dispose();
   }
