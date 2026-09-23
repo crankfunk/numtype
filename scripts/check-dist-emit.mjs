@@ -67,4 +67,18 @@ if (hits.length > 0) {
   );
   process.exit(1);
 }
-console.log("check-dist-emit: OK — no relative .ts module references remain in dist/");
+
+// D4 (docs/release-0.3.0-spec.md): the frozen v1 copy-backend
+// (spike/src/wasm/backend.ts) is excluded from tsconfig.build.json — it's a
+// performance baseline demo/bench/tests keep using directly from spike/src,
+// not a supported public entry point. This is the mechanical proof that
+// exclusion holds: dist/ must never contain backend.js or backend.d.ts
+// (backend-api.{js,d.ts} — a DIFFERENT file, the actual public backend
+// factory — is expected and must stay).
+const backendLeaks = walk(DIST).filter((f) => /[\\/]backend\.(js|d\.ts)$/.test(f));
+if (backendLeaks.length > 0) {
+  console.error(`check-dist-emit: FAIL — the excluded v1 backend.ts leaked into dist/:\n  ${backendLeaks.join("\n  ")}`);
+  process.exit(1);
+}
+
+console.log("check-dist-emit: OK — no relative .ts module references remain in dist/, and backend.ts stayed excluded");

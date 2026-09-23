@@ -71,7 +71,7 @@ import type { Guard, NDArrayView, OkShape } from "../ndarray.ts";
 import type { MatMul } from "../matmul.ts";
 import type { ReduceAxis, Transpose } from "../reduce.ts";
 import type { ReshapeCheck } from "../reshape.ts";
-import { assertReshapeArgs, assertVectorPair, computeStrides, itemOffsetStrided, keepDimsShape, normalizeSliceSpecs, product, runtimeBroadcastShape, stackValidateShapes, type SliceSpec } from "../runtime.ts";
+import { assertReshapeArgs, assertVectorPair, computeStrides, formatNDArrayDisplay, itemOffsetStrided, keepDimsShape, normalizeSliceSpecs, product, runtimeBroadcastShape, stackValidateShapes, type SliceSpec } from "../runtime.ts";
 import type { LiteralShapeProduct } from "../literal-arithmetic.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "../slice.ts";
 import type { DotCheck, ItemGuard, StackCheck, StackShape, TopkCheck, TopkShape } from "../vector.ts";
@@ -2020,5 +2020,34 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
     } finally {
       for (const buf of scratch) freeBuf(this.core, buf);
     }
+  }
+
+  /** D3 (docs/release-0.3.0-spec.md): lossless round-trip via
+   * `NDArray.fromArray(json.shape, json.data)`. Reuses `toArray()` (already
+   * the logical row-major copy-out, whether this handle is contiguous or a
+   * strided view — see that method's own doc comment) rather than reading
+   * `this.buf`/strides directly here. Same disclosed `JSON.stringify`
+   * `NaN`/`±Infinity` -> `null` limitation as `NDArray.toJSON`. Throws the
+   * standard named disposed error after `dispose()`, same as every other
+   * member here. */
+  toJSON(): { shape: number[]; data: number[] } {
+    this.assertLive("toJSON");
+    return { shape: [...this.shape], data: Array.from(this.toArray()) };
+  }
+
+  /** D3: Node's console/`util.inspect` custom hook, e.g.
+   * `WNDArray<[2, 3]> [[1, 2, 3], [4, 5, 6]]` — same shared formatter as
+   * `NDArray`'s, over this class's own `toNestedArray()`. Throws the
+   * standard named disposed error after `dispose()`. */
+  [Symbol.for("nodejs.util.inspect.custom")](): string {
+    this.assertLive("inspect");
+    return formatNDArrayDisplay("WNDArray", this.shape, this.toNestedArray());
+  }
+
+  /** D3: same rendering as the inspect hook above, for plain string
+   * contexts. Throws the standard named disposed error after `dispose()`. */
+  toString(): string {
+    this.assertLive("toString");
+    return formatNDArrayDisplay("WNDArray", this.shape, this.toNestedArray());
   }
 }

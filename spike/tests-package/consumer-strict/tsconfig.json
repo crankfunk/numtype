@@ -1,0 +1,20 @@
+{
+  // D2 (docs/release-0.3.0-spec.md): a SECOND consumer type-smoke, sibling to
+  // ../consumer/tsconfig.json. Same consumer-typical defaults, except
+  // `skipLibCheck` flips to `false` here on purpose — `skipLibCheck: true`
+  // (the sibling smoke) would silently paper over exactly the bug D2 fixes:
+  // an internal `.d.ts` needing Node ambient types is never actually checked
+  // under `skipLibCheck: true`. No `@types/node` is installed anywhere in
+  // this repo (project constraint), so this is the direct reproduction of
+  // "a strict consumer with no Node types hits TS2591 if anything reachable
+  // from `index.d.ts` needs them."
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "skipLibCheck": false
+  },
+  "include": ["consumer.ts"]
+}

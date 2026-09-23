@@ -12,3 +12,8 @@ export { NDArray, type AnyNDArray, type NDArrayView } from "./ndarray.ts";
 // and contaminate this barrel's browser-safe default path).
 export { WasmBackend, type BackendKind, type ThreadedBackendOptions } from "./wasm/backend-api.ts";
 export type { ThreadedBackend } from "./wasm/threaded.ts";
+// D1 (docs/release-0.3.0-spec.md): `WNDArray` as a TYPE ONLY — consumers can
+// name the type a backend factory (`WasmBackend.fromArray`, `ThreadedBackend`)
+// returns, e.g. in a helper's parameter/return position. Its constructor stays
+// private, so this adds no new way to construct one — only the backends do.
+export type { WNDArray } from "./wasm/resident.ts";

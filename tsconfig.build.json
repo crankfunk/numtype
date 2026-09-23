@@ -14,5 +14,10 @@
     "rootDir": "spike/src"
   },
   "include": ["spike/src/**/*.ts"],
-  "exclude": []
+  // D4 (docs/release-0.3.0-spec.md): the frozen v1 copy-backend
+  // (spike/src/wasm/backend.ts) is a performance baseline demo/bench/tests
+  // keep using directly from spike/src — not a supported public entry point
+  // (WasmBackend/ThreadedBackend replaced it, Item 10). The FILE stays;
+  // only the publishable dist/ build excludes it.
+  "exclude": ["spike/src/wasm/backend.ts"]
 }

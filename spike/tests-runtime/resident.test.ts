@@ -2602,3 +2602,299 @@ test("wideSpecs returns its arguments unchanged, in order", () => {
 test("wideSpecs on an empty spec list stays empty", () => {
   assert.deepStrictEqual([...wideSpecs()], [], "wideSpecs() must not invent a spec");
 });
+
+// ===========================================================================
+// D3 (docs/release-0.3.0-spec.md): `toJSON()`, the Node inspect hook
+// (`Symbol.for("nodejs.util.inspect.custom")`), and `toString()` on both
+// `NDArray` and `WNDArray`. APPENDED here (D5 house convention — see
+// scalar-mean.test.ts's own W2-W5 append history) rather than a new file:
+// this file already imports both `NDArray` and `WNDArray` plus a live
+// `core`, and a new file would cost pure check-order noise for zero benefit
+// (Mess-Regeln: adding any file, even an empty one, shifts the instantiation
+// counter by up to +-~7,000 regardless of its content).
+//
+// Test plan (per spec's own "Testplan" section):
+//  - round-trip `fromArray(toJSON())` for rank 0, size-0, contiguous, and
+//    (on `WNDArray` only -- `NDArray` has no view concept, it is always
+//    contiguous by construction) each of the four view classes from
+//    Arbeitsregel 12, each with its class explicitly asserted right after
+//    construction (exact shape + exact strides vector + exact offset, via
+//    `.describe()` -- the same house pattern this file uses for every other
+//    resident op);
+//  - `inspect`/`toString()` output pinned by HAND (not re-derived from the
+//    implementation) for rank 0/1/2 and size-0, on both classes;
+//  - the standard named disposed error on `WNDArray` after `dispose()`, for
+//    all three new members;
+//  - `NaN` -> `null` through `JSON.stringify` pinned as the documented,
+//    undodged limitation the spec discloses (standard `JSON.stringify`
+//    behavior for non-finite numbers, not worked around).
+//
+// The inspect hook is invoked directly via its well-known symbol rather than
+// through `node:util`'s `inspect()` -- this project has no `node:util`
+// ambient shim (ambient.d.ts is a scoped-to-what's-actually-called set of
+// shims, not a general Node typings shim) and adding one just to wrap a
+// single symbol call would buy nothing: `Symbol.for(...)` already returns
+// the exact same global-registry symbol Node's own `util.inspect` looks up
+// internally, so calling it directly tests the identical contract.
+
+const INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
+function inspectOf(x: unknown): string {
+  return (x as unknown as Record<symbol, () => string>)[INSPECT_CUSTOM]!();
+}
+
+// --- NDArray: round-trip -----------------------------------------------
+
+test("NDArray toJSON round-trips through fromArray: rank 0", () => {
+  const a = NDArray.fromArray([], [42]);
+  const json = a.toJSON();
+  assert.deepStrictEqual(json, { shape: [], data: [42] });
+  const b = NDArray.fromArray(json.shape, json.data);
+  assert.deepStrictEqual([...b.shape], []);
+  assert.deepStrictEqual(Array.from(b.data), [42]);
+});
+
+test("NDArray toJSON round-trips through fromArray: size-0", () => {
+  const a = NDArray.fromArray([0, 3], []);
+  const json = a.toJSON();
+  assert.deepStrictEqual(json, { shape: [0, 3], data: [] });
+  const b = NDArray.fromArray(json.shape, json.data);
+  assert.deepStrictEqual([...b.shape], [0, 3]);
+  assert.deepStrictEqual(Array.from(b.data), []);
+});
+
+test("NDArray toJSON round-trips through fromArray: contiguous rank 2", () => {
+  const a = NDArray.fromArray([2, 3], [1, 2, 3, 4, 5, 6]);
+  const json = a.toJSON();
+  assert.deepStrictEqual(json, { shape: [2, 3], data: [1, 2, 3, 4, 5, 6] });
+  const b = NDArray.fromArray(json.shape, json.data);
+  assert.deepStrictEqual([...b.shape], [2, 3]);
+  assert.deepStrictEqual(Array.from(b.data), [1, 2, 3, 4, 5, 6]);
+});
+
+// --- NDArray: inspect/toString, hand-pinned -----------------------------
+
+test("NDArray inspect/toString: rank 0", () => {
+  const a = NDArray.fromArray([], [42]);
+  assert.strictEqual(inspectOf(a), "NDArray<[]> 42");
+  assert.strictEqual(a.toString(), "NDArray<[]> 42");
+  assert.strictEqual(String(a), "NDArray<[]> 42");
+});
+
+test("NDArray inspect/toString: rank 1", () => {
+  const a = NDArray.fromArray([3], [1, 2, 3]);
+  assert.strictEqual(inspectOf(a), "NDArray<[3]> [1, 2, 3]");
+  assert.strictEqual(a.toString(), "NDArray<[3]> [1, 2, 3]");
+});
+
+test("NDArray inspect/toString: rank 2", () => {
+  const a = NDArray.fromArray([2, 3], [1, 2, 3, 4, 5, 6]);
+  assert.strictEqual(inspectOf(a), "NDArray<[2, 3]> [[1, 2, 3], [4, 5, 6]]");
+  assert.strictEqual(a.toString(), "NDArray<[2, 3]> [[1, 2, 3], [4, 5, 6]]");
+});
+
+test("NDArray inspect/toString: size-0", () => {
+  const a = NDArray.fromArray([0, 3], []);
+  assert.strictEqual(inspectOf(a), "NDArray<[0, 3]> []");
+  assert.strictEqual(a.toString(), "NDArray<[0, 3]> []");
+});
+
+// --- NDArray: NaN -> null through JSON.stringify, pinned as documented -
+
+test("NDArray toJSON: NaN/Infinity serialize as null through JSON.stringify (documented, undodged)", () => {
+  const a = NDArray.fromArray([3], [1, NaN, Infinity]);
+  const json = a.toJSON();
+  assert.deepStrictEqual(json, { shape: [3], data: [1, NaN, Infinity] }); // toJSON() itself keeps the real values
+  assert.strictEqual(JSON.stringify(a), '{"shape":[3],"data":[1,null,null]}'); // JSON.stringify's own standard behavior
+});
+
+// --- WNDArray: round-trip, contiguous + rank 0 + size-0 -----------------
+
+test("WNDArray toJSON round-trips through NDArray.fromArray: rank 0", () => {
+  const w = WNDArray.fromArray(core, [], [7]);
+  try {
+    const json = w.toJSON();
+    assert.deepStrictEqual(json, { shape: [], data: [7] });
+    const b = NDArray.fromArray(json.shape, json.data);
+    assert.deepStrictEqual([...b.shape], []);
+    assert.deepStrictEqual(Array.from(b.data), [7]);
+  } finally {
+    w.dispose();
+  }
+});
+
+test("WNDArray toJSON round-trips through NDArray.fromArray: size-0", () => {
+  const w = WNDArray.fromArray(core, [0, 4], []);
+  try {
+    const json = w.toJSON();
+    assert.deepStrictEqual(json, { shape: [0, 4], data: [] });
+  } finally {
+    w.dispose();
+  }
+});
+
+test("WNDArray toJSON round-trips through NDArray.fromArray: contiguous rank 2", () => {
+  const w = WNDArray.fromArray(core, [2, 3], [1, 2, 3, 4, 5, 6]);
+  try {
+    const json = w.toJSON();
+    assert.deepStrictEqual(json, { shape: [2, 3], data: [1, 2, 3, 4, 5, 6] });
+    const b = NDArray.fromArray(json.shape, json.data);
+    assert.deepStrictEqual([...b.shape], [2, 3]);
+    assert.deepStrictEqual(Array.from(b.data), [1, 2, 3, 4, 5, 6]);
+  } finally {
+    w.dispose();
+  }
+});
+
+// --- WNDArray: round-trip over each of the four view classes (Arbeitsregel
+// 12) — the class is asserted right after construction, exactly like every
+// other resident op's view coverage in resident.test.ts. ------------------
+
+test("WNDArray toJSON round-trips over a transpose view: [3,4]^T", () => {
+  const w = WNDArray.fromArray(core, [3, 4], Array.from({ length: 12 }, (_, i) => i + 1));
+  try {
+    const view = w.transpose();
+    try {
+      assert.deepStrictEqual([...(view.shape as readonly number[])], [4, 3], "precondition — view shape");
+      assert.deepStrictEqual([...view.describe().strides], [1, 4], "precondition — EXACT strides");
+      assert.strictEqual(view.describe().offset, 0, "precondition — EXACT offset");
+      const json = view.toJSON();
+      assert.deepStrictEqual(json.shape, [4, 3]);
+      const expectedLogical = [1, 5, 9, 2, 6, 10, 3, 7, 11, 4, 8, 12]; // transpose of row-major [3,4]
+      assert.deepStrictEqual(json.data, expectedLogical);
+      const b = NDArray.fromArray(json.shape, json.data);
+      assert.deepStrictEqual(Array.from(b.data), expectedLogical);
+    } finally {
+      view.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+test("WNDArray toJSON round-trips over a step-sliced view (non-natural strides, offset 0): [4,3] step 2", () => {
+  const baseData = Array.from({ length: 12 }, (_, i) => (i + 1) * (i + 1));
+  const w = WNDArray.fromArray(core, [4, 3], baseData);
+  try {
+    const view = w.slice(...wideSpecs({ step: 2 }, null));
+    try {
+      assert.deepStrictEqual([...(view.shape as readonly number[])], [2, 3], "precondition — view shape");
+      assert.deepStrictEqual([...view.describe().strides], [6, 1], "precondition — EXACT strides");
+      assert.strictEqual(view.describe().offset, 0, "precondition — EXACT offset");
+      const json = view.toJSON();
+      assert.deepStrictEqual(json.shape, [2, 3]);
+      assert.deepStrictEqual(json.data, [baseData[0], baseData[1], baseData[2], baseData[6], baseData[7], baseData[8]]);
+    } finally {
+      view.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+test("WNDArray toJSON round-trips over an offset window (nonzero offset, natural strides): [5,3] rows 2..", () => {
+  const baseData = Array.from({ length: 15 }, (_, i) => i - 7);
+  const w = WNDArray.fromArray(core, [5, 3], baseData);
+  try {
+    const view = w.slice(...wideSpecs({ start: 2 }));
+    try {
+      assert.deepStrictEqual([...(view.shape as readonly number[])], [3, 3], "precondition — view shape");
+      assert.deepStrictEqual([...view.describe().strides], [3, 1], "precondition — EXACT strides");
+      assert.strictEqual(view.describe().offset, 6, "precondition — EXACT offset");
+      const json = view.toJSON();
+      assert.deepStrictEqual(json.shape, [3, 3]);
+      assert.deepStrictEqual(json.data, baseData.slice(6));
+    } finally {
+      view.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+test("WNDArray toJSON round-trips over a composed transpose+slice view: [2,3,4] -> T[4,3,2] -> slice axis=1 rows 1..", () => {
+  const w = WNDArray.fromArray(
+    core,
+    [2, 3, 4],
+    Array.from({ length: 24 }, (_, i) => i),
+  );
+  try {
+    const t = w.transpose();
+    try {
+      const view = t.slice(...wideSpecs(null, { start: 1 }, null));
+      try {
+        assert.deepStrictEqual([...(view.shape as readonly number[])], [4, 2, 2], "precondition — view shape");
+        assert.deepStrictEqual([...view.describe().strides], [1, 4, 12], "precondition — EXACT strides; this is what makes it the view class the test name claims");
+        assert.strictEqual(view.describe().offset, 4, "precondition — EXACT offset");
+        const json = view.toJSON();
+        assert.deepStrictEqual(json.shape, [4, 2, 2]);
+        const b = NDArray.fromArray(json.shape, json.data);
+        assert.deepStrictEqual([...b.shape], [4, 2, 2]);
+        // Cross-check against the independently-computed nested walk.
+        assert.deepStrictEqual(b.toNestedArray(), view.toNestedArray());
+      } finally {
+        view.dispose();
+      }
+    } finally {
+      t.dispose();
+    }
+  } finally {
+    w.dispose();
+  }
+});
+
+// --- WNDArray: inspect/toString, hand-pinned ----------------------------
+
+test("WNDArray inspect/toString: rank 0", () => {
+  const w = WNDArray.fromArray(core, [], [42]);
+  try {
+    assert.strictEqual(inspectOf(w), "WNDArray<[]> 42");
+    assert.strictEqual(w.toString(), "WNDArray<[]> 42");
+  } finally {
+    w.dispose();
+  }
+});
+
+test("WNDArray inspect/toString: rank 2", () => {
+  const w = WNDArray.fromArray(core, [2, 3], [1, 2, 3, 4, 5, 6]);
+  try {
+    assert.strictEqual(inspectOf(w), "WNDArray<[2, 3]> [[1, 2, 3], [4, 5, 6]]");
+    assert.strictEqual(w.toString(), "WNDArray<[2, 3]> [[1, 2, 3], [4, 5, 6]]");
+  } finally {
+    w.dispose();
+  }
+});
+
+test("WNDArray inspect/toString: size-0", () => {
+  const w = WNDArray.fromArray(core, [0, 3], []);
+  try {
+    assert.strictEqual(inspectOf(w), "WNDArray<[0, 3]> []");
+    assert.strictEqual(w.toString(), "WNDArray<[0, 3]> []");
+  } finally {
+    w.dispose();
+  }
+});
+
+// --- WNDArray: NaN -> null through JSON.stringify, pinned as documented -
+
+test("WNDArray toJSON: NaN/Infinity serialize as null through JSON.stringify (documented, undodged)", () => {
+  const w = WNDArray.fromArray(core, [3], [1, NaN, Infinity]);
+  try {
+    const json = w.toJSON();
+    assert.deepStrictEqual(json, { shape: [3], data: [1, NaN, Infinity] });
+    assert.strictEqual(JSON.stringify(w), '{"shape":[3],"data":[1,null,null]}');
+  } finally {
+    w.dispose();
+  }
+});
+
+// --- WNDArray: the standard named disposed error, for all three new
+// members (same message shape assertLive() already produces for every
+// other op on this class). ------------------------------------------------
+
+test("WNDArray toJSON/inspect/toString throw the standard named disposed error after dispose()", () => {
+  const w = WNDArray.fromArray(core, [2], [1, 2]);
+  w.dispose();
+  assert.throws(() => w.toJSON(), /WNDArray\.toJSON: array has been disposed/);
+  assert.throws(() => inspectOf(w), /WNDArray\.inspect: array has been disposed/);
+  assert.throws(() => w.toString(), /WNDArray\.toString: array has been disposed/);
+});

@@ -9,7 +9,7 @@
 
 > NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor errors.
 
-**Status: v0.2 research preview** · Apache-2.0 · zero runtime dependencies ·
+**Status: v0.3 research preview** · Apache-2.0 · zero runtime dependencies ·
 launch post: [*Teaching the type checker arithmetic*](https://marvinmuegge.com/notes/teaching-the-checker-arithmetic/)
 
 ![Editor demo: types computed while typing — matmul result NDArray<[2, 4]>, slice arithmetic NDArray<[900]>, and a shape mismatch surfacing as a compile error at the argument](https://raw.githubusercontent.com/crankfunk/numtype/main/docs/assets/numtype-demo.gif)
@@ -180,12 +180,7 @@ a.slice(9);                      // ❌ compile error: index 9 out of bounds for
 ### New in 0.2.0: the ops the demo asked for
 
 The five ops added in 0.2.0 all came from one place: the friction log of the RAG example below,
-built against 0.1.1. They shipped as TypeScript-runtime surface only (no WASM kernel), which is why
-they are shown here rather than in the bit-for-bit block above. Since then the WASM-resident twin
-has caught up with **all** of them — `sqrt`, the scalar overloads, `mean`, `stack`, `item`, `argmax`
-and `topk` now work on WASM-resident arrays too, each proven bit-identical to the TypeScript
-reference by differential tests, on the threaded backend as well. There is no
-TypeScript-only op left (see [What's implemented](#whats-implemented)):
+built against 0.1.1. They shipped as TypeScript-runtime surface only (no WASM kernel):
 
 ```ts
 const scores = NDArray.fromArray([4], [0.2, 0.9, 0.1, 0.7]);
@@ -205,6 +200,36 @@ scores queries against them with a single `matmul`, and ranks the results — li
 Since 0.2.0 it doubles as a before/after showcase: every workaround from its original friction
 log is rewritten in place to the op that replaced it, with the pinned retrieval scores unchanged
 (the example's README carries the friction-to-op table).
+
+### New in 0.3.0: WASM parity, and first-user papercuts closed
+
+The five ops above shipped in 0.2.0 as TypeScript-runtime surface only. The WASM-resident twin has
+now caught up with **all** of them — `sqrt`, the scalar overloads, `mean`, `stack`, `item`, `argmax`
+and `topk` work on WASM-resident arrays too, each proven bit-identical to the TypeScript reference
+by differential tests, on the threaded backend as well. There is no TypeScript-only op left (see
+[What's implemented](#whats-implemented)):
+
+```ts
+const backend = await NDArray.backend("wasm");
+const w = backend.fromArray([4], [0.2, 0.9, 0.1, 0.7]); // WNDArray<[4]>
+w.topk(2);   // same shape, same guarantees as the NDArray version above, on WASM-resident data
+w.dispose(); // WASM-resident arrays are explicitly freed, not garbage-collected
+```
+
+Three consumer-facing fixes, found while getting 0.3.0 ready to ship:
+
+- **`WNDArray` is now a nameable type**, exported type-only from the package (its constructor
+  stays private — a backend's `fromArray`/`zeros`/`ones`/`stack`, as above, is still the only way
+  to get one). Useful for typing a helper function's parameter or return value.
+- **No more `node:worker_threads` leaking into the published declarations.** A strict consumer
+  with no `@types/node` installed (`skipLibCheck: false`) used to fail to typecheck against
+  `numtype` at all, purely from importing the (type-only) `ThreadedBackend` export — an internal
+  field's declared type pulled a Node-only import into `dist/index.d.ts`'s reachable set. Fixed at
+  the declaration boundary; runtime is unchanged.
+- **`toJSON()`, a `console.log`-friendly inspect, and `toString()`** on both `NDArray` and
+  `WNDArray`: `JSON.stringify(arr)` now round-trips through `NDArray.fromArray(json.shape,
+  json.data)`, and printing an array (`console.log(arr)`, template literals, `String(arr)`) shows
+  `NDArray<[2, 3]> [[1, 2, 3], [4, 5, 6]]` instead of an opaque object dump.
 
 ## Gradual typing
 

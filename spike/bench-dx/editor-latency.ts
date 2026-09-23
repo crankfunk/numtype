@@ -882,15 +882,25 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // corroboration that this is class-surface growth, not workload-specific.
 // It is smaller than S4's +436 exactly as expected: one signature instead of
 // three overloads plus a private helper. Measured twice, byte-identical.
+// Release 0.3.0 D3 (docs/release-0.3.0-spec.md), 2026-09-23: pins moved
+// UNIFORMLY by +96 -- the same single-class WNDArray class-surface ripple as
+// S0/S1/S2/S4/S5: `toJSON`/the inspect-hook computed member/`toString` add
+// three niladic members to WNDArray, and every workload instantiates
+// WNDArray at least once. No workload has its own call site for any of the
+// three (they take no generic argument to hang a per-call-site cost on), so
+// the delta is perfectly uniform. The identical +96 shows up in
+// `check:diag:stress` (116,053 -> 116,149) -- independent corroboration
+// that this is class-surface growth, not workload-specific. Measured twice
+// (both a contended and a quiet run), byte-identical both times.
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 37573,
-  w2: 39406,
-  w3: 70548,
-  w4: 37728,
-  w5: 43027,
-  w6: 44221,
-  w7: 36777,
-  w8: 44466,
+  w1: 37669,
+  w2: 39502,
+  w3: 70644,
+  w4: 37824,
+  w5: 43123,
+  w6: 44317,
+  w7: 36873,
+  w8: 44562,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

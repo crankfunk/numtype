@@ -183,8 +183,28 @@ interface ThreadedCoreExports extends CoreExports {
   ): number;
 }
 
+/**
+ * D2 (docs/release-0.3.0-spec.md): a local structural stand-in for
+ * `import("node:worker_threads").Worker` in `PoolWorker.worker`'s declared
+ * type. `PoolWorker` is not exported itself, but it is the element type of
+ * `ThreadedPool.workers` — a public field on the exported `ThreadedPool`
+ * class, itself reachable from `index.d.ts` via the type-only
+ * `ThreadedBackend` re-export (`ThreadedBackend.pool: ThreadedPool`) — so
+ * declaration emission previously had to name `Worker` there too, pulling
+ * an `import { Worker } from "node:worker_threads"` into `threaded.d.ts`
+ * even for consumers who never touch Node types. A real `Worker` instance
+ * always satisfies this narrower interface structurally, so assigning one
+ * to a `PoolWorker.worker` field is unchanged at runtime — only the two
+ * methods this module actually calls through `pw.worker.*` (`.terminate()`,
+ * `.once("exit", …)`) are declared.
+ */
+interface WorkerHandle {
+  terminate(): Promise<number>;
+  once(event: "exit", listener: () => void): this;
+}
+
 interface PoolWorker {
-  readonly worker: Worker;
+  readonly worker: WorkerHandle;
   readonly ctrlPtr: number;
   readonly stackPtr: number;
   postedSeq: number;

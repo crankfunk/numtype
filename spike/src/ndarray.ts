@@ -31,6 +31,7 @@ import {
   computeStrides,
   dotRuntime,
   elementwiseBinary,
+  formatNDArrayDisplay,
   itemRuntime,
   keepDimsShape,
   matmulRuntime,
@@ -942,5 +943,29 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * `computeStrides` for the flat offset — no new arithmetic invented. */
   item<const Idx extends readonly number[]>(...indices: ItemGuard<S, Idx>): number {
     return itemRuntime(this.shape, this.data, indices as unknown as readonly number[]);
+  }
+
+  /** D3 (docs/release-0.3.0-spec.md): lossless round-trip via
+   * `NDArray.fromArray(json.shape, json.data)`. `this.data` is already
+   * logical row-major (the class invariant — see the constructor above),
+   * so no strided read is needed here, unlike `WNDArray`'s version.
+   * Disclosed, undodged limitation: `JSON.stringify` itself serializes
+   * `NaN`/`±Infinity` as `null` (standard behavior, not worked around). */
+  toJSON(): { shape: number[]; data: number[] } {
+    return { shape: [...this.shape], data: Array.from(this.data) };
+  }
+
+  /** D3: Node's console/`util.inspect` custom hook, e.g.
+   * `NDArray<[2, 3]> [[1, 2, 3], [4, 5, 6]]`. `Symbol.for(...)` needs no
+   * Node import (browser-safe) even though the property name originates
+   * from Node's inspect protocol. */
+  [Symbol.for("nodejs.util.inspect.custom")](): string {
+    return formatNDArrayDisplay("NDArray", this.shape, this.toNestedArray());
+  }
+
+  /** D3: same rendering as the inspect hook above, for plain string
+   * contexts (`` `${arr}` ``, `String(arr)`, template literals). */
+  toString(): string {
+    return formatNDArrayDisplay("NDArray", this.shape, this.toNestedArray());
   }
 }

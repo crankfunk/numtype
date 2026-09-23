@@ -1123,3 +1123,18 @@ export function stackValidateShapes(shapes: readonly (readonly number[])[]): { n
   }
   return { n: shapes.length, d: d ?? 0 };
 }
+
+/**
+ * D3 (docs/release-0.3.0-spec.md): shared pretty-printer for `toString()`
+ * and the Node inspect hook on both `NDArray` and `WNDArray` — one nested-
+ * value walk over whatever `toNestedArray()` already produced, so the two
+ * backends render identically (`NDArray<[2, 3]> [[1, 2, 3], [4, 5, 6]]`).
+ * Not itself a shape/stride walk (each class already has its own
+ * `toNestedArray()` reading its own backing store) — purely "how to print
+ * a value": numbers via plain `String()` (`NaN` -> `"NaN"`, matching this
+ * codebase's existing stem-formatting elsewhere), arrays joined with ", ".
+ */
+export function formatNDArrayDisplay(className: string, shape: readonly number[], nested: unknown): string {
+  const formatValue = (value: unknown): string => (Array.isArray(value) ? `[${value.map(formatValue).join(", ")}]` : String(value));
+  return `${className}<[${shape.join(", ")}]> ${formatValue(nested)}`;
+}
