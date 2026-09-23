@@ -392,3 +392,13 @@ steht bewusst am Ende: erst ein Produkt, das die ersten zehn Minuten eines NumPy
 | **2** Op-Umfang „die ersten zehn Minuten" (0.4) | `concat`/`vstack` mit Achse; `max`/`min`/`argmin`; `arange`/`linspace`/`eye`; `reshape(-1)`; `squeeze`/`expand_dims`, `abs`/`pow`. Vergleiche/`where`/Masken erst nach der dtype-Entscheidung | je Op 3a, neue Typ-Folds/Kernel 3b |
 | **3** API-Flächen-Skala + Strukturumbau | Die offene Hälfte der USP-Risiko-Definition messen (FOLLOWUPS „API-Flächen-Skala"); `spike/` → `src/`, `resident.ts` nach Op-Gruppen teilen, Prozess-Prosa aus ausgeliefertem Code | 3b |
 | **1** Verbreitung | Show HN, r/typescript, TS-Community — mit Playground-Link; Erfolgskriterium vorab festlegen | — |
+
+**dtype-Entscheidung (Owner, 2026-09-23): Option C — volles dtype** (`NDArray<S, D>`, Ziel
+f64/f32/i32/bool, NumPy-artig). Abgewogen gegen A (nur f64, Vergleiche als 0/1-f64) und B
+(eigener `Mask<S>`-Typ). Folgen, die in die Planung gehören: jede Signatur bekommt einen
+zweiten Parameter samt Promotionsregeln auf Typebene (Instantiation-Budget!); Kernel pro dtype
+(Freeze-Hash bewegt sich); M1 braucht eine Erweiterung (f32 via `Math.fround`, Integer-Wrap und
+Division durch 0 als eigene Semantik-Entscheidungen) → Covenant-Änderung. **Offene
+Reihenfolgefrage:** Jede Phase-2-Op, die vor dem dtype-Design landet, muss später nachgerüstet
+werden — Vorschlag: eine dtype-Design-Scheibe (3b, inkl. API-Form und Budget-Messung) vor
+Phase 2 einschieben. Owner-Entscheidung ausstehend.
