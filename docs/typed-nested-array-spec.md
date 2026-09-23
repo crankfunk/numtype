@@ -1,7 +1,12 @@
 # 0b — Typisiertes `toNestedArray` — bindende Spec (Stufe 3b)
 
-**Version:** v1.1 (2026-09-24) · **Status:** Owner-Richtung abgenommen 2026-09-24 (alle drei
-Entscheidungen wie empfohlen, s. unten) → Baustein 0 läuft
+**Version:** v2 (2026-09-24) · **Status:** Owner-Richtung abgenommen, Baustein 0 gelaufen (ein
+Blocker, eingearbeitet; Richtung unverändert) → **implementierungsreif**
+
+**Änderungslog v1.1 → v2 (Baustein-0-Befunde, s. Addendum am Ende):** D1 von rekursiver
+Zerlegung über `S` auf Rang-Akkumulator umgestellt (behebt den Blocker `number[][] | number[][]`
+bei Unions gleichen Rangs UND `NestedArray<never>` = `never`); Rang-Grenze 999 offengelegt;
+D5, D6, D7 und Testplan präzisiert. Semantik und Richtung unverändert → keine neue Owner-Runde.
 **Stufe:** 3b (CLAUDE.md, Eskalationsleiter): neue Typ-Maschinerie auf einer öffentlichen
 Signatur + Umkehr einer gepinnten Entscheidung (D-V2.2/B5). Voller Katalog: Baustein 0 vor dem
 Code, danach A + B + C parallel, Lint im Gate-Block, Ergebnis-Doc mit Addendum.
@@ -40,15 +45,26 @@ Probe ist informell (Arbeitsregel 8) — Baustein 0 und Verify messen am echten 
   ```ts
   export type NestedValue = number | NestedValue[];
   export type NestedArray<S extends Shape> =
-    RankUnknowable<S> extends true ? NestedValue      // dim.ts:82, wiederverwendet
-    : S extends readonly [] ? number
-    : S extends readonly [unknown, ...infer R extends Shape] ? NestedArray<R>[]
-    : NestedValue;
+    [S] extends [never] ? NestedValue                 // vor allem anderen: sonst Endlos-Akkumulator
+    : RankUnknowable<S> extends true ? NestedValue    // dim.ts:82, wiederverwendet
+    : NestedOfRank<S["length"]>;
+  // privat (nicht exportiert): baut aus EINEM Rang-Literal die Verschachtelung, tail-rekursiv
+  type NestedOfRank<N extends number, Acc extends readonly unknown[] = [], T = number> =
+    Acc["length"] extends N ? T : NestedOfRank<N, [...Acc, unknown], T[]>;
   ```
+  **v2-Begründung:** die v1-Form (rekursive Zerlegung `S extends [unknown, ...infer R] ?
+  NestedArray<R>[]`) lieferte für `[2, 3] | [4, 5]` den Typ `number[][] | number[][]` — jede
+  Zweig-Instanziierung trägt eigene Alias-Metadaten, TS dedupliziert nicht (Baustein 0,
+  empirisch am echten `dim.ts`). Über `S["length"]` gibt es bei gleichem Rang genau EINE
+  Instanziierung. Probe v2 (Scratch, tsc 7.0.2, echtes `dim.ts`): alle 12 Erwartungs-Pins grün
+  inkl. Union gleichen Rangs, `never`, `any`, `Shape`, Rest-Tupel; LSP-Hover
+  `toNestedArray(): number[][]` auch für die Union.
   **Nur der Rang zählt, nie die Dim-Werte** — `number[]` statt Länge-N-Tupel. Tupel pro Dim-Wert
   wäre die verbotene Tupellängen-Arithmetik über große Dimensionen (CLAUDE.md, TS-Limits) und
-  würde bei `[1000, 1000]` das Budget sprengen. Tail-rekursiv über den Rang (Tiefe = Rang ≤ ≈100
-  unkritisch; der Rang-1024-Cliff der Scale-Probe betrifft ohnehin schon die Shape-Typen).
+  würde bei `[1000, 1000]` das Budget sprengen. Tail-rekursiv über den Rang (Akkumulator-Muster der Hausregel). **Offengelegte Grenze:** ab
+  Rang **999** TS2589 (Tail-Rekursions-Limit, Probe v2: 998 grün, 999/1000/1024 rot) — die
+  bestehende Shape-Maschinerie bricht bei 1024 (`Reverse`). Für `toNestedArray` sinkt die
+  Grenze also um 25 Ränge; praktisch irrelevant, aber im Ergebnis-Doc zu nennen.
   `RankUnknowable` schließt sowohl dynamischen Rang (`number[]`) als auch Unions über die
   Länge (`[2] | [2, 3]`) ab, **bevor** destrukturiert wird (Arbeitsregel 3). Eine Union
   gleichen Rangs (`[2, 3] | [4, 5]`) ergibt korrekt `number[][]`.
@@ -64,17 +80,22 @@ Probe ist informell (Arbeitsregel 8) — Baustein 0 und Verify messen am echten 
   damit der einzige benannte Hover-Fall für Konsumenten nachschlagbar und benennbar ist.
 - **D5 — M2-Kanten.** Jede Variante muss „nie falsch" sein: Rang 0 liefert zur Laufzeit wirklich
   eine Zahl (beide Klassen: `data[offset] ?? 0`); size-0-Shapes (`[0, 3]`) liefern `[]` —
-  typkorrekt als `number[][]`. **Zu klären in Baustein 0:** `AnyNDArray` (`NDArray<any>`),
-  `never`-Shapes und `Shape` selbst (`readonly number[]`) — erwartet `NestedValue`, nie `never`
-  oder `number` (FOLLOWUPS kennt `never`-Verdikte als vorbestehende Klasse).
+  typkorrekt als `number[][]`. **Geklärt (Baustein 0 + Probe v2):** `any`, `never`, `Shape`,
+  `number[]`, Rest-Tupel `[2, ...number[]]` und Unions verschiedenen Rangs → `NestedValue`;
+  optionale Tupel-Elemente sind gar kein gültiges `Shape` (Constraint-Fehler vorher).
 - **D6 — Pins neu.** Die drei `Equal<…, unknown>`-Pins (spike/tests/ndarray.test-d.ts:216-218)
   werden ersetzt, ihr Zweck (Drift zwischen den Deklarationen fangen) bleibt:
   View-Pin bleibt `unknown`; NDArray und WNDArray je gegen dieselben exakten Erwartungen
-  (Rang 0/1/2/3, `[number, 3]`, `number[]`, `Shape`, `[2]|[2,3]`, `[2,3]|[4,5]`, `AnyNDArray`)
+  (Rang 0/1/2/3, `[number, 3]`, `number[]`, `Shape`, `[2]|[2,3]` → `NestedValue`,
+  `[2,3]|[4,5]` → `number[][]`, `never` → `NestedValue`, Rest-Tupel, Top-Typ: `AnyNDArray` für
+  NDArray bzw. `AnyWNDArray` (resident.ts:177) für WNDArray)
   plus ein Pin, dass beide Klassen für dasselbe `S` denselben Typ liefern. Keine neue Testdatei.
-- **D7 — Konsumenten-Nachweis.** Im `consumer-strict`-Smoke: `NDArray.fromArray([2, 3], …)
-  .toNestedArray()[0]![1]` typcheckt als `number | undefined` (mit
-  `noUncheckedIndexedAccess`) bzw. `number` (ohne) — ohne Cast. README: erst mit dem Release
+- **D7 — Konsumenten-Nachweis.** Beide Konsumenten-Smokes (`consumer`, `consumer-strict`) setzen
+  `noUncheckedIndexedAccess` NICHT — dort wird `NDArray.fromArray([2, 3], …).toNestedArray()[0][1]`
+  als `number` gepinnt, ohne Cast (neue Zeile, bisher ruft kein Smoke `toNestedArray`). Der Fall
+  MIT dem Flag (`number | undefined`) wird intern in `spike/tests/ndarray.test-d.ts` gepinnt
+  (Root-tsconfig setzt das Flag). `spike/tests-package/package-smoke.test.ts:23-30` tippt
+  `toNestedArray(): unknown` lokal — auf den neuen Typ nachziehen. README: erst mit dem Release
   eintragen (Arbeitsregel 19).
 
 ## Nicht-Ziele
@@ -101,9 +122,12 @@ ein zweites Argument brauchen; dieses Design sperrt das nicht).
 - Typebene (D6) in `spike/tests/ndarray.test-d.ts`, Diagnose-Inhalte, nicht nur Existenz.
 - Laufzeit: Rang 0 liefert `typeof === "number"` auf beiden Klassen; size-0 liefert `[]`;
   eine View (Transpose) liefert dieselbe Verschachtelung wie ihr materialisiertes Gegenstück
-  (Klasse per Regel 12 assertiert).
-- Mutanten (A und B je eigene): u. a. `NestedArray<R>[]` → `NestedArray<R>` (Rang um eins falsch),
-  `RankUnknowable`-Gate entfernt (Union-Rang → falsche Behauptung, M2-Bruch).
+  (Klasse per Regel 12 assertiert). Vorher prüfen, ob die bestehenden View-Tests mit
+  `toNestedArray` (resident.test.ts, D3-Block der Release-Scheibe) das schon leisten — dann
+  erweitern statt duplizieren.
+- Mutanten (A und B je eigene): u. a. Akkumulator-Start `T = number[]` (Rang um eins falsch),
+  `RankUnknowable`-Gate entfernt (Union-Rang → falsche Behauptung, M2-Bruch), `never`-Gate
+  entfernt (erwartet: TS2589 bzw. roter `never`-Pin).
 
 ## Entscheidungen für den Owner (vor Baustein 0) — ENTSCHIEDEN 2026-09-24
 
@@ -117,3 +141,22 @@ mit dem nächsten Minor (0.4.0) bündeln.
 3. **Release:** Die Verengung von `unknown` kann bestehenden Konsumenten-Code brechen (z. B. ein
    Cast `as string` wird zum Fehler) → nach der SemVer-Policy ein Minor, also 0.4.0 — nicht
    allein veröffentlichen, sondern mit dem nächsten Paket bündeln?
+
+## Adversariale Spec-Verifikation (Addendum, Baustein 0, 2026-09-24)
+
+`brainroute:deep`, frischer Kontext, eigener Worktree am HEAD `53c8cb0`. **Keine falsche
+Code-Annahme** (alle Datei-/Zeilen-Belege exakt, Baseline 226,220 @ 140 reproduziert).
+**Bestätigt am echten Code:** D3 (TS2636 auf `NDArrayView<out S>`), D2 (Entwurf kompiliert in
+allen drei Korpora; nur die zwei zu ersetzenden Pins rot), M3-Hover per echtem LSP inkl.
+Op-Ketten (`a.matmul(b).toNestedArray()` → `number[][]`). Budget-Entwurf: Root Δ+947, stress
+Δ+43, browser Δ0, Re-Export aus `index.ts` Δ0 — Entwurfsmessung, nicht das Scheibenergebnis.
+**Befunde:** (1) BLOCKER — Union gleichen Rangs → `number[][] | number[][]` (behoben durch D1 v2);
+(2) minor — `NestedArray<never>` → `never` (behoben durch das `never`-Gate in D1 v2);
+(3) minor — `AnyWNDArray` statt `AnyNDArray` für den WNDArray-Top-Typ-Pin (D6 v2);
+(4) minor — D7-Zuordnung von `noUncheckedIndexedAccess` zu den Smokes stimmte nicht (D7 v2);
+(5) minor — `package-smoke.test.ts` tippt `unknown` lokal (D7 v2); (6) nit — bestehende
+View-Tests prüfen (Testplan v2). Nuance ohne Handlungsbedarf: im Rumpf einer noch GENERISCHEN
+Funktion hovert `NestedArray<S>` unaufgelöst — normales TS-Verhalten wie bei allen Typen hier.
+Baustein 0 hatte außerdem vermutet, die v1-Rekursion senke die Rang-Grenze, und das empirisch
+WIDERLEGT (v1: kein TS2589 bis 1024). Die v2-Form senkt sie dagegen auf 999 (s. D1) — bewusst
+in Kauf genommen gegen die Korrektheit bei Unions gleichen Rangs.
