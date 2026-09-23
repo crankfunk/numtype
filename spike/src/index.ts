@@ -2,7 +2,7 @@ export type { CompatDim, Dim, DimEq, IsDynamicDim, IsShapeError, Reverse, Shape,
 export type { Broadcast } from "./broadcast.ts";
 export type { MatMul } from "./matmul.ts";
 export type { ReduceAxis, ReduceAxisKeepDims, Transpose } from "./reduce.ts";
-export { NDArray, type AnyNDArray, type NDArrayView } from "./ndarray.ts";
+export { NDArray, type AnyNDArray, type NDArrayView, type NestedArray, type NestedValue } from "./ndarray.ts";
 // Item 10 — Backend-Wahl-API (docs/item-10-backend-api-spec.md): the
 // explicit, opt-in WASM/threads performance backends. `WasmBackend` is a
 // value export (browser-safe, no top-level Node imports); `ThreadedBackend`

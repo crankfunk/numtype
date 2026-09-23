@@ -67,7 +67,7 @@
 
 import type { Broadcast } from "../broadcast.ts";
 import { type Dim, type Mutable, type Shape } from "../dim.ts";
-import type { Guard, NDArrayView, OkShape } from "../ndarray.ts";
+import type { Guard, NDArrayView, NestedArray, OkShape } from "../ndarray.ts";
 import type { MatMul } from "../matmul.ts";
 import type { ReduceAxis, Transpose } from "../reduce.ts";
 import type { ReshapeCheck } from "../reshape.ts";
@@ -1673,8 +1673,11 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
 
   /** Read back as a plain nested JS array (any rank), for printing/tests —
    * same shape/stride walk as `NDArray.toNestedArray` (over the logical
-   * row-major copy `toArray` returns, so views need no special casing). */
-  toNestedArray(): unknown {
+   * row-major copy `toArray` returns, so views need no special casing).
+   * Rank-typed via `NestedArray<S>` (docs/typed-nested-array-spec.md D2) —
+   * runtime body unchanged, only the signature narrows and the return is
+   * cast. */
+  toNestedArray(): NestedArray<S> {
     this.assertLive("toNestedArray");
     const data = this.toArray();
     const strides = computeStrides(this.shape);
@@ -1686,7 +1689,7 @@ export class WNDArray<S extends Shape> implements NDArrayView<S> {
       for (let i = 0; i < dim; i++) out.push(build(axis + 1, offset + i * stride));
       return out;
     };
-    return build(0, 0);
+    return build(0, 0) as NestedArray<S>;
   }
 
   /** WASM parity S3 (docs/wasm-parity-item-stack-spec.md, D3): the direct

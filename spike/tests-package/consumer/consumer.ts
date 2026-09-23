@@ -31,3 +31,8 @@ a.add(NDArray.fromArray([2, 3], [6, 5, 4, 3, 2, 1]));
 // pins the guard's survival through emit + post-rewrite, not just its presence.
 // @ts-expect-error axis 9 is out of range for shape [2,3] (rank 2)
 a.sum(9);
+
+// docs/typed-nested-array-spec.md D7: `toNestedArray()` is rank-typed through
+// the build — indexing two levels deep needs no cast. This consumer does not
+// set `noUncheckedIndexedAccess`, so the result is plain `number`.
+const nested: number = a.toNestedArray()[0][1];

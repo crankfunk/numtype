@@ -31,6 +31,12 @@ declare function useThreaded(backend: ThreadedBackend): Promise<void>;
 // A plain NDArray consumer stays green too (same baseline as ../consumer/).
 declare const a: NDArray<readonly [2, 3]>;
 
+// docs/typed-nested-array-spec.md D7: same `toNestedArray()` pin as
+// ../consumer/ — this smoke doesn't set `noUncheckedIndexedAccess` either
+// (see ./tsconfig.json), so the result is plain `number`, no cast.
+const nested: number = a.toNestedArray()[0][1];
+
 void a;
 void describeResident;
 void useThreaded;
+void nested;

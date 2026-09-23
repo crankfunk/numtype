@@ -20,7 +20,7 @@
  */
 
 import type { Broadcast } from "./broadcast.ts";
-import { type Dim, type Mutable, type Shape, type ShapeError } from "./dim.ts";
+import { type Dim, type Mutable, type RankUnknowable, type Shape, type ShapeError } from "./dim.ts";
 import type { MatMul } from "./matmul.ts";
 import type { ReduceAxis, Transpose } from "./reduce.ts";
 import type { ReshapeCheck } from "./reshape.ts";
@@ -253,9 +253,52 @@ type RowShapesOf<Rows extends readonly NDArray<any>[]> = { [I in keyof Rows]: Un
  * changes (the clean-hover house rule binds the class hover, not every
  * member hover).
  */
+/** Recursive fallback for `NestedArray<S>` whenever the rank of `S` cannot
+ * be pinned down statically (dynamic rank, or a rank-mixed union) — an
+ * honest recursive type instead of a wrong claim (docs/typed-nested-array-spec.md
+ * D1/D5, Covenant M2). */
+export type NestedValue = number | NestedValue[];
+
+/** `toNestedArray()`'s return type, computed from the RANK of `S` alone —
+ * never from its dim VALUES (a per-dim-value tuple would be the forbidden
+ * tuple-length arithmetic over large dimensions, CLAUDE.md's TS limits).
+ * `[2, 3]` → `number[][]`, `[]` → `number`, `[number, 3]` → `number[][]`.
+ * The `[S] extends [never]` branch must run before anything else, or
+ * `NestedOfRank` recurses forever trying to compute `never["length"]`.
+ * `RankUnknowable` (dim.ts) degrades dynamic rank AND rank-mixed unions to
+ * `NestedValue` before any destructuring happens (Arbeitsregel 3); a union
+ * of shapes with the SAME rank still resolves through `S["length"]` to one
+ * concrete type (docs/typed-nested-array-spec.md D1 v2 — the v1 recursive-
+ * decomposition design produced one instantiation per union branch instead,
+ * `number[][] | number[][]`, which TS does not dedupe). */
+export type NestedArray<S extends Shape> = [S] extends [never]
+  ? NestedValue
+  : RankUnknowable<S> extends true
+    ? NestedValue
+    : NestedOfRank<S["length"]>;
+
+/** Private, tail-recursive rank-to-nesting builder (accumulator pattern,
+ * CLAUDE.md TS limits: tail-recursive types tolerate ~1000 instantiation
+ * depth vs. ~100 non-tail-recursive) — `NestedOfRank<0> = number`,
+ * `NestedOfRank<2> = number[][]`. Rank ceiling measured at 999 (TS2589 from
+ * 999 on, one below the pre-existing shape machinery's ceiling of 1024 —
+ * docs/typed-nested-array-spec.md D1), practically irrelevant. */
+type NestedOfRank<N extends number, Acc extends readonly unknown[] = [], T = number> = Acc["length"] extends N
+  ? T
+  : NestedOfRank<N, [...Acc, unknown], T[]>;
+
 export interface NDArrayView<out S extends Shape> {
   readonly shape: Readonly<S>;
   readonly strides: readonly number[];
+  /** Stays `unknown`, unlike `NDArray`/`WNDArray`'s own `toNestedArray()`
+   * (docs/typed-nested-array-spec.md D3): a rank-computed `NestedArray<S>`
+   * return type under this interface's checker-enforced `out S` throws
+   * TS2636 ("NestedArray<sub-S> is not assignable to NestedArray<super-S>"),
+   * the same variance class as Spike 05's `Transpose` — `NestedArray<S>` is
+   * a genuinely computing type function, not provably monotone in `S` the
+   * way covariance needs (measured against real tsc 7.0.2, Baustein 0). The
+   * concrete classes narrow the return type via `implements`, which is
+   * unaffected by the interface member's own declared type. */
   toNestedArray(): unknown;
 }
 
@@ -720,8 +763,10 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
     return computeStrides(this.shape);
   }
 
-  /** Read back as a plain nested JS array (any rank), for printing/tests. */
-  toNestedArray(): unknown {
+  /** Read back as a plain nested JS array, rank-typed via `NestedArray<S>`
+   * (docs/typed-nested-array-spec.md D2) — runtime body unchanged, only the
+   * signature narrows from `unknown` and the return is cast. */
+  toNestedArray(): NestedArray<S> {
     const strides = computeStrides(this.shape);
     const build = (axis: number, offset: number): unknown => {
       if (axis === this.shape.length) return this.data[offset] ?? 0;
@@ -731,7 +776,7 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
       for (let i = 0; i < dim; i++) out.push(build(axis + 1, offset + i * stride));
       return out;
     };
-    return build(0, 0);
+    return build(0, 0) as NestedArray<S>;
   }
 
   /** Index of the maximum element (Op-Scheibe W1,

@@ -1,10 +1,10 @@
 import type { Broadcast } from "../src/broadcast.ts";
 import type { Shape } from "../src/dim.ts";
-import { type AnyNDArray, type Guard, NDArray, type NDArrayView } from "../src/ndarray.ts";
+import { type AnyNDArray, type Guard, NDArray, type NDArrayView, type NestedArray, type NestedValue } from "../src/ndarray.ts";
 import type { ReduceAxis } from "../src/reduce.ts";
 import type { ItemGuard, StackCheck, TopkCheck } from "../src/vector.ts";
 import type { CoreExports } from "../src/wasm/loader.ts";
-import { WNDArray } from "../src/wasm/resident.ts";
+import { type AnyWNDArray, WNDArray } from "../src/wasm/resident.ts";
 import type { Equal, Expect } from "./test-utils.ts";
 
 // --- const type params: callers never write `as const` ------------------
@@ -204,18 +204,46 @@ declare const wndForMutation: WNDArray<[2, 3]>;
 // @ts-expect-error - wnd.shape[0] = 2 must be a compile error (D-V2.3 deep-readonly, WNDArray; matching value, see note above)
 wndForMutation.shape[0] = 2;
 
-// --- toNestedArray() return type is pinned against narrowing (B5, closure --
-// round, 2026-07-13). `toNestedArray(): unknown` is intentional (D-V2.2's
-// doc comment on `NDArrayView`: no `data`-shaped member, keeps the interface
-// satisfiable by any backend) — a future edit that narrows the return type
-// on any ONE of the three declarations (`NDArrayView`, `NDArray`, `WNDArray`)
-// without updating the others would silently break `implements
-// NDArrayView<S>` (narrower return types are fine for `implements`, so the
-// compiler would not itself flag the drift) or just quietly change the
-// documented contract. These three `Equal` pins catch either.
+// --- toNestedArray() return type: rank-computed NestedArray<S> (D-V2.2/B5's
+// `unknown` pin REVERSED, docs/typed-nested-array-spec.md D6, Baustein-0
+// finding 3: WNDArray's top type is `AnyWNDArray`, not `AnyNDArray`).
+// `NDArrayView<S>` itself keeps `unknown` — D3, TS2636 under `out S` — so it
+// is pinned separately; the concrete classes narrow the return type via
+// `implements`, which the checker allows and does not itself verify, so the
+// pins below are what catches drift between the three declarations.
 type ToNestedArrayViewReturn = Expect<Equal<ReturnType<NDArrayView<[2, 3]>["toNestedArray"]>, unknown>>;
-type ToNestedArrayNDReturn = Expect<Equal<ReturnType<NDArray<[2, 3]>["toNestedArray"]>, unknown>>;
-type ToNestedArrayWNDReturn = Expect<Equal<ReturnType<WNDArray<[2, 3]>["toNestedArray"]>, unknown>>;
+
+// NDArray: rank 0/1/2/3, `[number, 3]`, dynamic rank, `Shape`, mixed-rank
+// union, same-rank union, `never`, rest tuple, top type.
+type NDRank0 = Expect<Equal<ReturnType<NDArray<[]>["toNestedArray"]>, number>>;
+type NDRank1 = Expect<Equal<ReturnType<NDArray<[3]>["toNestedArray"]>, number[]>>;
+type NDRank2 = Expect<Equal<ReturnType<NDArray<[2, 3]>["toNestedArray"]>, number[][]>>;
+type NDRank3 = Expect<Equal<ReturnType<NDArray<[2, 3, 4]>["toNestedArray"]>, number[][][]>>;
+type NDMixedDim = Expect<Equal<ReturnType<NDArray<[number, 3]>["toNestedArray"]>, number[][]>>;
+type NDDynamicRank = Expect<Equal<ReturnType<NDArray<number[]>["toNestedArray"]>, NestedValue>>;
+type NDShape = Expect<Equal<ReturnType<NDArray<Shape>["toNestedArray"]>, NestedValue>>;
+type NDMixedRankUnion = Expect<Equal<ReturnType<NDArray<[2] | [2, 3]>["toNestedArray"]>, NestedValue>>;
+type NDSameRankUnion = Expect<Equal<ReturnType<NDArray<[2, 3] | [4, 5]>["toNestedArray"]>, number[][]>>;
+type NDNever = Expect<Equal<ReturnType<NDArray<never>["toNestedArray"]>, NestedValue>>;
+type NDRestTuple = Expect<Equal<ReturnType<NDArray<[2, ...number[]]>["toNestedArray"]>, NestedValue>>;
+type NDAnyTop = Expect<Equal<ReturnType<AnyNDArray["toNestedArray"]>, NestedValue>>;
+
+// WNDArray: same expectation catalog, plus its own top type (`AnyWNDArray`).
+type WNDRank0 = Expect<Equal<ReturnType<WNDArray<[]>["toNestedArray"]>, number>>;
+type WNDRank1 = Expect<Equal<ReturnType<WNDArray<[3]>["toNestedArray"]>, number[]>>;
+type WNDRank2 = Expect<Equal<ReturnType<WNDArray<[2, 3]>["toNestedArray"]>, number[][]>>;
+type WNDRank3 = Expect<Equal<ReturnType<WNDArray<[2, 3, 4]>["toNestedArray"]>, number[][][]>>;
+type WNDMixedDim = Expect<Equal<ReturnType<WNDArray<[number, 3]>["toNestedArray"]>, number[][]>>;
+type WNDDynamicRank = Expect<Equal<ReturnType<WNDArray<number[]>["toNestedArray"]>, NestedValue>>;
+type WNDShape = Expect<Equal<ReturnType<WNDArray<Shape>["toNestedArray"]>, NestedValue>>;
+type WNDMixedRankUnion = Expect<Equal<ReturnType<WNDArray<[2] | [2, 3]>["toNestedArray"]>, NestedValue>>;
+type WNDSameRankUnion = Expect<Equal<ReturnType<WNDArray<[2, 3] | [4, 5]>["toNestedArray"]>, number[][]>>;
+type WNDNever = Expect<Equal<ReturnType<WNDArray<never>["toNestedArray"]>, NestedValue>>;
+type WNDRestTuple = Expect<Equal<ReturnType<WNDArray<[2, ...number[]]>["toNestedArray"]>, NestedValue>>;
+type WNDAnyTop = Expect<Equal<ReturnType<AnyWNDArray["toNestedArray"]>, NestedValue>>;
+
+// Both classes agree for the same S (drift catcher between the two `implements NDArrayView<S>` sites).
+type NDWNDAgree = Expect<Equal<ReturnType<NDArray<[2, 3]>["toNestedArray"]>, ReturnType<WNDArray<[2, 3]>["toNestedArray"]>>>;
 
 // --- NDArrayView<out S>: the safe, checker-enforced covariant read view ----
 // (Spike 05, docs/spike-05-variance-design-spec.md). Unlike AnyNDArray

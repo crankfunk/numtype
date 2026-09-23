@@ -18,16 +18,24 @@ import assert from "node:assert";
 // (same depth as spike/tests-runtime/, cf. test-scripts-guard's `../../`).
 const distIndexUrl = new URL("../../dist/index.js", import.meta.url);
 
+// docs/typed-nested-array-spec.md D7: `toNestedArray()` is no longer
+// `unknown` on the real package — this file's hand-rolled structural
+// interfaces (shape-erased, `readonly number[]`) follow suit with the
+// honest dynamic-rank type, `NestedValue`'s own shape (module-local copy;
+// this file checks against the built `dist/index.js` structurally, not
+// against `spike/src` types).
+type NestedValueLike = number | NestedValueLike[];
+
 interface NDArrayLike {
   readonly shape: readonly number[];
-  sum(): { toNestedArray(): unknown };
-  sum(axis: number): { toNestedArray(): unknown };
-  sum(axis: number, keepdims: boolean): { toNestedArray(): unknown };
-  add(other: NDArrayLike): { toNestedArray(): unknown };
+  sum(): { toNestedArray(): NestedValueLike };
+  sum(axis: number): { toNestedArray(): NestedValueLike };
+  sum(axis: number, keepdims: boolean): { toNestedArray(): NestedValueLike };
+  add(other: NDArrayLike): { toNestedArray(): NestedValueLike };
 }
 interface WNDArrayLike {
-  sum(): { toNestedArray(): unknown };
-  add(other: WNDArrayLike): { toNestedArray(): unknown };
+  sum(): { toNestedArray(): NestedValueLike };
+  add(other: WNDArrayLike): { toNestedArray(): NestedValueLike };
 }
 interface WasmBackendLike {
   fromArray(shape: readonly number[], data: readonly number[]): WNDArrayLike;

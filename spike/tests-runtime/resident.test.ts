@@ -2956,3 +2956,39 @@ test("WNDArray toJSON/inspect/toString throw the standard named disposed error a
   assert.throws(() => inspectOf(w), /WNDArray\.inspect: array has been disposed/);
   assert.throws(() => w.toString(), /WNDArray\.toString: array has been disposed/);
 });
+
+// --- toNestedArray(): rank-typed return (docs/typed-nested-array-spec.md) -
+// M2 edge cases D5 calls out explicitly: rank 0 is a real runtime `number`
+// (not a 0-d array), and a size-0 shape yields `[]`, on both classes.
+
+test("NDArray toNestedArray: rank 0 returns a plain number, not a wrapped array", () => {
+  const a = NDArray.fromArray([], [42]);
+  const nested = a.toNestedArray();
+  assert.strictEqual(typeof nested, "number");
+  assert.strictEqual(nested, 42);
+});
+
+test("NDArray toNestedArray: size-0 shape returns []", () => {
+  const a = NDArray.fromArray([0, 3], []);
+  assert.deepStrictEqual(a.toNestedArray(), []);
+});
+
+test("WNDArray toNestedArray: rank 0 returns a plain number, not a wrapped array", () => {
+  const w = WNDArray.fromArray(core, [], [42]);
+  try {
+    const nested = w.toNestedArray();
+    assert.strictEqual(typeof nested, "number");
+    assert.strictEqual(nested, 42);
+  } finally {
+    w.dispose();
+  }
+});
+
+test("WNDArray toNestedArray: size-0 shape returns []", () => {
+  const w = WNDArray.fromArray(core, [0, 3], []);
+  try {
+    assert.deepStrictEqual(w.toNestedArray(), []);
+  } finally {
+    w.dispose();
+  }
+});

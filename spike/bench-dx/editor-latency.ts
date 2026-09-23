@@ -897,15 +897,31 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // `...` summarization); every workload compiles runtime.ts, and the identical
 // +71 shows up in `check:diag:stress` (116,149 -> 116,220). Measured twice,
 // byte-identical.
+// Slice 0b (docs/typed-nested-array-spec.md), 2026-09-24: pins moved UNIFORMLY
+// by +60 -- the same single-class ripple mechanism as before, this time on
+// BOTH `NDArray` and `WNDArray`: `toNestedArray()`'s signature narrows from
+// `unknown` to the new generic-in-S `NestedArray<S>` on both classes, and
+// every workload instantiates at least one of them. No workload has its own
+// `toNestedArray` call site, so the delta is perfectly uniform again.
+// Disclosed discrepancy: `check:diag:stress` moved by +59 for the same
+// change (116,220 -> 116,279), not +60 -- a one-instantiation gap between
+// this isolated-per-workload corpus and the full stress corpus, reproduced
+// on a second stress measurement. Every prior slice's editor/stress deltas
+// matched exactly; this is the first one-off. Investigated: no file was
+// added/removed in either corpus (rules out the ±~7,000 order-noise
+// mechanism), and `spike/tests-stress` does not compile `spike/tests-runtime`
+// (rules out this slice's new runtime tests as the cause) -- left as an
+// observed, disclosed anomaly rather than force-matched. Measured twice,
+// byte-identical both times.
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 37740,
-  w2: 39573,
-  w3: 70715,
-  w4: 37895,
-  w5: 43194,
-  w6: 44388,
-  w7: 36944,
-  w8: 44633,
+  w1: 37800,
+  w2: 39633,
+  w3: 70775,
+  w4: 37955,
+  w5: 43254,
+  w6: 44448,
+  w7: 37004,
+  w8: 44693,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {
