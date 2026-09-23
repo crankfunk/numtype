@@ -30,10 +30,9 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 
 ## Status (IST, 2026-09-23)
 
-- **npm:** `numtype@0.2.0` (2026-07-21); `package.json` noch 0.2.0, README bereits auf v0.3 (D6: Version-Bump + Publish nach Owner-OK). Tags `v0.1.0`/`v0.1.1`/`v0.2.0`, Apache-2.0, Repo public, Rulesets `protect-main` + `protect-release-tags`.
-- **main ist unveröffentlicht voraus:** WASM-Parität S0–S5 (sqrt, Skalar-Overloads, mean, item+stack, argmax, topk auf `WNDArray`/threaded — alle dreifach verifiziert), topk-Heap, COVENANT v6, slice-Literal-Budget, View-Preconditions.
+- **npm:** `numtype@0.3.0` (2026-09-24, „parity and polish"; davor 0.2.0 am 2026-07-21). Registry-Tarball nach dem Publish verifiziert (Integrität, Inhalt), Beispiel läuft unverändert auf 0.3.0. Tags `v0.1.0`/`v0.1.1`/`v0.2.0`/`v0.3.0`, Apache-2.0, Repo public, Rulesets `protect-main` + `protect-release-tags`.
 - **Aktive Roadmap (Owner-entschieden 2026-09-23, docs/roadmap.md „Roadmap ab 2026-09-23"):**
-  0a Release 0.3.0 „Parity + Polish" (umgesetzt + verifiziert, auf main; Publish wartet auf Owner-OK) → 0b typisiertes `toNestedArray` → dtype-Design
+  0a Release 0.3.0 (ERLEDIGT 2026-09-24) → **als Nächstes:** 0b typisiertes `toNestedArray` → dtype-Design
   (volles dtype, Option C) → 2 Op-Umfang „die ersten zehn Minuten" → 3 API-Flächen-Skala +
   Strukturumbau → 1 Verbreitung (bewusst ans Ende gestellt).
 - **Geparkt:** Klassifikation der View-Test-Restmenge (Spec v2.1 + Skripte als WIP committet;

@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       numtype:
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.3.0
+        version: 0.3.0
     devDependencies:
       typescript:
         specifier: ^7.0.2
@@ -138,8 +138,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  numtype@0.2.0:
-    resolution: {integrity: sha512-4kY7DZMDxSiLQSiSzMp9BdsRcckzb58JBF1VDr4FceFY2redDdSIftFbxysiWuCSt6OKeizjAfoI2wtm+uK2nA==}
+  numtype@0.3.0:
+    resolution: {integrity: sha512-Sy02dsGQycebvwBEy1+Sf6YEprdP5DkVIthhsXbuusSpM6OKMiEfyay/nj0k84sAYfKq5VsSW+iVt+1Oy5FX/Q==}
     engines: {node: '>=20'}
 
   typescript@7.0.2:
@@ -209,7 +209,7 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  numtype@0.2.0: {}
+  numtype@0.3.0: {}
 
   typescript@7.0.2:
     optionalDependencies:

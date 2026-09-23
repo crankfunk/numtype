@@ -1329,3 +1329,13 @@ Rang 2, kurze Achse bleibt ganz, toJSON vollständig, WNDArray-Parität); 2 Muta
 (`>=` statt `>`: 1 Test; Rand um eins verkürzt: 4 Tests), je per Backup-`diff` revertiert.
 check:diag 226,220 (Δ+72) · stress 116,220 (Δ+71) · bench:editor uniform +71 = stress-Δ,
 zweimal bestätigt · test:resident 6151+2 · Lint 0/0 auf frischem Graph.
+
+**Release 0.3.0 (2026-09-24):** `main` gepusht (CI 9/9 grün auf dem Release-Commit, npm-`latest`
+da noch 0.2.0), Owner-Publish per `pnpm publish`, danach Registry-Tarball verifiziert (SHA-512 =
+Registry-Integrität; neue `WNDArray`-Member, `WNDArray`-Typexport, 0 `node:`-Importe in den
+`.d.ts`, kein `backend.*`, Kürzung enthalten), Beispiel auf `^0.3.0` gebumpt — der UNVERÄNDERTE
+Beispielcode läuft grün (Drop-in-Kompatibilität 0.2 → 0.3), dann Tag `v0.3.0`.
+**Stolperer:** eine Abfrage der Tarball-URL VOR der Propagation erzeugte einen CDN-Negativcache —
+der Tarball blieb ≈5 Minuten 404, obwohl die Metadaten 0.3.0 schon zeigten (mit Query-Parameter
+sofort 200). Nach einem Publish die Tarball-URL erst abfragen, wenn die Metadaten die Version
+zeigen, oder mit Cache-Bust.
