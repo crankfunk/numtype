@@ -371,3 +371,24 @@ keine Gleitkomma-Arithmetik (kategorial anders als `sum`). Zwei unabhängige Ver
 das bestätigt, einer analytisch, einer empirisch. **Richtig war dagegen die Erwartung zum
 NaN-Payload:** er greift hier erstmals wirklich und ist byte-exakt bewiesen (zwei
 nicht-kanonische Muster, contiguous + gestridet + threaded + cargo).
+
+## Roadmap ab 2026-09-23 (Owner-entschieden nach dem Stand-Review)
+
+**Anlass:** Stand-Review vom 2026-09-23. Technisch ist das Projekt gesund (alle Gates am HEAD
+exakt reproduziert, CI grün), aber seit 0.2.0 ist kein Nutzerwert ausgeliefert worden: die
+WASM-Parität S0–S5 lag unveröffentlicht auf `main`, während die README sie bereits bewarb.
+Adoption ≈ null (1 Stern, 0 Issues, ≈550 npm-Downloads gesamt). Gleichzeitig kalibriert:
+CLAUDE.md verschlankt, neue Stufe **3a „Routine-Scheibe"** in der Eskalationsleiter,
+Klassifikations-Scheibe geparkt (FOLLOWUPS).
+
+**Reihenfolge (Owner, 2026-09-23):** Phase 0 → Phase 2 → Phase 3 → Phase 1. Die Verbreitung
+steht bewusst am Ende: erst ein Produkt, das die ersten zehn Minuten eines NumPy-Nutzers
+übersteht, dann Reichweite.
+
+| Phase | Inhalt | Stufe |
+|---|---|---|
+| **0a** Release 0.3.0 „Parity + Polish" | S0–S5 veröffentlichen; `WNDArray` als Typ exportieren; keine `node:`-Typimporte in der Haupt-`.d.ts`; `toJSON`/`inspect`; totes v1-`backend.ts` aus dem Paket; README-Korrekturen. Spec: docs/release-0.3.0-spec.md | 3a |
+| **0b** Typisiertes `toNestedArray` | `NestedArray<S>` statt `unknown` auf den konkreten Klassen — kehrt die gepinnte D-V2.2-Entscheidung um, neue Typ-Maschinerie auf kovarianter Fläche (TS2636-Risiko) | 3b |
+| **2** Op-Umfang „die ersten zehn Minuten" (0.4) | `concat`/`vstack` mit Achse; `max`/`min`/`argmin`; `arange`/`linspace`/`eye`; `reshape(-1)`; `squeeze`/`expand_dims`, `abs`/`pow`. Vergleiche/`where`/Masken erst nach der dtype-Entscheidung | je Op 3a, neue Typ-Folds/Kernel 3b |
+| **3** API-Flächen-Skala + Strukturumbau | Die offene Hälfte der USP-Risiko-Definition messen (FOLLOWUPS „API-Flächen-Skala"); `spike/` → `src/`, `resident.ts` nach Op-Gruppen teilen, Prozess-Prosa aus ausgeliefertem Code | 3b |
+| **1** Verbreitung | Show HN, r/typescript, TS-Community — mit Playground-Link; Erfolgskriterium vorab festlegen | — |

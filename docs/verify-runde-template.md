@@ -1,5 +1,9 @@
 # Verify-Runde — Auftrags-Template (Owner-Mandat 2026-07-12)
 
+> **Kalibrierung 2026-09-23:** Routine-Scheiben (Stufe 3a) nutzen EINEN kombinierten
+> Verifier (Baustein R unten) statt A + B, ohne Baustein 0. Die folgenden Absätze
+> gelten für volle Scheiben (Stufe 3b).
+
 Jede substanzielle Scheibe endet mit einer Verify-Runde aus **zwei** Fresh-Context-
 Verifiern (Anthropic-Befund: separate Fresh-Context-Verifier schlagen Selbstkritik;
 Kern-09-Befund: ein einzelner Spec-Verifier erbt die blinden Flecken seines
@@ -94,9 +98,32 @@ ist das Brechen):
   boolean statt true/false, `number` statt Literal), Hover-Qualität der neuen
   Signaturen, `@ts-expect-error`-Positionen wirklich am Argument.
 
+## Baustein R — kombinierter Routine-Verifier (Stufe 3a, seit 2026-09-23)
+
+Ersetzt A + B für eine **Routine-Scheibe** (Stufe 3a der Eskalationsleiter in CLAUDE.md:
+etabliertes Muster, keine neue Typ-Maschinerie-Klasse, kein Kernel-/Freeze-Hash-Effekt,
+keine Mess-/Forschungsfrage, keine Covenant-Änderung). EIN `brainroute:verify`- oder
+`brainroute:deep`-Agent, frischer Kontext, **eigener Worktree** mit applizierter
+Scheiben-Patch (nie der Haupt-Baum). Kein Baustein 0 vorher. Auftrag enthält die
+gemeinsamen Pflichtregeln plus:
+
+- **Konformität (knapp, aus A):** die Kurz-Spec als Ground Truth, jede ihrer Zusagen
+  einzeln gegen den Diff; alle Gates frisch mit echten Zahlen gegen die Absolut-Grenzen
+  der Spec; Freeze-Hash muss UNVERÄNDERT sein (bewegt er sich, ist die Scheibe keine 3a
+  → Blocker).
+- **Brechen (knapp, aus B):** Rang 0, size-0, dynamische Argumente, Views, Fehlerpfade
+  Runtime ⇄ Compile; Hover der neuen/geänderten öffentlichen Signaturen per LSP (Regel 13),
+  wenn die Scheibe eine öffentliche Signatur berührt.
+- **Mutanten: mindestens zwei**, einer an einer von der Spec benannten Stelle, einer
+  abseits (Nachbar-Methode, geteilter Helper). Überlebt einer → Befund major.
+- **Stufen-Check:** ausdrücklich beurteilen, ob die Scheibe die 3a-Kriterien erfüllt.
+  Ein Blocker-Befund oder ein verletztes Kriterium stuft auf 3b hoch (dann A + B + C
+  nachholen) — der Verifier meldet das, der Orchestrator entscheidet mit dem Owner.
+
 ## Baustein C — covenant-verify (Vertrags-Dimension; gilt, solange COVENANT.md existiert)
 
-Pflicht nur auf Stufe 3 der Covenant-Eskalationsleiter (substanzielle Scheibe mit
+Pflicht nur auf Stufe 3b der Covenant-Eskalationsleiter (auf 3a nur bei inhaltlich
+berührtem Anker) (substanzielle Scheibe mit
 bindender Spec — Leiter in CLAUDE.md, „Qualitätssicherung"); auf Stufe 2 (Anker
 berührt, keine Scheibe) nur bei inhaltlicher Tangierung, sonst Ein-Satz-Begründung im
 Commit. Läuft PARALLEL zu A und B als DRITTER frischer Kontext mit disjunkter Frage:
