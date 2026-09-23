@@ -229,7 +229,9 @@ Three consumer-facing fixes, found while getting 0.3.0 ready to ship:
 - **`toJSON()`, a `console.log`-friendly inspect, and `toString()`** on both `NDArray` and
   `WNDArray`: `JSON.stringify(arr)` now round-trips through `NDArray.fromArray(json.shape,
   json.data)`, and printing an array (`console.log(arr)`, template literals, `String(arr)`) shows
-  `NDArray<[2, 3]> [[1, 2, 3], [4, 5, 6]]` instead of an opaque object dump.
+  `NDArray<[2, 3]> [[1, 2, 3], [4, 5, 6]]` instead of an opaque object dump Large arrays print summarized
+  the way NumPy does (above 1000 elements: `[0, 1, 2, ..., 9997, 9998, 9999]`); `toJSON()` always
+  stays complete.
 
 ## Gradual typing
 
