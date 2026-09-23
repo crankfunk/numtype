@@ -245,6 +245,13 @@ type WNDAnyTop = Expect<Equal<ReturnType<AnyWNDArray["toNestedArray"]>, NestedVa
 // Both classes agree for the same S (drift catcher between the two `implements NDArrayView<S>` sites).
 type NDWNDAgree = Expect<Equal<ReturnType<NDArray<[2, 3]>["toNestedArray"]>, ReturnType<WNDArray<[2, 3]>["toNestedArray"]>>>;
 
+// Indexed access under `noUncheckedIndexedAccess` (set in this corpus's root
+// tsconfig): `[0][1]` is honestly `number | undefined`, not `number` — spec D7
+// (the flag-free `number` case is pinned in both consumer smokes).
+declare const nestedIndexRecv: NDArray<[2, 3]>;
+const nestedIndexed = nestedIndexRecv.toNestedArray()[0]![1];
+type NDNestedIndexUnderFlag = Expect<Equal<typeof nestedIndexed, number | undefined>>;
+
 // --- NDArrayView<out S>: the safe, checker-enforced covariant read view ----
 // (Spike 05, docs/spike-05-variance-design-spec.md). Unlike AnyNDArray
 // (erasure — unsafe in both directions), the view's `out S` lets a concrete
