@@ -32,7 +32,7 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 
 - **npm:** `numtype@0.3.0` (2026-09-24, „parity and polish"; davor 0.2.0 am 2026-07-21). Registry-Tarball nach dem Publish verifiziert (Integrität, Inhalt), Beispiel läuft unverändert auf 0.3.0. Tags `v0.1.0`/`v0.1.1`/`v0.2.0`/`v0.3.0`, Apache-2.0, Repo public, Rulesets `protect-main` + `protect-release-tags`.
 - **Aktive Roadmap (Owner-entschieden 2026-09-23, docs/roadmap.md „Roadmap ab 2026-09-23"):**
-  0a Release 0.3.0 (ERLEDIGT 2026-09-24) → **als Nächstes:** 0b typisiertes `toNestedArray` → dtype-Design
+  0a Release 0.3.0 (ERLEDIGT 2026-09-24) → 0b typisiertes `toNestedArray` (ERLEDIGT 2026-09-24, unveröffentlicht → 0.4.0) → **als Nächstes:** dtype-Design
   (volles dtype, Option C) → 2 Op-Umfang „die ersten zehn Minuten" → 3 API-Flächen-Skala +
   Strukturumbau → 1 Verbreitung (bewusst ans Ende gestellt).
 - **Geparkt:** Klassifikation der View-Test-Restmenge (Spec v2.1 + Skripte als WIP committet;
@@ -41,9 +41,9 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 ## Aktuelle Pins & Gates (IST; Historie im Archiv/Log)
 
 - **Freeze-Hash** (Clean-Rebuild, SHA256 `spike/src/wasm/numtype_core.wasm`): `2a54d9fdba55e4e88a9d54cb3b01e111c2717abf13017f778b90accd5cff87e4` (seit S5/topk). Threads-Artefakt bewusst ohne Pin — test:threaded beweist Bit-Identität. CI-Gate `check:freeze`; die Byte-Identität ist cross-host (macOS-arm64 = linux-x64).
-- **check:diag** Root **226,220 @ 140** · **stress 116,220 @ 82** · **browser 2,142 @ 75** (seit Release-0.3.0-Vorbereitung 2026-09-23: 0a Root Δ+165 / stress Δ+96, dann inspect-Kürzung Root Δ+72 / stress Δ+71) (stress/browser ungated, `pnpm check` compoundet alle drei).
-- **bench:editor** W1–W8 exact-match: `{w1 37.740, w2 39.573, w3 70.715, w4 37.895, w5 43.194, w6 44.388, w7 36.944, w8 44.633}` (0a uniform +96, inspect-Kürzung uniform +71 — je = stress-Δ); Latenz am 2x-Ceiling.
-- **Tests:** test:core 1591 · test:resident 6151+2 · test:threaded 139 · test:browser 4 · test:package 3 + zwei Konsumenten-Typ-Smokes (`consumer` skipLibCheck:true, `consumer-strict` skipLibCheck:false ohne @types/node) · cargo 222+1 · test:example (Registry-Install + 8 asserted Queries).
+- **check:diag** Root **227,405 @ 140** · **stress 116,279 @ 82** · **browser 2,142 @ 75** (seit 0b/typisiertes `toNestedArray` 2026-09-24: Root Δ+1,185, stress Δ+59) (stress/browser ungated, `pnpm check` compoundet alle drei).
+- **bench:editor** W1–W8 exact-match: `{w1 37.800, w2 39.633, w3 70.775, w4 37.955, w5 43.254, w6 44.448, w7 37.004, w8 44.693}` (0b uniform +60 bei stress-Δ +59 — erste Abweichung, eingegrenzt, nicht isoliert; „editor-Δ = stress-Δ" ist Faustregel, kein Gesetz); Latenz am 2x-Ceiling.
+- **Tests:** test:core 1591 · test:resident 6155+2 · test:threaded 139 · test:browser 4 · test:package 3 + zwei Konsumenten-Typ-Smokes (`consumer` skipLibCheck:true, `consumer-strict` skipLibCheck:false ohne @types/node) · cargo 222+1 · test:example (Registry-Install + 8 asserted Queries).
 - Alle Werte am 2026-09-23 im frischen Worktree reproduziert (Toolchain: node 24.16, pnpm 11.6, tsc 7.0.2, rustc 1.95.0, nightly-2026-07-09).
 
 ## Mess-Regeln (tragend)
@@ -117,7 +117,7 @@ Substantielle Scheiben enden mit: Ergebnisse im Projekt (Ergebnis-Doc bzw. Log-A
 - **Strukturfragen zuerst über den Graph** (`graph-a-lama` outline/def/usages/callers).
 - **Abweichung von einer Hausregel → VOR der Implementierung dem Owner vorlegen** („disclosed + confirmed").
 - **Hintergrund-Agenten fassen den Haupt-Working-Tree nie an**; jeder MUTIERENDE Verifier bekommt einen eigenen Worktree (KB `parallele-mutierende-verifier-worktree-patch`: `git diff > slice.patch` außerhalb des Repos, `git apply` je Worktree, node_modules symlinken). Vor jedem Mutanten `git diff -- <quellpfad>` prüfen; unerklärte Diskrepanzen zwischen identischen Läufen = Kontaminationsverdacht.
-- **Covenant:** COVENANT.md (v6) ist der stehende Produktvertrag. `graph-a-lama query lint` läuft im Gate-Block mit. Spec-Änderungen nur mit Owner-Bestätigung + Version-Bump + Changelog.
+- **Covenant:** COVENANT.md (v7) ist der stehende Produktvertrag. `graph-a-lama query lint` läuft im Gate-Block mit. Spec-Änderungen nur mit Owner-Bestätigung + Version-Bump + Changelog.
 
 ### Eskalationsleiter — nie vorsichtshalber den vollen Katalog fahren
 

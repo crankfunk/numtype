@@ -1339,3 +1339,24 @@ Beispielcode läuft grün (Drop-in-Kompatibilität 0.2 → 0.3), dann Tag `v0.3.
 der Tarball blieb ≈5 Minuten 404, obwohl die Metadaten 0.3.0 schon zeigten (mit Query-Parameter
 sofort 200). Nach einem Publish die Tarball-URL erst abfragen, wenn die Metadaten die Version
 zeigen, oder mit Cache-Bust.
+
+## 0b — typisiertes `toNestedArray` (2026-09-24, Stufe 3b)
+
+`toNestedArray()` auf `NDArray`/`WNDArray` liefert einen am Rang berechneten Typ statt
+`unknown` (docs/typed-nested-array-spec.md v2 / -ergebnisse.md). **Verlauf:** eine
+Wegwerf-Probe VOR der Spec entschied zwei Designfragen (die View kann den Typ wegen TS2636
+nicht tragen; der Methoden-Hover löst auf); Baustein 0 fand trotzdem einen Blocker, den die
+Probe nicht abgedeckt hatte — die rekursive Zerlegung über `S` liefert für Unions gleichen
+Rangs `number[][] | number[][]` (eigene Alias-Metadaten je Zweig, keine Deduplizierung). Fix:
+Rang-Akkumulator über `S["length"]` (eine Instanziierung pro Rang, zugleich das tail-rekursive
+Muster der Hausregel); Preis: Rang-Grenze 999 statt >1024. Verify A+B+C: A fand einen
+fehlenden zugesagten Pin (geschlossen — die erste Fassung war mit `?.` selbst vakuös), B
+5/5 Mutanten gefangen, C eine Wortlaut-Spannung in M3 → **COVENANT v7** (rekursive,
+exportierte Aliase in Rückgabe-Position konform). check:diag 227,405 (Δ+1,185 gegen ≤ +4,000),
+stress Δ+59, bench:editor uniform +60 — die erste Abweichung zwischen beiden, eingegrenzt auf
+die verschiedene Korpus-Schließung, nicht isoliert. Unveröffentlicht: nach der SemVer-Policy
+ein Minor (die Verengung von `unknown` kann Konsumenten-Casts brechen) → gebündelt mit 0.4.0.
+**Lehren:** (1) eine Vorab-Probe entscheidet nur die Fragen, die sie stellt — die Union-Kante
+stand in der Spec als Behauptung („ergibt korrekt `number[][]`"), nicht als Probe-Ergebnis;
+(2) Typ-Pins über Indexzugriffe sind leicht vakuös (`?.` fügt `undefined` unabhängig vom
+geprüften Flag hinzu) — Gegenmutante gehört dazu.

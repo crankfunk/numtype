@@ -1,5 +1,5 @@
 # Covenant — NumType
-<!-- covenant:version 6 -->
+<!-- covenant:version 7 -->
 
 ## Invarianten
 
@@ -83,6 +83,19 @@
   duplizierter Validierungslogik, gilt zusätzlich: die Runtime-Message-Stämme sind ZWISCHEN
   den Flächen wortgleich, per String-Gleichheitstest abgesichert (Präzedenzfall S3 —
   `NDArray` gegen `WNDArray`).
+  · **Präzisierung v7 — rekursive Aliase (Owner-entschieden 2026-09-24):** die v6-Präzisierung zu
+  Methoden-Rückgabetypen (oben) zielt auf Aliase, die die Quick Info auflösen KÖNNTE und deren Name die eigentliche
+  Typstruktur verdeckt (Präzedenzfall S3, `StackResultOf<…>`). Ein Alias ist davon
+  ausgenommen und konform, wenn er (a) **genuin rekursiv** ist — seine Definition referenziert
+  sich selbst, eine endliche Expansion existiert also nicht, der Name IST die ausgeschriebene
+  Form — und (b) **aus dem Paket-Einstiegspunkt exportiert** ist, sodass Konsumenten ihn
+  nachschlagen und benennen können. Nicht ausgenommen sind Aliase, die einen rekursiven Typ
+  nur UMHÜLLEN (ein nicht-rekursiver Wrapper um einen rekursiven Kern muss weiterhin auflösen)
+  sowie generische Aliase, deren Instanziierung für konkrete Typargumente auflösbar wäre. Die
+  LSP-Mess-Pflicht bleibt: die Messung belegt, dass für konkrete Typargumente GENAU dieser
+  rekursive Name erscheint und sonst aufgelöste Typen. (Präzedenzfall 0b: `NestedValue =
+  number | NestedValue[]` als Rückgabetyp von `toNestedArray()` bei statisch unbestimmtem Rang;
+  bei bekanntem Rang hovert dieselbe Methode aufgelöst, z. B. `number[][]`.)
   Anker: `sym:Guard`, `sym:ShowShape`
 - **M4** · Frozen Baseline: v1-Kerne/-Einstiegspunkte bleiben byte-unberührt; der bindende
   Freeze-Beweis ist der Artefakt-Hash aus einem Clean-Rebuild; abi.rs/matmul_blocked.rs/shape.rs
@@ -141,6 +154,17 @@
 - Keine transzendenten Ops ohne eigene Determinismus-Entscheidung (brechen Bit-Parität).
 
 ## Änderungslog
+- v7 (2026-09-24) · **M3: rekursive Aliase in Rückgabe-Position präzisiert.** Anlass:
+  `covenant-verify`-Befund (Baustein C) der Scheibe 0b (typisiertes `toNestedArray`): bei
+  statisch unbestimmtem Rang hovert der Rückgabetyp als `NestedValue` — wörtlich ein
+  „nicht aufgelöster Alias in Rückgabe-Position" nach v6, obwohl ein rekursiver Typ
+  grundsätzlich keine endliche Auflösung hat. Die v6-Klausel entstand an S3, wo ein
+  AUFLÖSBARER Alias die Struktur verdeckte; diesen Unterschied kannte der Wortlaut nicht.
+  Owner-Entscheidung 2026-09-24: Wortlaut präzisieren (Option A) statt den Rückgabetyp auf
+  `unknown` zurückzunehmen (Option B, hätte die Owner-Entscheidung „`NestedValue`" der
+  0b-Spec revidiert). Eng gefasst (rekursiv UND exportiert; Wrapper und auflösbare generische
+  Aliase bleiben Verstöße; LSP-Messung bleibt Pflicht) — die Norm-Absicht von v6 ist
+  unverändert, die S3-Einstufung bleibt gültig.
 - v6 (2026-07-25) · **Sammel-Präzisierung: zwölf über die Kampagnen W1–W5 und S0–S5
   aufgelaufene Auslegungsfragen in einem Zug geschlossen.** Alle stammen aus
   `covenant-verify`- bzw. Baustein-0-Befunden und waren in FOLLOWUPS getrackt; keine davon war

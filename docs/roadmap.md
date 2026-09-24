@@ -388,7 +388,7 @@ steht bewusst am Ende: erst ein Produkt, das die ersten zehn Minuten eines NumPy
 | Phase | Inhalt | Stufe |
 |---|---|---|
 | **0a** Release 0.3.0 „Parity + Polish" — **UMGESETZT + VERIFIZIERT 2026-09-23** (Verifier R: MERGE, 4/4 Mutanten gefangen; covenant-verify: keine Befunde); **VERÖFFENTLICHT 2026-09-24** (npm 0.3.0, Tag `v0.3.0`) | S0–S5 veröffentlichen; `WNDArray` als Typ exportieren; keine `node:`-Typimporte in der Haupt-`.d.ts`; `toJSON`/`inspect`; totes v1-`backend.ts` aus dem Paket; README-Korrekturen. Spec: docs/release-0.3.0-spec.md | 3a |
-| **0b** Typisiertes `toNestedArray` | `NestedArray<S>` statt `unknown` auf den konkreten Klassen — kehrt die gepinnte D-V2.2-Entscheidung um, neue Typ-Maschinerie auf kovarianter Fläche (TS2636-Risiko) | 3b |
+| **0b** Typisiertes `toNestedArray` — **ERLEDIGT 2026-09-24** (dreifach verifiziert + Baustein 0; COVENANT v7; wird mit 0.4.0 veröffentlicht) | `NestedArray<S>` statt `unknown` auf den konkreten Klassen — kehrt die gepinnte D-V2.2-Entscheidung um, neue Typ-Maschinerie auf kovarianter Fläche (TS2636-Risiko) | 3b |
 | **2** Op-Umfang „die ersten zehn Minuten" (0.4) | `concat`/`vstack` mit Achse; `max`/`min`/`argmin`; `arange`/`linspace`/`eye`; `reshape(-1)`; `squeeze`/`expand_dims`, `abs`/`pow`. Vergleiche/`where`/Masken erst nach der dtype-Entscheidung | je Op 3a, neue Typ-Folds/Kernel 3b |
 | **3** API-Flächen-Skala + Strukturumbau | Die offene Hälfte der USP-Risiko-Definition messen (FOLLOWUPS „API-Flächen-Skala"); `spike/` → `src/`, `resident.ts` nach Op-Gruppen teilen, Prozess-Prosa aus ausgeliefertem Code | 3b |
 | **1** Verbreitung | Show HN, r/typescript, TS-Community — mit Playground-Link; Erfolgskriterium vorab festlegen | — |
