@@ -1,7 +1,15 @@
 # dtype-Design — bindende Spec (Stufe 3b)
 
-**Version:** v1 (2026-09-24) · **Status:** Owner-Richtung abgenommen 2026-09-24 (E1–E7 „wie
-empfohlen") → Baustein 0 steht aus
+**Version:** v2 (2026-09-24) · **Status:** Owner-Richtung abgenommen (E1–E7); Baustein 0
+gelaufen (1 Blocker, 1 Major, eingearbeitet) → **zwei Owner-Entscheidungen offen (O1, O2)**, danach
+Prototyp
+
+**Änderungslog v1 → v2 (Baustein 0, Addendum am Ende):** `IsUnion`-Gate in `Promote` (Blocker
+F4); Sperr-Mechanismus für nicht unterstützte Kombinationen als offene Owner-Frage O2 (Major F5);
+`matmul`/`dot` über int32 als offene Owner-Frage O1 (abgeleitete Entscheidung, weicht von NumPy
+ab); Varianz von `D` als Prototyp-Probe; M2-Anker-Entwurf; Messplan um vier Fälle ergänzt;
+Fakten korrigiert (14 statt 15 Referenzfunktionen; NEP 50 ist nicht wertabhängig im
+Ergebnis-dtype).
 **Stufe:** 3b — neue Typ-Maschinerie-Klasse (Promotion), Mess-/Forschungsanteil, zwei
 Covenant-Entwürfe (M1-Erweiterung, M3 v8).
 **Berührte Covenant-Invarianten:** **M1** (Bit-Identität — muss für neue dtypes erweitert werden),
@@ -29,7 +37,8 @@ den Hover im ganzen Repo ändern, bevor M3 v8 gilt.
 ## Fakten aus der Bestandsaufnahme (2026-09-24, am Code belegt)
 
 - **Oberfläche:** 67 öffentliche Signaturen (NDArray 27, WNDArray 26, WasmBackend 6,
-  ThreadedBackend 7, `threadedMatmul` 1). 15 Referenzfunktionen in `runtime.ts`, alle `Float64Array`.
+  ThreadedBackend 7, `threadedMatmul` 1). 14 der 25 exportierten Funktionen in `runtime.ts` tragen `Float64Array` (die übrigen 11 sind
+  Shape-/Index-Helfer).
   28 `nt_*`-Einstiege, davon 26 f64-Datenkernel.
 - **Orthogonalität:** rund 30 exportierte Shape-Typen (`Broadcast`, `MatMul`, `ReduceAxis`,
   `SliceShape`, `Guard`, `OkShape`, `NestedArray`, …) referenzieren keinen dtype — die
@@ -47,7 +56,9 @@ den Hover im ganzen Repo ändern, bevor M3 v8 gilt.
   `basics.types`):** Promotion über Arten `bool < integral < inexact`; Ganzzahl-Überlauf ist
   modular ohne Fehler; `mean` von Ganzzahlen → float64; `sum` von Ganzzahlen → int64 (nicht
   abbildbar, int64 fehlt im Zielsatz); `/` ergibt immer Gleitkomma; `bool - bool` ist ein Fehler.
-  Skalare sind „weak" und werden WERTABHÄNGIG zur Laufzeit behandelt — mit M2 unvereinbar.
+  Skalare sind „weak": der Ergebnis-dtype hängt NIE vom Wert ab (NEP 50: „At no time is the value
+  used to decide the result of this promotion"), nur die Konvertierbarkeit wird zur Laufzeit geprüft
+  und kann werfen — genau das Modell von D6, also M2-verträglich.
 
 ## Owner-Entscheidungen (2026-09-24)
 
@@ -93,6 +104,14 @@ zurück. Alle vier sind ECMAScript-Standard (M5, Z1 unberührt).
 „—" = Compile-Fehler am Argument mit Botschaft (E5: `astype` verlangen) und identischer
 Laufzeit-Botschaft (M3-Message-Parität). int32 ⊕ float32 → float64 folgt NEP 50.
 
+**Union-Gate (v2, Baustein-0-Blocker F4):** `Promote<A, B>` prüft ZUERST `IsUnion<A>` und
+`IsUnion<B>` (Arbeitsregel 3, Präzedenz `StackFold`/W4). Ist einer eine Union (z. B.
+`NDArray<S, DType>` als „beliebiger dtype"), degradiert das ganze Ergebnis zu `DType` — kein
+Anspruch, keine Ablehnung; die Laufzeit prüft dann und wirft bei bool. Ohne das Gate kollabiert
+`Promote<"bool" | "int32", "int32">` naked zu `"int32"`: die bool-Ablehnung verschwindet still
+(Baustein 0 hat `NDArray<[3], "bool" | "int32">.add(int32)` fehlerfrei kompilieren sehen). Dasselbe
+Gate gilt für jede dtype-Funktion (Vergleiche, `where`, Reduktions-dtype).
+
 **D5 — Ergebnis-dtype je Op.**
 
 | Op | Regel |
@@ -100,7 +119,7 @@ Laufzeit-Botschaft (M3-Message-Parität). int32 ⊕ float32 → float64 folgt NE
 | `add`/`sub`/`mul` (Array ⊕ Array) | `Promote<A, B>`; int32 ⊕ int32 wickelt modular (Zweierkomplement) |
 | `div` | Gleitkomma immer: float32/float32 → float32, sonst float64 (int32/int32 → float64) |
 | Skalar-Überladungen | float32/float64 behalten D (Skalar per `fround` bei float32); int32: `add`/`sub`/`mul` behalten int32 (E4), `div` → float64 |
-| `matmul`/`dot` | wie Promotion, aber int32 → **float64** (Reduktion, konsequent zu E3) |
+| `matmul`/`dot` | wie Promotion; int32 ⊕ int32: **offen, O1** |
 | `sum`/`mean` | float32 → float32, float64 → float64, int32/bool → float64 (E3) |
 | `norm`/`cosineSimilarity` | Rückgabe `number` wie heute (berechnet in der Präzision des Eingangs, float32 per `fround`) |
 | `sqrt` | float32 → float32, float64 → float64, int32 → float64, bool → Compile-Fehler |
@@ -122,10 +141,16 @@ Ergebnis-dtype — statischer Typ und Laufzeit stimmen immer überein (M2).
 `dtype: "bool"`. Wird verbraucht von `where`, `any`, `all`, `sum`/`mean` (→ float64, zählt bzw.
 Anteil) sowie den dtype-neutralen Ops aus D5. Alles andere → Compile-Fehler „use astype".
 
+**D7a — M2-Anker (Entwurf, Baustein-0-Befund F7).** M2 ist seit v6 auf die
+Shape-Guard-Maschinerie gescopt (Anker `dim.ts`, `literal-arithmetic.ts`, `Guard`, `OkShape`); die
+dtype-Ablehnungen nutzen keine davon. Vorschlag für die erste Umsetzungs-Scheibe: M2 um die
+dtype-Maschinerie (`Promote` und die Sperren aus O2) erweitern, Wortlaut dann zur Owner-Bestätigung.
+
 **D8 — M1-Erweiterung (Entwurf, gilt ab der ersten Kernel-Scheibe je dtype).**
 - **float32:** Die TS-Referenz rechnet in f64 und rundet nach JEDER elementaren Operation mit
   `Math.fround`. Für `+ − × ÷ √` ergibt das beweisbar das korrekt gerundete f32-Ergebnis (doppelte
-  Rundung ist harmlos, weil 53 ≥ 2·24 + 2; Figueroa 1995 — Baustein 0 prüft die Quelle). Reduktionen
+  Rundung ist harmlos: `+ − √` brauchen q ≥ 2p + 2 = 50, `× ÷` nur q ≥ 2p = 48, und f64 hat q = 53;
+  Figueroa 1995, von Baustein 0 über Sekundärliteratur bestätigt). Reduktionen
   akkumulieren aufsteigend in f32 mit `fround` pro Schritt. Kernel dürfen dieselbe Reihenfolge nicht
   verlassen (bestehendes Bit-Identity-Law gilt unverändert).
 - **int32:** Zweierkomplement-Wrap überall: TS `(a + b) | 0`, `(a - b) | 0`, `Math.imul(a, b)`; Rust
@@ -147,8 +172,11 @@ mit dieser Scheibe.
 **D11 — Prototyp auf `proto/dtype` (nur `NDArray`, nur TS-Referenz).** Real gebaut, mit Tests:
 `DType`, `DataOf`, `Promote` (Typ + Laufzeittabelle aus einer Quelle), `fromArray`/`zeros` mit
 `dtype`, `astype`, `add` (Array ⊕ Array und Skalar inkl. D6), `sum` (mit Achse, E3), `gt` (erster
-Vergleich), `toArray`/`item`/`toNestedArray` dtype-korrekt. Alle übrigen Ops: für D ≠ float64 per
-`this`-Typ gesperrt (Compile-Fehler) — so bleibt der Prototyp in sich korrekt (M2).
+Vergleich), `toArray`/`item`/`toNestedArray` dtype-korrekt. Alle übrigen Ops: für D ≠ float64
+gesperrt nach dem Mechanismus aus **O2** — so bleibt der Prototyp in sich korrekt (M2).
+**Varianz-Probe (Baustein-0-Befund F6):** die Varianz von `NDArray<S, D>` in `D` wird gemessen und
+per Pin festgelegt (Präzedenz: `S` wurde einmal versehentlich geöffnet, D-V2.3, und bewusst per
+`__variance`-Marker wieder geschlossen) — nicht emergent lassen.
 
 ## Messplan (Prototyp) — vorregistriert
 
@@ -164,6 +192,14 @@ Vergleich), `toArray`/`item`/`toNestedArray` dtype-korrekt. Alle übrigen Ops: f
 - LSP-Hover (Pflicht, Regel 13): Klasse, `fromArray` mit/ohne dtype, `add` gemischt
   (`float32 ⊕ int32` → `NDArray<…, "float64">`), `sum` über int32, `gt`, Fehlerposition und
   -botschaft bei `bool ⊕ …` und bei `2.5` auf int32.
+- **Ergänzt v2 (Baustein 0):** (a) Union-dtype als Operand von `add`/`gt` (`NDArray<S, DType>`,
+  `"bool" | "int32"`) — Pin, dass das Ergebnis `DType` ist und nichts still akzeptiert wird;
+  (b) Diagnose-Inhalt und -Position der Sperre aus O2 per LSP, nicht nur Existenz; (c) wie der
+  Compile-Fehler bei `Uint8Array` ohne `dtype` aussieht (TS2769 vs. eigene Botschaft);
+  (d) Determinismus-Pins: `astype("bool")` mit NaN → true, float32-Reduktion in aufsteigender
+  Reihenfolge (Präzedenz `sum/n` bei `mean`); (e) Baseline 227,405 @ 140 im frischen Worktree
+  reproduzieren, bevor ein Δ berechnet wird; (f) die Zahl 67 öffentlicher Signaturen für die
+  Hochrechnung per Compiler-API zählen, nicht per grep.
 - Bit-Identität der Prototyp-Laufzeit: float32-`add`/`sum` gegen eine unabhängige Referenz
   (`Math.fround`-Kette über `Float32Array`-Zuweisung), int32-Wrap an den Rändern ±2^31.
 
@@ -179,3 +215,31 @@ dt1 Kern: Parameter, Speicher, Erzeugung, `astype`, Auslesen, M3 v8 · dt2 Eleme
 `any`/`all` · dt5 übrige Ops (`sqrt`, `argmax`, `topk` mit int32-Indizes, `stack`) · dt6+ `WNDArray` und
 Kernel pro dtype (float32 zuerst, dann int32, bool), jeweils mit M1-Erweiterung. Release, sobald
 dt1–dt5 auf `NDArray` stehen.
+
+## Offene Owner-Entscheidungen (v2)
+
+- **O1 — `matmul`/`dot` über int32 ⊕ int32.** (a) float64, konsequent zur Regel E3 („Reduktionen
+  über int32 weiten, kein stiller Überlauf") — weicht von NumPy ab, dort bleibt int32 mit Wrap.
+  (b) int32 mit Wrap wie NumPy — dann gilt E3 nur für `sum`/`mean`.
+- **O2 — Sperr-Mechanismus für nicht unterstützte dtype-Kombinationen** (bool-Arithmetik dauerhaft,
+  noch nicht umgesetzte Ops übergangsweise). (a) Guard-Muster wie bei den Shape-Fehlern: eigene
+  Botschaft am Argument, wortgleich zur Laufzeit (M3 hält unverändert). (b) `this`-Parameter —
+  billiger, aber die Meldung ist opak (`data.filter(...)[Symbol.toStringTag]` …) und bräuchte eine
+  M3-Ausnahme für TS2684.
+
+## Adversariale Spec-Verifikation (Addendum, Baustein 0, 2026-09-24)
+
+`brainroute:deep`, eigener Worktree, echter tsc 7.0.2, eigene LSP-Probe, NumPy-/IEEE-Quellen.
+**Blocker F4** (Union-dtype hebelt die bool-Ablehnung aus, reproduziert) → Union-Gate in D4.
+**Major F5** (`this`-Sperre wirkt, Meldung opak, TS2684 nicht in der M3-Ausnahmeliste; bisher
+keine einzige `this`-Parameter-Nutzung im Code) → O2. **Minor:** F1 (14 statt 15), F2 (NEP 50
+nicht wertabhängig), F3 (Figueroa-Bedingungen je Operation), F6 (Varianz in `D`), F7 (M2-Anker),
+F10–F12 (Determinismus-Pins, Uint8Array-Diagnose, Baseline). **Hält:** Typed Arrays in TS 7
+strukturell unterscheidbar (auch in der generischen Buffer-Form); `IsDotFormStep`
+(literal-arithmetic.ts:814) klassifiziert `2.0`/`2.` korrekt als ganzzahlig und `2.5`/`1.5e-3`
+als nicht-ganzzahlig, `NaN`/`Infinity` bleiben `number`; dtype aus `Promote` in
+Typargument-Position hovert aufgelöst (Mock); zweiter Typparameter hovert immer mit;
+JS `| 0`/`Math.imul` ≡ Rust `wrapping_*`; Rust-Debug-Panik durch `wrapping_*` umgangen.
+**Abgeleitete Entscheidungen:** `matmul`/`dot` int32 → O1 (braucht Owner); `Uint8Array` ohne
+dtype, bool-Ausschluss bei Vergleichen, `stack` ohne Promotion, M3-v8-Aufschub — konsistent,
+keine Rückfrage nötig.
