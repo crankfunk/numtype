@@ -106,3 +106,21 @@ Union-Operand → `NDArray<[3], DType>` — alle aufgelöst, kein Alias sichtbar
    TS2769-Meldung als benannte, im Quelltext dokumentierte M3-Ausnahme übernommen (Präzedenz W4/W5).
 3. **dtype-generische Funktionen:** als bekannte Grenze dokumentiert (README-Hinweis beim Release),
    wieder aufgreifen erst auf Nachfrage von Nutzern.
+
+## Lösungsversuch Skalar-Maskierung (2026-09-25): NO-GO
+
+Zeitlich begrenzter Versuch nach Owner-Entscheidung 2. Kandidat: `add` als EINE Signatur mit
+`IsUnion<Other>`-Gate vor der Unterscheidung Skalar/Array (Code:
+`docs/assets/dtype/add-single-signature-candidate.diff`, nur `ndarray.ts`, gegen 059d852).
+**Korrektheit bestanden:** eigene Meldungen am Argument, wortgleich zur Laufzeit, für
+`boolArr.add(1)`, `i32.add(2.5)`, `i32.add(boolArr)` und Shape-Fehler; alle Union-Argumente
+(Instanz-Unions, `number | NDArray`, `2 | 2.5`) abgelehnt statt falsch-eng; alle guten Pfade mit
+unverändertem Hover; alle bestehenden Tests unverändert grün (core 1,624, resident 6,155+2).
+**Kosten durchgefallen:** check:diag 247,136 → 255,631 (**+8,495**, nach einer Cache-Teilung, die nur
+646 zurückholte; naiv +9,141) — mehr als die gesamte bisherige dtype-Maschinerie. Ursache: `add` ist
+die heißeste Aufrufstelle des Korpus (u. a. ~30-fach verkettet in `limits.test-d.ts`); die
+Ein-Signatur-Form wertet an JEDER Aufrufstelle echte bedingte Typen aus, wo die Überladungsauswahl
+praktisch kostenlos ist. stress Δ−7.
+**Folge (Owner-Rückfall, vorab entschieden):** die generische TS2769-Meldung bei Skalar-Fehlbenutzung
+wird eine **benannte M3-Ausnahme**, im Quelltext an den Überladungen dokumentiert (Präzedenz W4/W5),
+und in den M3-v8-Entwurf aufgenommen. Die Laufzeit wirft weiterhin die eigene Meldung.

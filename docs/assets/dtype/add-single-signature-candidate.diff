@@ -1,0 +1,173 @@
+diff --git a/spike/src/ndarray.ts b/spike/src/ndarray.ts
+index c4931b6..c40b012 100644
+--- a/spike/src/ndarray.ts
++++ b/spike/src/ndarray.ts
+@@ -187,6 +187,80 @@ type ScalarOperand<D extends DType, N extends number> = D extends "bool"
+     ? Guard<IsProvablyNonIntegerScalar<N> extends true ? ShapeError<`add: int32 scalar ${N} is not an integer — int32 arithmetic requires an integer operand`> : true, N>
+     : N;
+ 
++/**
++ * Owner-mandated time-boxed attempt (docs/dtype-design-ergebnisse.md, "Owner-
++ * Entscheidungen nach der Verify-Runde", point 2): merges `add`'s two
++ * overloads (scalar `ScalarOperand`, array `Guard<Broadcast/Promote, ...>`)
++ * into the argument type of ONE signature. The two-overload design can only
++ * declare ONE candidate LAST, so it can only win the authored diagnostic for
++ * ONE failure mode: the array-Guard overload is declared last (Arbeitsregel
++ * 2: "der ZULETZT deklarierte Kandidat trägt die Fehlerdiagnose"), so an
++ * array shape/dtype mismatch gets its authored `ShapeError`, but scalar
++ * misuse (`boolArr.add(1)`, `i32.add(2.5)`) fails BOTH overloads and TS
++ * reports the LAST one's generic "not assignable to NDArray<Shape,DType>"
++ * (TS2769) instead of the scalar overload's own authored message — there is
++ * no declaration order that lets both failure modes win. A single merged
++ * signature has no "last candidate" to lose to: whichever branch below
++ * rejects, it is the ONLY signature, so its authored `ShapeError` is what TS
++ * reports.
++ *
++ * `Other`-level `IsUnion` gate FIRST (Arbeitsregel 3, `StackFold`/W4
++ * precedent) — the actual fix for the M2 hole a NAIVE merge opens (Baustein
++ * B finding): without this gate, a top-level union `Other` — e.g.
++ * `NDArray<[2,3]> | NDArray<[7,3]>`, a union of TWO WHOLE INSTANCES, as
++ * opposed to a shape/dtype union living inside ONE instance's `S`/`D`, which
++ * `Broadcast`/`Guard`/`Promote` already handle correctly via their OWN
++ * internal gates and is untouched by this one — would make the `Other
++ * extends number ? ... : Other extends NDArray<infer B, infer Dd> ? ...`
++ * conditional below DISTRIBUTE over the union: each member computes its own
++ * check/result independently, and the intersection `Other & AddOtherCheck<...>`
++ * then structurally accepts the whole union argument as long as SOME member's
++ * branch is permissive — silently keeping a confident, narrow, WRONG result
++ * type for the invalid member (exactly Baustein B's reproduced M2 hole).
++ * Gated: ANY top-level union `Other` is rejected outright — the SAME policy
++ * already documented and pinned for a union spanning both pre-merge overloads
++ * (`scalarBase.add(scalarOrArray)`, `number | NDArray<[3]>`,
++ * ndarray.test-d.ts, `NDArray.backend(kind)` precedent) and for a union of
++ * whole instances (`a.add(instanceUnionArg)`, the M2 control pin) — now
++ * reached through ONE mechanism (an authored `Guard`/`ShapeError`) instead of
++ * two accidental ones (overload-resolution failure, generic-inference
++ * failure), and now with an authored message instead of a generic TS2769. */
++type AddUnionMessage =
++  "add: a union argument (spanning number and NDArray, or spanning multiple NDArray shapes/dtypes as separate instances) is rejected as a whole — narrow with typeof/instanceof first, then call add() on each branch";
++
++/** Cost optimization over a naive AddOtherCheck/AddResult split (both would
++ * independently re-run the SAME `Other extends number ? ... : Other extends
++ * NDArray<infer B, infer Dd> ? ...` dispatch and the SAME `Broadcast`/
++ * `Promote` computation once for the parameter check and once again for the
++ * return type — TS 7's instantiation cache is keyed by (alias, type
++ * arguments), so calling this ONE alias with IDENTICAL arguments from both
++ * consumers below lets the cache serve the second call instead of
++ * recomputing): one shared conditional computes BOTH the check type and the
++ * result type together, keyed by the same three-way `Other` dispatch
++ * `AddOtherCheck`'s own doc comment above describes in full. */
++type AddCore<D extends DType, S extends Shape, Other> = IsUnion<Other> extends true
++  ? { readonly check: Guard<ShapeError<AddUnionMessage>, never>; readonly result: NDArray<Shape, DType> }
++  : Other extends number
++    ? { readonly check: ScalarOperand<D, Other>; readonly result: NDArray<S, D> }
++    : Other extends NDArray<infer B extends Shape, infer Dd extends DType>
++      ? {
++          readonly check: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>;
++          readonly result: NDArray<OkShape<Broadcast<S, B>>, OkDType<Promote<D, Dd>>>;
++        }
++      : { readonly check: Other; readonly result: NDArray<any, any> };
++
++export type AddOtherCheck<D extends DType, S extends Shape, Other> = AddCore<D, S, Other>["check"];
++
++/** Return-type counterpart of `AddOtherCheck` above, projected from the SAME
++ * `AddCore` instantiation (see its doc comment) instead of re-running the
++ * dispatch. The union branch degrades to the widest honest claim
++ * (`NDArray<Shape, DType>`, mirroring `Promote`'s own `DType`-degrade for a
++ * union dtype operand) rather than `never`: the call itself is already
++ * rejected by `AddOtherCheck` above, so this branch is only ever observed by
++ * hover/IDE tooling on the erroring call, and a wide type is more honest
++ * there than an empty one. */
++export type AddResult<D extends DType, S extends Shape, Other> = AddCore<D, S, Other>["result"];
++
+ /** E3, Messplan stage 5: `sum`'s result dtype — float32 stays float32
+  * (fround-per-step accumulation, D8); float64/int32/bool all widen to
+  * float64 (no silent overflow accumulating int32/bool counts). */
+@@ -818,54 +892,33 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
+ 
+   /** Broadcasting elementwise add.
+    *
+-   * Scalar overload (Op-Scheibe W2, docs/op-w2-scalar-mean-spec.md, D1/D2):
+-   * `x.add(s)` for a plain `number` `s` is shape-PRESERVING (NumPy-scalar
+-   * semantics, not a `[1]`-broadcast) — `NDArray<S>` in, `NDArray<S>` out,
+-   * unchanged even at rank 0 (`[]` stays `[]`; the old `x.add(fromArray([1],
+-   * [s]))` workaround would have turned `[]` into `[1]`, which is
+-   * NumPy-false). No guard on the scalar: every finite/non-finite `number`
+-   * is valid, IEEE propagation only (NaN/±Infinity), same as the existing
+-   * broadcast path. A UNION argument spanning BOTH overloads (`x: number |
+-   * NDArray<B>`) is rejected by TS as a whole (TS2769) even when every
+-   * member would individually be valid — an inherent property of real
+-   * overloads, the exact precedent already living on `NDArray.backend(kind)`
+-   * above (see its doc comment): narrow with `typeof x === "number"` first
+-   * if a caller genuinely needs to accept both forms through one variable.
+-   *
+-   * Declaration ORDER of the two overloads is LOAD-BEARING (Verify-B finding
+-   * F1, W2): on a failed overload set TS surfaces the error of the LAST
+-   * candidate, so the generic `Guard`-carrying overload must be declared
+-   * LAST — otherwise a plain broadcast mismatch reports the scalar decoy
+-   * ("not assignable to type 'number'") instead of the shape-naming
+-   * `__shapeError` (M3). Resolution is unaffected: a `number` argument
+-   * matches the scalar overload FIRST. Pinned by the diagnostic-quality
+-   * test in scalar-mean.test.ts (asserts the broadcast stem in real tsc
+-   * output — an `@ts-expect-error` alone cannot see message content). */
+-  /** Messplan stage 3 (D4/D5): the array overload's argument check now
+-   * combines TWO failure channels into ONE `Guard` (message-table order,
+-   * same "first offending property wins" discipline every other call site
+-   * here follows): a shape mismatch (`Broadcast<S, B>`) is checked FIRST —
+-   * unchanged from the pre-dtype behavior — and only once shapes are
+-   * compatible does a dtype mismatch (`Promote<D, Dd>`, which also rejects
+-   * bool, D4/D7) get to reject. Result dtype is `Promote<D, Dd>` (E3/D5:
+-   * float64+float64→float64, float32+int32→float64, int32+int32→int32, …). */
+-  /** Messplan stage 4 (D6/E4): the scalar overload now carries D6's int32
+-   * rule (`ScalarOperand`, above) — float64/float32 unconditionally, int32
+-   * only for a scalar the checker can PROVE integral by literal form,
+-   * bool rejected unconditionally (D7). Result keeps `D` (E4: "Skalare auf
+-   * int32 bleiben int32"). */
+-  add<const N extends number>(s: ScalarOperand<D, N>): NDArray<S, D>;
+-  add<B extends Shape, Dd extends DType>(
+-    other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
+-  ): NDArray<OkShape<Broadcast<S, B>>, OkDType<Promote<D, Dd>>>;
+-  add<B extends Shape, Dd extends DType>(
+-    other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
+-  ): NDArray<any, any> {
++   * Time-boxed attempt, house rule (b) planned-migration edit (spec names
++   * `add` in D11; owner approval: docs/dtype-design-ergebnisse.md "Owner-
++   * Entscheidungen nach der Verify-Runde", point 2): the pre-existing TWO
++   * overloads (scalar `ScalarOperand`, array `Guard<Broadcast/Promote>`) are
++   * MERGED into one signature's argument type, `AddOtherCheck<D, S, Other>`
++   * (declared above, own doc comment has the full mechanism/precedent) — so
++   * scalar misuse (`boolArr.add(1)`, `i32.add(2.5)`) gets its OWN authored
++   * message instead of losing to the array branch's generic TS2769 (the
++   * pre-existing two-overload design's documented limitation, "Skalar-
++   * Fehlbenutzung", docs/dtype-design-ergebnisse.md). Shape-PRESERVING
++   * scalar semantics (NumPy-scalar, not `[1]`-broadcast — `[]` stays `[]`)
++   * and the D6 int32 dot-form rule are UNCHANGED, just reached through
++   * `AddOtherCheck`'s `Other extends number` branch now. A UNION argument
++   * spanning number/NDArray or multiple NDArray instances is still rejected
++   * AS A WHOLE (`AddOtherCheck`'s `IsUnion<Other>` gate) — same policy as
++   * before (`NDArray.backend(kind)` precedent), now via an authored message
++   * instead of TS2769. Narrow with `typeof x === "number"` first if a caller
++   * genuinely needs to accept both forms through one variable (pinned,
++   * ndarray.test-d.ts). Pinned by the diagnostic-quality test in
++   * scalar-mean.test.ts (asserts the broadcast stem in real tsc output — an
++   * `@ts-expect-error` alone cannot see message content). */
++  add<const Other extends number | NDArray<any, any>>(other: Other & AddOtherCheck<D, S, Other>): AddResult<D, S, Other> {
+     if (typeof other === "number") {
+       const data = scalarAddTyped(this.dtype, this.data as unknown as DataOfRuntime, other);
+-      return new NDArray<any, any>(this.shape, this.dtype, data);
++      return new NDArray<any, any>(this.shape, this.dtype, data) as AddResult<D, S, Other>;
+     }
+-    const o = other as unknown as NDArray<B, Dd>;
++    const o = other as unknown as NDArray<Shape, DType>;
+     const { shape, data, resultDtype } = addTypedRuntime(
+       this.shape,
+       this.data as unknown as DataOfRuntime,
+@@ -874,7 +927,7 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
+       o.data as unknown as DataOfRuntime,
+       o.dtype,
+     );
+-    return new NDArray<any, any>(shape, resultDtype, data);
++    return new NDArray<any, any>(shape, resultDtype, data) as AddResult<D, S, Other>;
+   }
+ 
+   /** Messplan stage 6 (D5): `gt` — the first comparison. Broadcasting
