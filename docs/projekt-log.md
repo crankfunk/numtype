@@ -1360,3 +1360,20 @@ ein Minor (die Verengung von `unknown` kann Konsumenten-Casts brechen) → gebü
 stand in der Spec als Behauptung („ergibt korrekt `number[][]`"), nicht als Probe-Ergebnis;
 (2) Typ-Pins über Indexzugriffe sind leicht vakuös (`?.` fügt `undefined` unabhängig vom
 geprüften Flag hinzu) — Gegenmutante gehört dazu.
+
+## dtype-Design (2026-09-24/25, Stufe 3b)
+
+Nach der Owner-Wahl „volles dtype" (Option C): Bestandsaufnahme (67 → gezählt 98 öffentliche
+Signaturen, 26 f64-Kernel, Shape-Maschinerie vollständig dtype-unabhängig), sieben
+Owner-Entscheidungen E1–E7 in einfacher Sprache vorgelegt, Baustein 0 (Blocker: Union-dtype
+hebelt die bool-Ablehnung aus → Union-Gate; Major: `this`-Sperren mit unlesbarer Meldung → O2
+Guard-Muster), dann ein Prototyp auf einem nie gemergten Branch mit stufenweiser Messung und
+Verify A+B+C. **Ergebnis:** tragfähig mit Nachbesserungen — Maschinerie +6,980, Laufzeit in 18
+adversarialen Proben fehlerfrei; zwei Defekte für dt1 (`AnyNDArray` = nur float64; unbewachte
+Prüfreihenfolge); drei TS-Grenzen. Ein zeitlich begrenzter Versuch, die Skalar-Meldungen über
+eine einzige Signatur sichtbar zu machen, war korrekt, aber mit +8,495 teurer als die ganze
+Maschinerie → NO-GO, benannte Ausnahme. Nebenbei: die TS-„nur einfügen"-Hausregel auf
+gewöhnliche Ops eingegrenzt (Owner, 2026-09-25) — ihr Ursprung ist ein Rust-Byte-Argument, das
+es in TS nicht gibt. **Lehren:** (1) Überladungen sind an heißen Aufrufstellen fast kostenlos, eine
+bedingte Ein-Signatur-Form dagegen nicht — Diagnose-Qualität kostet dort Budget pro Aufrufstelle;
+(2) die Prototyp-Obergrenze hätte vorab sagen müssen, ob Tests mitzählen.

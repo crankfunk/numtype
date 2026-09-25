@@ -32,8 +32,8 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 
 - **npm:** `numtype@0.3.0` (2026-09-24, „parity and polish"; davor 0.2.0 am 2026-07-21). Registry-Tarball nach dem Publish verifiziert (Integrität, Inhalt), Beispiel läuft unverändert auf 0.3.0. Tags `v0.1.0`/`v0.1.1`/`v0.2.0`/`v0.3.0`, Apache-2.0, Repo public, Rulesets `protect-main` + `protect-release-tags`.
 - **Aktive Roadmap (Owner-entschieden 2026-09-23, docs/roadmap.md „Roadmap ab 2026-09-23"):**
-  0a Release 0.3.0 (ERLEDIGT 2026-09-24) → 0b typisiertes `toNestedArray` (ERLEDIGT 2026-09-24, unveröffentlicht → 0.4.0) → **als Nächstes:** dtype-Design
-  (volles dtype, Option C) → 2 Op-Umfang „die ersten zehn Minuten" → 3 API-Flächen-Skala +
+  0a Release 0.3.0 (ERLEDIGT 2026-09-24) → 0b typisiertes `toNestedArray` (ERLEDIGT 2026-09-24, unveröffentlicht → 0.4.0) → dtype-Design (ERLEDIGT 2026-09-25: Entscheidungen + Prototyp-Messung, docs/dtype-design-ergebnisse.md; Prototyp auf lokalem Branch `proto/dtype`) → **als Nächstes:** dtype-Umsetzung dt1–dt5
+  auf `NDArray` → 2 Op-Umfang „die ersten zehn Minuten" → 3 API-Flächen-Skala +
   Strukturumbau → 1 Verbreitung (bewusst ans Ende gestellt).
 - **Geparkt:** Klassifikation der View-Test-Restmenge (Spec v2.1 + Skripte als WIP committet;
   Selbsttest 12 rot — FOLLOWUPS). Wird erst nach Phase 0/2 wieder aufgenommen, falls überhaupt.

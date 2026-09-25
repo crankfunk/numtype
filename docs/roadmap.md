@@ -405,3 +405,10 @@ Phase 2 einschieben. **Entschieden (Owner, 2026-09-23): ja** — neue Reihenfolg
 **0a → 0b → dtype-Design (3b) → 2 → 3 → 1**. Die dtype-Scheibe liefert API-Form,
 Promotionsregeln, M1-Erweiterungsvorschlag (Covenant) und eine Budget-Messung, bevor Phase 2
 neue Ops auf die Fläche setzt.
+
+**dtype-Design ERLEDIGT (2026-09-25)** — docs/dtype-design-spec.md v2.1 / -ergebnisse.md. Volles
+dtype ist baubar und bezahlbar (Maschinerie +6,980, hochgerechnet ≈ +16,700 ≈ 7 %), Laufzeit
+korrekt; drei TS-Grenzen offengelegt (Skalar-Maskierung → benannte M3-Ausnahme nach NO-GO eines
+Lösungsversuchs; niladische Ops nur zur Laufzeit gesperrt bis zum vollständigen Rollout;
+dtype-generische Funktionen als bekannte Grenze). Nächste Scheiben: dt1 (Kern + M3 v8 + Fix
+`AnyNDArray`) … dt5, dann `WNDArray`/Kernel pro dtype.
