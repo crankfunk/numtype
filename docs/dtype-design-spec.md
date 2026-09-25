@@ -1,8 +1,7 @@
 # dtype-Design — bindende Spec (Stufe 3b)
 
-**Version:** v2 (2026-09-24) · **Status:** Owner-Richtung abgenommen (E1–E7); Baustein 0
-gelaufen (1 Blocker, 1 Major, eingearbeitet) → **zwei Owner-Entscheidungen offen (O1, O2)**, danach
-Prototyp
+**Version:** v2.1 (2026-09-25) · **Status:** Owner-Richtung abgenommen (E1–E7, O1, O2); Baustein 0
+gelaufen (1 Blocker, 1 Major, eingearbeitet) → **implementierungsreif (Prototyp)**
 
 **Änderungslog v1 → v2 (Baustein 0, Addendum am Ende):** `IsUnion`-Gate in `Promote` (Blocker
 F4); Sperr-Mechanismus für nicht unterstützte Kombinationen als offene Owner-Frage O2 (Major F5);
@@ -119,7 +118,7 @@ Gate gilt für jede dtype-Funktion (Vergleiche, `where`, Reduktions-dtype).
 | `add`/`sub`/`mul` (Array ⊕ Array) | `Promote<A, B>`; int32 ⊕ int32 wickelt modular (Zweierkomplement) |
 | `div` | Gleitkomma immer: float32/float32 → float32, sonst float64 (int32/int32 → float64) |
 | Skalar-Überladungen | float32/float64 behalten D (Skalar per `fround` bei float32); int32: `add`/`sub`/`mul` behalten int32 (E4), `div` → float64 |
-| `matmul`/`dot` | wie Promotion; int32 ⊕ int32: **offen, O1** |
+| `matmul`/`dot` | wie Promotion; int32 ⊕ int32 → **float64** (O1: Reduktionen über int32 weiten, konsequent zu E3; weicht bewusst von NumPy ab) |
 | `sum`/`mean` | float32 → float32, float64 → float64, int32/bool → float64 (E3) |
 | `norm`/`cosineSimilarity` | Rückgabe `number` wie heute (berechnet in der Präzision des Eingangs, float32 per `fround`) |
 | `sqrt` | float32 → float32, float64 → float64, int32 → float64, bool → Compile-Fehler |
@@ -173,7 +172,8 @@ mit dieser Scheibe.
 `DType`, `DataOf`, `Promote` (Typ + Laufzeittabelle aus einer Quelle), `fromArray`/`zeros` mit
 `dtype`, `astype`, `add` (Array ⊕ Array und Skalar inkl. D6), `sum` (mit Achse, E3), `gt` (erster
 Vergleich), `toArray`/`item`/`toNestedArray` dtype-korrekt. Alle übrigen Ops: für D ≠ float64
-gesperrt nach dem Mechanismus aus **O2** — so bleibt der Prototyp in sich korrekt (M2).
+gesperrt nach dem Mechanismus aus **O2 (a)**: Guard-Muster mit eigener Botschaft am Argument,
+wortgleich zur Laufzeit — kein `this`-Parameter — so bleibt der Prototyp in sich korrekt (M2).
 **Varianz-Probe (Baustein-0-Befund F6):** die Varianz von `NDArray<S, D>` in `D` wird gemessen und
 per Pin festgelegt (Präzedenz: `S` wurde einmal versehentlich geöffnet, D-V2.3, und bewusst per
 `__variance`-Marker wieder geschlossen) — nicht emergent lassen.
@@ -216,7 +216,7 @@ dt1 Kern: Parameter, Speicher, Erzeugung, `astype`, Auslesen, M3 v8 · dt2 Eleme
 Kernel pro dtype (float32 zuerst, dann int32, bool), jeweils mit M1-Erweiterung. Release, sobald
 dt1–dt5 auf `NDArray` stehen.
 
-## Offene Owner-Entscheidungen (v2)
+## Owner-Entscheidungen O1/O2 — ENTSCHIEDEN 2026-09-25: beide (a)
 
 - **O1 — `matmul`/`dot` über int32 ⊕ int32.** (a) float64, konsequent zur Regel E3 („Reduktionen
   über int32 weiten, kein stiller Überlauf") — weicht von NumPy ab, dort bleibt int32 mit Wrap.
