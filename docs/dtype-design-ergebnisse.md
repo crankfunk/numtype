@@ -96,3 +96,13 @@ Union-Operand → `NDArray<[3], DType>` — alle aufgelöst, kein Alias sichtbar
   v8-Entwurf D10), M3-Meldungsparität (Maskierung als benannte Ausnahme), M1-Tracking, M2-Anker
   (D7a). Lücken in den Entwürfen: D10 und D7a decken die Maskierung, die niladischen Ops und den
   `stack`-Fall nicht ab.
+
+## Owner-Entscheidungen nach der Verify-Runde (2026-09-25)
+
+1. **Gate:** das Design wird an der Maschinerie gemessen (+6,980 ≤ +8,000 — erfüllt); Test- und
+   Pin-Kosten bekommen je Umsetzungs-Scheibe eine eigene, vorregistrierte Grenze, die sie einschließt.
+2. **Skalar-Maskierung:** ein zeitlich begrenzter Lösungsversuch (`IsUnion`-gesicherte
+   Ein-Signatur-Variante, von Baustein B als ungetestet benannt); scheitert er, wird die generische
+   TS2769-Meldung als benannte, im Quelltext dokumentierte M3-Ausnahme übernommen (Präzedenz W4/W5).
+3. **dtype-generische Funktionen:** als bekannte Grenze dokumentiert (README-Hinweis beim Release),
+   wieder aufgreifen erst auf Nachfrage von Nutzern.
