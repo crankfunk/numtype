@@ -1144,3 +1144,337 @@ test("item(): sliced receiver — item reads into the freshly-copied slice buffe
   assert.strictEqual(row.item(2), 6, "sliced row item(2)");
   assert.strictEqual(row.item(-1), 6, "sliced row item(-1)");
 });
+
+// =============================================================================
+// dt1 (docs/dtype-dt1-spec.md): dtype core on `NDArray` — storage, creation,
+// conversion, and the dtype-neutral movement ops. Same no-new-file house
+// convention as W2-W5 above (NDArray-only, no WNDArray/WASM counterpart in
+// this slice — D9: the naive TS reference carries every dtype first, kernels
+// follow per dtype in later slices, M1 v5 kernel-less-reference tracking in
+// FOLLOWUPS). Appended at the end of this file.
+// =============================================================================
+import { type AnyNDArray, type NestedBoolValue, type NestedValue } from "../src/ndarray.ts";
+import { lockedOpMessage, normalizeSliceSpecs, sliceDtyped, transposeDtyped, type DType } from "../src/runtime.ts";
+import { naturalStrides } from "./assert-helpers.ts";
+
+const DTYPES: readonly DType[] = ["float64", "float32", "int32", "bool"];
+const DATA_CTOR: Record<DType, Float64ArrayConstructor | Float32ArrayConstructor | Int32ArrayConstructor | Uint8ArrayConstructor> = {
+  float64: Float64Array,
+  float32: Float32Array,
+  int32: Int32Array,
+  bool: Uint8Array,
+};
+
+/** A RegExp matching `lockedOpMessage(op, dtype)` verbatim — built from the
+ * SAME function `runtime.ts` exports (never re-derived by hand), so this
+ * test can never silently drift from the actual thrown message. */
+function lockedMsgRegex(op: string, dtype: DType): RegExp {
+  return new RegExp(lockedOpMessage(op, dtype).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+}
+
+// --- Section dt1.1: construction + round trip per dtype ---------------------
+
+test("NDArray.zeros/ones: every dtype allocates the right typed-array class, filled correctly", () => {
+  for (const dtype of DTYPES) {
+    const z = NDArray.zeros([2, 3], dtype);
+    const o = NDArray.ones([2, 3], dtype);
+    assert.strictEqual(z.dtype, dtype, `zeros dtype tag [${dtype}]`);
+    assert.strictEqual(o.dtype, dtype, `ones dtype tag [${dtype}]`);
+    assert.ok(z.data instanceof DATA_CTOR[dtype], `zeros[${dtype}] data must be ${DATA_CTOR[dtype].name}`);
+    assert.ok(o.data instanceof DATA_CTOR[dtype], `ones[${dtype}] data must be ${DATA_CTOR[dtype].name}`);
+    assert.deepStrictEqual([...z.shape], [2, 3], `zeros[${dtype}] shape`);
+    for (let i = 0; i < 6; i++) {
+      assert.strictEqual(z.data[i], 0, `zeros[${dtype}] element ${i}`);
+      assert.strictEqual(o.data[i], 1, `ones[${dtype}] element ${i}`);
+    }
+  }
+});
+
+test("NDArray.zeros/ones: no dtype argument defaults to float64 (unchanged pre-dtype behavior)", () => {
+  const z = NDArray.zeros([2, 2]);
+  const o = NDArray.ones([2, 2]);
+  assert.strictEqual(z.dtype, "float64");
+  assert.strictEqual(o.dtype, "float64");
+  assert.ok(z.data instanceof Float64Array);
+  assert.ok(o.data instanceof Float64Array);
+});
+
+test("NDArray.fromArray({ dtype }): round-trips through toArray/item/toNestedArray/toJSON for every dtype", () => {
+  const values = [0, 1, 1, 0, 1, 0]; // bool-safe (0/1 only) so the SAME array round-trips through every dtype, including bool's strict fromArray validation
+  for (const dtype of DTYPES) {
+    const nd = NDArray.fromArray([2, 3], values, { dtype });
+    assert.strictEqual(nd.dtype, dtype, `[${dtype}] dtype tag`);
+    assert.ok(nd.data instanceof DATA_CTOR[dtype], `[${dtype}] data class`);
+    assert.ok(nd.toArray() instanceof DATA_CTOR[dtype], `[${dtype}] toArray() class`);
+    assert.strictEqual(nd.toArray(), nd.data, "toArray() is the same backing store as .data (D2 alias)");
+
+    const nested = nd.toNestedArray();
+    const flatFromNested = (nested as unknown[]).flatMap((row) => row as unknown[]);
+    if (dtype === "bool") {
+      assert.deepStrictEqual(flatFromNested, values.map((v) => v !== 0), `[bool] toNestedArray leaves must be boolean, v!==0`);
+      assert.strictEqual(typeof (flatFromNested[0] as unknown), "boolean", "[bool] leaf typeof boolean");
+      assert.strictEqual(nd.item(0, 0), false, "[bool] item(0,0) is boolean false");
+      assert.strictEqual(nd.item(0, 1), true, "[bool] item(0,1) is boolean true");
+      assert.strictEqual(typeof nd.item(0, 0), "boolean", "[bool] item() return typeof boolean");
+    } else {
+      assert.deepStrictEqual(flatFromNested, values, `[${dtype}] toNestedArray leaves must be numeric, unchanged`);
+      assert.strictEqual(typeof nd.item(0, 0), "number", `[${dtype}] item() return typeof number`);
+    }
+
+    const json = nd.toJSON();
+    assert.deepStrictEqual(json.shape, [2, 3], `[${dtype}] toJSON shape`);
+    if (dtype === "bool") {
+      assert.deepStrictEqual(json.data, values.map((v) => v !== 0), "[bool] toJSON data must be boolean[]");
+    } else {
+      assert.deepStrictEqual(json.data, values, `[${dtype}] toJSON data must be number[], unchanged`);
+    }
+  }
+});
+
+test("NDArray.fromArray: Float32Array/Int32Array sources infer their dtype without an explicit option", () => {
+  const f32 = NDArray.fromArray([3], new Float32Array([1.5, 2.5, 3.5]));
+  const i32 = NDArray.fromArray([3], new Int32Array([1, -2, 3]));
+  assert.strictEqual(f32.dtype, "float32");
+  assert.ok(f32.data instanceof Float32Array);
+  assert.strictEqual(i32.dtype, "int32");
+  assert.ok(i32.data instanceof Int32Array);
+});
+
+test("NDArray.fromArray: a bare Uint8Array without an explicit dtype throws at runtime (D3 ambiguity backstop)", () => {
+  // The type layer already rejects this at compile time (no overload accepts
+  // a bare Uint8Array without `{ dtype }` — pinned in ndarray.test-d.ts); this
+  // is the RUNTIME backstop for a caller that bypasses the type layer (M2).
+  const bypass = NDArray.fromArray as unknown as (shape: readonly number[], values: Uint8Array) => unknown;
+  assert.throws(() => bypass([3], new Uint8Array([1, 0, 1])), /Uint8Array source requires an explicit \{ dtype \} option/);
+});
+
+test("NDArray.fromArray({ dtype: 'int32' }): rejects non-integer or out-of-range values", () => {
+  assert.throws(() => NDArray.fromArray([2], [1.5, 2], { dtype: "int32" }), /value 1\.5 at index 0 is not a valid int32/);
+  assert.throws(() => NDArray.fromArray([2], [2147483648, 0], { dtype: "int32" }), /value 2147483648 at index 0 is not a valid int32/);
+  assert.strictEqual(NDArray.fromArray([2], [2147483647, -2147483648], { dtype: "int32" }).data[0], 2147483647, "int32 max in range");
+});
+
+test("NDArray.fromArray({ dtype: 'bool' }): rejects any value other than exactly 0 or 1", () => {
+  assert.throws(() => NDArray.fromArray([2], [1, 2], { dtype: "bool" }), /value 2 at index 1 is not a valid bool/);
+  assert.throws(() => NDArray.fromArray([2], [0.5, 0], { dtype: "bool" }), /value 0\.5 at index 0 is not a valid bool/);
+});
+
+// --- Section dt1.2: astype conversion rules (D3, prototype probe edges) -----
+
+test("astype('float32'): converts via Math.fround (correctly-rounded contract)", () => {
+  const nd = NDArray.fromArray([2], [0.1, 1 / 3]);
+  const f32 = nd.astype("float32");
+  assert.strictEqual(f32.dtype, "float32");
+  assert.ok(f32.data instanceof Float32Array);
+  assert.strictEqual(f32.data[0], Math.fround(0.1));
+  assert.strictEqual(f32.data[1], Math.fround(1 / 3));
+});
+
+test("astype('int32'): truncates toward zero, throws on NaN/Infinity/out-of-range", () => {
+  const nd = NDArray.fromArray([4], [2.9, -2.9, 0.5, -0.5]);
+  const i32 = nd.astype("int32");
+  assert.deepStrictEqual([...i32.data], [2, -2, 0, 0], "truncation toward zero, not Math.round/floor");
+
+  assert.throws(() => NDArray.fromArray([1], [Number.NaN]).astype("int32"), /is not finite \(NaN\/Infinity cannot convert to int32\)/);
+  assert.throws(() => NDArray.fromArray([1], [Number.POSITIVE_INFINITY]).astype("int32"), /is not finite/);
+  assert.throws(() => NDArray.fromArray([1], [2147483648]).astype("int32"), /is out of int32 range/);
+  assert.throws(() => NDArray.fromArray([1], [-2147483649]).astype("int32"), /is out of int32 range/);
+  // Edges that must NOT throw:
+  assert.strictEqual(NDArray.fromArray([1], [2147483647.9]).astype("int32").data[0], 2147483647, "in-range truncation at the max edge");
+  assert.strictEqual(NDArray.fromArray([1], [-2147483648]).astype("int32").data[0], -2147483648, "exact min edge");
+});
+
+test("astype('bool'): x !== 0, and NaN converts to true (determinism pin, D3/D6 precedent — never value-dependent in a way that contradicts this)", () => {
+  const nd = NDArray.fromArray([4], [0, 1, -3.5, Number.NaN]);
+  const b = nd.astype("bool");
+  assert.strictEqual(b.dtype, "bool");
+  assert.ok(b.data instanceof Uint8Array);
+  assert.deepStrictEqual([...b.data], [0, 1, 1, 1], "0 -> false, everything else including NaN -> true");
+  assert.strictEqual(b.item(3), true, "NaN astype(bool) -> true, read back through item() as boolean true");
+});
+
+test("astype from bool: plain 0/1 passthrough to every numeric dtype", () => {
+  const boolArr = NDArray.fromArray([2], [1, 0], { dtype: "bool" });
+  for (const target of ["float64", "float32", "int32"] as const) {
+    const out = boolArr.astype(target);
+    assert.deepStrictEqual([...out.data], [1, 0], `bool -> ${target} passthrough`);
+  }
+});
+
+test("astype: always returns a fresh copy, even when the target equals the source dtype", () => {
+  const nd = NDArray.fromArray([2], [1, 2], { dtype: "int32" });
+  const same = nd.astype("int32");
+  assert.notStrictEqual(same.data, nd.data, "astype must never alias, even for a no-op conversion");
+  assert.deepStrictEqual([...same.data], [1, 2]);
+});
+
+// --- Section dt1.3: dtype-neutral movement ops (K3, D5 "D unverändert") ----
+// Every case ASSERTS ITS CLASS directly after construction (rule 12): exact
+// dtype tag, exact backing typed-array constructor, exact shape, exact
+// (freshly-computed, always-natural since NDArray never aliases) strides.
+
+test("transpose(): dtype-neutral for every dtype — class, shape, strides, and values all preserved/correct", () => {
+  const shape = [2, 3];
+  const values = [1, 0, 1, 0, 1, 0]; // bool-safe (0/1 only), same rationale as the round-trip test above
+  const oracle = transposeDtyped(shape, new Float64Array(values));
+  for (const dtype of DTYPES) {
+    const nd = NDArray.fromArray(shape, values, { dtype });
+    const t = nd.transpose();
+    assert.strictEqual(t.dtype, dtype, `[${dtype}] transpose dtype tag preserved`);
+    assert.ok(t.data instanceof DATA_CTOR[dtype], `[${dtype}] transpose data class preserved`);
+    assert.deepStrictEqual([...t.shape], oracle.shape, `[${dtype}] transpose shape matches the oracle`);
+    assert.deepStrictEqual([...t.strides], naturalStrides(oracle.shape), `[${dtype}] transpose strides are natural row-major (fresh copy)`);
+    const expectedValues = dtype === "bool" ? [...oracle.data].map((v) => (v !== 0 ? 1 : 0)) : [...oracle.data];
+    assert.deepStrictEqual([...t.data], expectedValues, `[${dtype}] transpose values match the float64 oracle (converted)`);
+  }
+});
+
+test("slice(): dtype-neutral for every dtype — class, shape, strides, and values all preserved/correct", () => {
+  const shape = [3, 3];
+  const values = [1, 0, 1, 0, 1, 0, 1, 0, 1]; // bool-safe (0/1 only), same rationale as the round-trip test above
+  const normSpecs = normalizeSliceSpecs(shape, [{ start: 0, stop: 2 }]);
+  const oracle = sliceDtyped(shape, new Float64Array(values), normSpecs);
+  for (const dtype of DTYPES) {
+    const nd = NDArray.fromArray(shape, values, { dtype });
+    const s = nd.slice(...wideSpecs({ start: 0, stop: 2 }));
+    assert.strictEqual(s.dtype, dtype, `[${dtype}] slice dtype tag preserved`);
+    assert.ok(s.data instanceof DATA_CTOR[dtype], `[${dtype}] slice data class preserved`);
+    assert.deepStrictEqual([...s.shape], oracle.shape, `[${dtype}] slice shape matches the oracle`);
+    assert.deepStrictEqual([...s.strides], naturalStrides(oracle.shape), `[${dtype}] slice strides are natural row-major (fresh copy)`);
+    const expectedValues = dtype === "bool" ? [...oracle.data].map((v) => (v !== 0 ? 1 : 0)) : [...oracle.data];
+    assert.deepStrictEqual([...s.data], expectedValues, `[${dtype}] slice values match the float64 oracle (converted)`);
+  }
+});
+
+test("reshape()/flatten(): dtype-neutral inline copy for every dtype — class, shape, and values preserved", () => {
+  const shape = [2, 3];
+  const values = [1, 0, 1, 0, 1, 0];
+  for (const dtype of DTYPES) {
+    const nd = NDArray.fromArray(shape, values, { dtype });
+
+    const reshaped = nd.reshape([3, 2]);
+    assert.strictEqual(reshaped.dtype, dtype, `[${dtype}] reshape dtype tag preserved`);
+    assert.ok(reshaped.data instanceof DATA_CTOR[dtype], `[${dtype}] reshape data class preserved`);
+    assert.deepStrictEqual([...reshaped.shape], [3, 2], `[${dtype}] reshape shape`);
+    assert.deepStrictEqual([...reshaped.data], values, `[${dtype}] reshape values unchanged (row-major preserved)`);
+    assert.notStrictEqual(reshaped.data, nd.data, `[${dtype}] reshape must copy, never alias`);
+
+    const flat = nd.flatten();
+    assert.strictEqual(flat.dtype, dtype, `[${dtype}] flatten dtype tag preserved`);
+    assert.ok(flat.data instanceof DATA_CTOR[dtype], `[${dtype}] flatten data class preserved`);
+    assert.deepStrictEqual([...flat.shape], [6], `[${dtype}] flatten shape`);
+    assert.deepStrictEqual([...flat.data], values, `[${dtype}] flatten values unchanged`);
+    assert.notStrictEqual(flat.data, nd.data, `[${dtype}] flatten must copy, never alias`);
+  }
+});
+
+// --- Section dt1.4: K4 locks (O2(a)) — every non-float64 receiver/argument --
+// throws the word-identical runtime message for every op dt1 does not yet
+// implement outside float64. `lockedOpMessage` is imported directly from
+// runtime.ts (not re-derived) so this test can never silently drift from the
+// actual thrown message.
+
+const NON_FLOAT64: readonly DType[] = ["float32", "int32", "bool"];
+
+test("add/sub/mul/div: scalar form throws the locked message for every non-float64 receiver", () => {
+  for (const dtype of NON_FLOAT64) {
+    const nd = NDArray.fromArray([2], [1, 0], { dtype });
+    for (const op of ["add", "sub", "mul", "div"] as const) {
+      assert.throws(() => (nd as unknown as { [k: string]: (n: number) => unknown })[op]!(1), lockedMsgRegex(op, dtype), `${op} scalar on [${dtype}]`);
+    }
+  }
+});
+
+test("add/sub/mul/div: array form throws the locked message for a non-float64 receiver OR argument", () => {
+  const f64 = NDArray.fromArray([2], [1, 2]);
+  for (const dtype of NON_FLOAT64) {
+    const other = NDArray.fromArray([2], [1, 0], { dtype });
+    for (const op of ["add", "sub", "mul", "div"] as const) {
+      assert.throws(
+        () => (other as unknown as { [k: string]: (n: unknown) => unknown })[op]!(f64),
+        lockedMsgRegex(op, dtype),
+        `${op}: non-float64 RECEIVER [${dtype}] must be rejected first`,
+      );
+    }
+  }
+});
+
+test("matmul/dot/cosineSimilarity: throw the locked message for a non-float64 receiver or argument", () => {
+  const mat64 = NDArray.fromArray([2, 2], [1, 2, 3, 4]);
+  const vec64 = NDArray.fromArray([2], [1, 2]);
+  for (const dtype of NON_FLOAT64) {
+    const matOther = NDArray.fromArray([2, 2], [1, 0, 0, 1], { dtype });
+    const vecOther = NDArray.fromArray([2], [1, 0], { dtype });
+    assert.throws(() => matOther.matmul(mat64 as unknown as Parameters<typeof matOther.matmul>[0]), lockedMsgRegex("matmul", dtype));
+    assert.throws(() => vecOther.dot(vec64 as unknown as Parameters<typeof vecOther.dot>[0]), lockedMsgRegex("dot", dtype));
+    assert.throws(
+      () => vecOther.cosineSimilarity(vec64 as unknown as Parameters<typeof vecOther.cosineSimilarity>[0]),
+      lockedMsgRegex("cosineSimilarity", dtype),
+    );
+  }
+});
+
+test("sum/mean: both the 0-arg and axis-bearing forms throw the locked message for every non-float64 receiver", () => {
+  for (const dtype of NON_FLOAT64) {
+    const nd = NDArray.fromArray([2, 2], [1, 0, 1, 0], { dtype });
+    assert.throws(() => nd.sum(), lockedMsgRegex("sum", dtype), `sum() [${dtype}]`);
+    assert.throws(() => nd.sum(0), lockedMsgRegex("sum", dtype), `sum(0) [${dtype}]`);
+    assert.throws(() => nd.mean(), lockedMsgRegex("mean", dtype), `mean() [${dtype}]`);
+    assert.throws(() => nd.mean(0), lockedMsgRegex("mean", dtype), `mean(0) [${dtype}]`);
+  }
+});
+
+test("argmax/topk: both the 0-arg (argmax) and argument-bearing forms throw the locked message", () => {
+  for (const dtype of NON_FLOAT64) {
+    const nd = NDArray.fromArray([3], [1, 0, 1], { dtype });
+    assert.throws(() => nd.argmax(), lockedMsgRegex("argmax", dtype), `argmax() [${dtype}]`);
+    assert.throws(() => nd.argmax(0), lockedMsgRegex("argmax", dtype), `argmax(0) [${dtype}]`);
+    assert.throws(() => nd.topk(2), lockedMsgRegex("topk", dtype), `topk(2) [${dtype}]`);
+  }
+});
+
+test("sqrt/norm: niladic locked ops throw for every non-float64 receiver (no compile-time claim possible, M2 disclosed gap)", () => {
+  for (const dtype of NON_FLOAT64) {
+    const nd = NDArray.fromArray([3], [1, 0, 1], { dtype });
+    assert.throws(() => nd.sqrt(), lockedMsgRegex("sqrt", dtype), `sqrt() [${dtype}]`);
+    assert.throws(() => nd.norm(), lockedMsgRegex("norm", dtype), `norm() [${dtype}]`);
+  }
+});
+
+test("stack(): a non-float64 row throws the locked message at runtime (M3 v8 disclosed exception: the EDITOR shows a native structural diagnostic instead until dt5, but the runtime message is word-identical to every other locked op)", () => {
+  const stackAny = NDArray.stack as unknown as (rows: readonly AnyNDArray[]) => unknown;
+  for (const dtype of NON_FLOAT64) {
+    const row = NDArray.fromArray([3], [1, 0, 1], { dtype });
+    assert.throws(() => stackAny([row]), lockedMsgRegex("stack", dtype), `stack() [${dtype}]`);
+  }
+});
+
+// --- Section dt1.5: K5 — AnyNDArray fix + two DIFFERENT non-float64 dtypes -
+
+test("AnyNDArray spans every dtype (K5 fix): a non-float64 array assigned through the top type still round-trips its real dtype at runtime", () => {
+  const i32: AnyNDArray = NDArray.fromArray([2], [1, 2], { dtype: "int32" });
+  assert.strictEqual(i32.dtype, "int32", "AnyNDArray must not silently narrow to float64");
+  const nested: NestedValue | NestedBoolValue = i32.toNestedArray();
+  assert.deepStrictEqual(nested, [1, 2]);
+});
+
+test("a locked two-operand op with TWO DIFFERENT non-float64 dtypes rejects on the RECEIVER's dtype first (prototype F4 gap, message-table order)", () => {
+  const i32 = NDArray.fromArray([2], [1, 0], { dtype: "int32" });
+  const boolArr = NDArray.fromArray([2], [1, 0], { dtype: "bool" });
+
+  // Receiver int32, argument bool: message must name int32 (the RECEIVER),
+  // not bool — proves DTypeLockPair's "receiver checked first" order holds
+  // at runtime too, and that a MIXED pair is never silently accepted.
+  assert.throws(
+    () => i32.add(boolArr as unknown as Parameters<typeof i32.add>[0]),
+    lockedMsgRegex("add", "int32"),
+    "int32 receiver + bool argument must reject on int32 first",
+  );
+  // Reversed: receiver bool, argument int32 — must name bool.
+  assert.throws(
+    () => boolArr.add(i32 as unknown as Parameters<typeof boolArr.add>[0]),
+    lockedMsgRegex("add", "bool"),
+    "bool receiver + int32 argument must reject on bool first",
+  );
+});
+
