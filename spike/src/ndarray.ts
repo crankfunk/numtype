@@ -275,7 +275,11 @@ type IsProvablyNonIntegerScalar<N extends number> = IsUnion<N> extends true ? fa
 /**
  * dt2 P3/P4 (D6/D7): the scalar-operand guard shared by `add`/`sub`/`mul`'s
  * scalar overloads — keeps the receiver's own `D` (E4: "Skalare auf int32
- * bleiben int32"). `bool` rejects unconditionally via the same
+ * bleiben int32"). Exported (G4 fix) SOLELY so the cross-layer message
+ * parity test (scalar-mean.test.ts) can extract this type's exact int32
+ * non-integer `ShapeError` text via real tsc and assert it against the
+ * runtime's own thrown message — never used as a public API surface. `bool`
+ * rejects unconditionally via the same
  * `Guard`/`ShapeError` mechanism a shape mismatch uses (D7/P4, the
  * PERMANENT "use astype()" message, replacing dt1's transitional lock);
  * `int32` additionally proves a literal dot-form scalar (`2.5`) non-integer
@@ -294,15 +298,33 @@ type IsProvablyNonIntegerScalar<N extends number> = IsUnion<N> extends true ? fa
  * overload's generic TS2769, never this type's own `ShapeError` message
  * (measured, docs/dtype-design-ergebnisse.md "Lösungsversuch
  * Skalar-Maskierung: NO-GO", reproduced for dt2 in Baustein 0). The runtime
- * throws the OWN word-identical message regardless (M2). */
-type ArithScalarOperand<D extends DType, N extends number, Op extends string> = IsUnion<D> extends true
+ * throws its OWN message regardless (M2) — masking only ever hides which
+ * TEXT tsc prints, never whether the call is rejected.
+ *
+ * G4 fix (post-3b-verify M3 finding): the int32 non-integer message below
+ * was NOT actually word-identical to the runtime's own text (`runtime.ts`,
+ * `scalarArithTyped`) despite this doc comment previously claiming
+ * otherwise — a real drift (the type level said "is not an integer — int32
+ * arithmetic requires an integer operand", the runtime said "is not a valid
+ * integer operand (must be an integer in [-2147483648, 2147483647])"), even
+ * though the mismatch happened to be invisible in the masked-TS2769 case
+ * above. The two ARE independently hand-maintained strings (unlike
+ * `BOOL_ARITHMETIC_MESSAGE`, which both layers import from one `const` —
+ * this one can't be, since each side interpolates its own value: a computed
+ * literal type here, a runtime number there), so nothing enforces the
+ * words matching except review; a cross-layer parity test now pins it
+ * (`scalar-mean.test.ts`, spawnSync tsc-fixture pattern) so a future edit to
+ * either side that breaks the match fails a test instead of silently
+ * drifting again. Re-aligned to the runtime's more precise wording (it
+ * names the actual int32 range; the type-level text did not). */
+export type ArithScalarOperand<D extends DType, N extends number, Op extends string> = IsUnion<D> extends true
   ? N
   : D extends "bool"
     ? Guard<ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>, N>
     : D extends "int32"
       ? Guard<
           IsProvablyNonIntegerScalar<N> extends true
-            ? ShapeError<`${Op}: int32 scalar ${N} is not an integer — int32 arithmetic requires an integer operand`>
+            ? ShapeError<`${Op}: int32 scalar ${N} is not a valid integer operand (must be an integer in [-2147483648, 2147483647])`>
             : true,
           N
         >

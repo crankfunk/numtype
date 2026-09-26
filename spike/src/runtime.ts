@@ -1684,12 +1684,26 @@ export function elementwiseDivTyped(
 // ---------------------------------------------------------------------------
 // dt2, Commit B — P3 (the D6 scalar rule for add/sub/mul) + P4 (bool
 // permanently rejected, both overloads, "use astype()" message). The int32
-// message stem below is kept word-identical (M3) to the compile-time
-// `ArithScalarOperand<D,N,Op>`'s own `ShapeError` text (ndarray.ts) by hand
-// — like dt1's `lockedOpMessage`, it interpolates the actual scalar value,
-// so it cannot be a single shared `const` the way `BOOL_ARITHMETIC_MESSAGE`
-// is; pinned instead by a runtime test reproducing the exact wording
-// (Arbeitsregel 2).
+// message stem below is INTENDED to be word-identical (M3) to the
+// compile-time `ArithScalarOperand<D,N,Op>`'s own `ShapeError` text
+// (ndarray.ts) — like dt1's `lockedOpMessage`, it interpolates the actual
+// scalar value, so it cannot be a single shared `const` the way
+// `BOOL_ARITHMETIC_MESSAGE` is: each side is its own hand-maintained
+// template, kept in sync only by review, not by construction.
+//
+// G4 fix (post-3b-verify M3 finding, corrected 2026-09-26): this comment
+// previously claimed the two templates were "kept word-identical ... by
+// hand" as an accomplished fact — they had actually DRIFTED (the type-level
+// text omitted the int32 range this function's message states), an M3
+// violation this same Commit's review caught. Re-aligned to this function's
+// wording (kept here — it is the more precise of the two, since it names
+// the actual range). Pinned by a CROSS-LAYER parity test (scalar-mean.test.ts,
+// spawnSync tsc-fixture pattern, same mechanism the `DTypeLockPair`/`F1`
+// diagnostic-quality pins above use) that extracts the type-level text via
+// real tsc and asserts it equals this function's own thrown message
+// verbatim — not merely "a runtime test reproducing the exact wording" in
+// isolation (which is all the previous, weaker pin actually did, and why
+// the drift went undetected).
 // ---------------------------------------------------------------------------
 
 /**
