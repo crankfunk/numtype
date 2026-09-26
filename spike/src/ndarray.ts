@@ -335,7 +335,19 @@ export type ArithScalarOperand<D extends DType, N extends number, Op extends str
  * int32 integer restriction at all (D5: "div → float64" unconditionally —
  * unlike add/sub/mul, a fractional scalar is always meaningful once the
  * result widens to float64). Same union gate on `D` as every other
- * dtype-checking consumer here (D4). */
+ * dtype-checking consumer here (D4).
+ *
+ * G6 fix (post-3b-verify doc finding): the M3 v9 named scalar exception
+ * (A3, docs/dtype-dt2-spec.md — see `ArithScalarOperand`'s own doc comment
+ * above for the full mechanism) applies to THIS guard identically, not only
+ * "by the same mechanism": a bool receiver on `div`'s scalar overload (e.g.
+ * `dtBool.div(1)`, pinned in ndarray.test-d.ts) is a genuine compile error
+ * (M2 holds), but real tsc attributes the failure to the LAST-declared
+ * overload (`div`'s array form below) on total mismatch, so the TEXT shown
+ * is that overload's generic TS2769, never this guard's own `ShapeError`
+ * (measured, same Baustein-0/A3 finding as `ArithScalarOperand`). The
+ * runtime (`scalarDivTyped`) throws `BOOL_ARITHMETIC_MESSAGE` directly and
+ * unconditionally regardless of what the editor shows. */
 type DivScalarOperand<D extends DType, N extends number> = IsUnion<D> extends true
   ? N
   : D extends "bool"
@@ -1158,7 +1170,16 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * float64), with NO int32-integer restriction at all (unlike
    * add/sub/mul's D6 rule: a fractional scalar is always meaningful once
    * the result widens to float64). bool rejects UNCONDITIONALLY (D7/P4),
-   * same permanent `BOOL_ARITHMETIC_MESSAGE` as every other op. */
+   * same permanent `BOOL_ARITHMETIC_MESSAGE` as every other op.
+   *
+   * G6 fix: the SCALAR overload also carries the M3 v9 named exception
+   * (`DivScalarOperand`'s own doc comment has the full mechanism) — a bool
+   * receiver on `div(number)` is a genuine compile error, but tsc's shown
+   * TEXT is the array overload's generic TS2769 below, never
+   * `DivScalarOperand`'s own message; the ARRAY overload's rejections
+   * (bool operand via `PromoteDiv`) are NOT masked and show their own
+   * `BOOL_ARITHMETIC_MESSAGE` directly, same asymmetry as `add`/`sub`/`mul`
+   * above. */
   div<const N extends number>(s: DivScalarOperand<D, N>): NDArray<S, DivScalarDType<D>>;
   div<B extends Shape, Dd extends DType>(
     other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : PromoteDiv<D, Dd>, NDArray<B, Dd>>,

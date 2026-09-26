@@ -1807,7 +1807,7 @@ const divI32Frac = dtI32.div(2.5);
 type DIV_I32_FRAC_DTYPE = Expect<Equal<typeof divI32Frac.dtype, "float64">>;
 const divF32Scalar = dtF32.div(2);
 type DIV_F32_SCALAR_DTYPE = Expect<Equal<typeof divF32Scalar.dtype, "float32">>;
-// @ts-expect-error - div's scalar overload still rejects bool unconditionally (P4).
+// @ts-expect-error - div's scalar overload still rejects bool unconditionally (P4). M3 v9 named exception applies here too (same masked-generic-TS2769 mechanism as the add/sub/mul scalar overloads above, via `DivScalarOperand`'s own `Guard`/`ShapeError`) -- the runtime backstop (`scalarDivTyped`) still throws BOOL_ARITHMETIC_MESSAGE.
 dtBool.div(1);
 
 // =============================================================================
