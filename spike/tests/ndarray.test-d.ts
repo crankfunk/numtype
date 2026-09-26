@@ -1793,3 +1793,64 @@ const divF32Scalar = dtF32.div(2);
 type DIV_F32_SCALAR_DTYPE = Expect<Equal<typeof divF32Scalar.dtype, "float32">>;
 // @ts-expect-error - div's scalar overload still rejects bool unconditionally (P4).
 dtBool.div(1);
+
+// =============================================================================
+// dt2 Commit D (G1 fix, post-3b-verify regression): `AnyNDArray` (the erased
+// `NDArray<any, any>` handle) must NOT be rejected by add/sub/mul/div's
+// array overload. Regression: `Promote<A,B>`/`PromoteDiv<A,B>` collapsed to
+// the literal `any` type whenever EITHER operand's dtype was `any` (an
+// indexed-access-with-`any`-key artifact — `IsUnion<any>` itself resolves
+// to `false`, so it never caught this case), which made the surrounding
+// `Guard<any, Actual>` reject UNCONDITIONALLY (`[any] extends
+// [ShapeError<M>]` is deterministically `true`) — every call below failed
+// to compile with TS2769 ("Property '__shapeError' is missing") before the
+// fix, even though the pre-dt2 base (`e7087b5`) compiled the equivalent
+// AnyNDArray patterns clean (A/B-checked against that commit, same
+// session). Fixed by `IsAnyDType<T>` (ndarray.ts, gated BEFORE the union
+// gate and the table on both `Promote` and `PromoteDiv`): `any` now
+// degrades to the wide `DType`/`readonly number[]` — no claim, same
+// no-false-reject policy the union gate already gives a union dtype —
+// never back to a false `any` result (the `Equal<>` pins below use the
+// generic-function-comparison form of `Equal`, which DOES distinguish
+// `any` from `DType`, unlike a naive mutual-assignability check).
+// =============================================================================
+
+declare const g1AnyRecv: AnyNDArray;
+declare const g1KnownArg: NDArray<[3], "float32">;
+declare const g1AnyArg: AnyNDArray;
+declare const g1KnownRecv: NDArray<[3], "float32">;
+
+// add: AnyNDArray receiver, AnyNDArray argument, both, and the exact
+// function-boundary pattern the regression report used.
+const g1Add1 = g1AnyRecv.add(g1KnownArg);
+type G1_ADD_ANY_RECV_SHAPE = Expect<Equal<(typeof g1Add1)["shape"], readonly number[]>>;
+type G1_ADD_ANY_RECV_DTYPE = Expect<Equal<(typeof g1Add1)["dtype"], DType>>;
+
+const g1Add2 = g1KnownRecv.add(g1AnyArg);
+type G1_ADD_ANY_ARG_SHAPE = Expect<Equal<(typeof g1Add2)["shape"], readonly number[]>>;
+type G1_ADD_ANY_ARG_DTYPE = Expect<Equal<(typeof g1Add2)["dtype"], DType>>;
+
+const g1Add3 = g1AnyRecv.add(g1AnyArg);
+type G1_ADD_ANY_BOTH_SHAPE = Expect<Equal<(typeof g1Add3)["shape"], readonly number[]>>;
+type G1_ADD_ANY_BOTH_DTYPE = Expect<Equal<(typeof g1Add3)["dtype"], DType>>;
+
+function g1Combine(a: AnyNDArray, b: NDArray<[3], "float32">) {
+  return a.add(b);
+}
+void g1Combine;
+
+// sub/mul: identical array-overload machinery/regression class as add — one
+// AnyNDArray-operand pin apiece is enough to catch a reintroduction.
+const g1Sub = g1AnyRecv.sub(g1KnownArg);
+type G1_SUB_ANY_DTYPE = Expect<Equal<(typeof g1Sub)["dtype"], DType>>;
+const g1Mul = g1AnyRecv.mul(g1KnownArg);
+type G1_MUL_ANY_DTYPE = Expect<Equal<(typeof g1Mul)["dtype"], DType>>;
+
+// div: `PromoteDiv`'s CURRENT hand-written leaf never actually collapsed to
+// `any` (verified empirically — this call already compiled clean before
+// the `IsAnyDType` gate existed), but the gate was added defensively
+// alongside `Promote`'s fix because Commit E (G3) rewrites this leaf onto
+// the same indexed-access shape `Promote` uses, which WOULD reintroduce the
+// hole without it. Pinned so a future regression here is caught too.
+const g1Div = g1AnyRecv.div(g1KnownArg);
+type G1_DIV_ANY_DTYPE = Expect<Equal<(typeof g1Div)["dtype"], DType>>;
