@@ -2,6 +2,7 @@ import type { Broadcast } from "../src/broadcast.ts";
 import type { Shape } from "../src/dim.ts";
 import { type AnyNDArray, type Guard, NDArray, type NDArrayView, type NestedArray, type NestedBoolValue, type NestedValue } from "../src/ndarray.ts";
 import type { ReduceAxis } from "../src/reduce.ts";
+import type { DType } from "../src/runtime.ts";
 import type { ItemGuard, StackCheck, TopkCheck } from "../src/vector.ts";
 import type { CoreExports } from "../src/wasm/loader.ts";
 import { type AnyWNDArray, WNDArray } from "../src/wasm/resident.ts";
@@ -1577,3 +1578,92 @@ type W_TOPK_MIXEDRANK_NEG_K_INDICES = Expect<Equal<(typeof wTopkMixedRankNegK.in
 declare const wTopkDynRankRecv: WNDArray<number[]>;
 const wTopkDynRank = wTopkDynRankRecv.topk(2);
 type W_TOPK_DYN_RANK = Expect<Equal<(typeof wTopkDynRank.values)["shape"], readonly [2]>>;
+
+// =============================================================================
+// dt1 post-review fixes (docs/dtype-dt1-spec.md): F3 closes a comment that
+// claimed a pin existed here without it actually existing; F4 adds a minimal
+// set of type-level pins for dt1's new surface (construction, conversion,
+// movement ops, and the two dtype-sensitive leaf/JSON members), none of
+// which had ANY compile-time pin before this fix.
+// =============================================================================
+
+// --- F3: the bare-Uint8Array / ArrayLike<number> ambiguity rejections -------
+// (scalar-mean.test.ts's "a bare Uint8Array without an explicit dtype throws
+// at runtime" test references this exact pin by name — that reference was
+// FALSE before this fix, since neither compile rejection was pinned anywhere
+// in this file. `NDArray.fromArray`'s three no-`dtype` overloads (readonly
+// number[] | Float64Array, Float32Array, Int32Array) deliberately omit BOTH
+// `Uint8Array` (ambiguous: bool 0/1 vs. raw bytes, D3) and the wider
+// `ArrayLike<number>` (not one of the three concrete source shapes) — a
+// caller must pass an explicit `{ dtype }` for either.
+
+// @ts-expect-error - a bare Uint8Array without `{ dtype }` matches no overload (D3 ambiguity: bool 0/1 vs. raw bytes)
+NDArray.fromArray([3], new Uint8Array([1, 0, 1]));
+
+declare const bareArrayLike: ArrayLike<number>;
+// @ts-expect-error - a bare ArrayLike<number> (not `readonly number[]`/a concrete typed array) without `{ dtype }` matches no overload
+NDArray.fromArray([3], bareArrayLike);
+
+// The `{ dtype }` escape hatch actually works for the ambiguous Uint8Array
+// case — same shape, no error (the `{ dtype }` overload's own source union is
+// `readonly number[] | Float64Array | Float32Array | Int32Array | Uint8Array`,
+// which does NOT include the wider `ArrayLike<number>` either — that source
+// stays rejected even WITH an explicit dtype, a stricter rule than the no-
+// dtype overloads', not pinned here since F3 only calls out the no-dtype gap).
+const fromUint8WithDtype = NDArray.fromArray([3], new Uint8Array([1, 0, 1]), { dtype: "bool" });
+type DT_FROM_UINT8_DTYPE = Expect<Equal<(typeof fromUint8WithDtype)["dtype"], "bool">>;
+
+// --- F4: minimal type-level pins for dt1's new surface ----------------------
+
+// zeros/ones with an explicit dtype: the second type parameter threads through.
+const dtZerosInt32 = NDArray.zeros([2, 3], "int32");
+type DT_ZEROS_INT32 = Expect<Equal<typeof dtZerosInt32, NDArray<[2, 3], "int32">>>;
+
+// fromArray: with vs. without an explicit `{ dtype }` option.
+const dtFromArrayExplicit = NDArray.fromArray([2], [1, 2], { dtype: "int32" });
+type DT_FROMARRAY_EXPLICIT = Expect<Equal<typeof dtFromArrayExplicit, NDArray<[2], "int32">>>;
+const dtFromArrayDefault = NDArray.fromArray([2], [1, 2]);
+type DT_FROMARRAY_DEFAULT = Expect<Equal<typeof dtFromArrayDefault, NDArray<[2], "float64">>>;
+
+// astype: the result carries the TARGET dtype, receiver's S unchanged.
+const dtAstypeBase = NDArray.zeros([2], "int32");
+const dtAstypeResult = dtAstypeBase.astype("float32");
+type DT_ASTYPE_RESULT = Expect<Equal<typeof dtAstypeResult, NDArray<[2], "float32">>>;
+
+// transpose(): dtype-neutral (D5 "D unverändert") — an int32 receiver's
+// transpose stays int32, only the shape changes.
+const dtTransposeBase = NDArray.zeros([2, 3], "int32");
+const dtTransposeResult = dtTransposeBase.transpose();
+type DT_TRANSPOSE_PRESERVES_INT32 = Expect<Equal<typeof dtTransposeResult, NDArray<[3, 2], "int32">>>;
+
+// toNestedArray() on a bool array: boolean leaves, not number leaves (D5).
+const dtBoolArr = NDArray.zeros([2, 3], "bool");
+type DT_TONESTED_BOOL = Expect<Equal<ReturnType<(typeof dtBoolArr)["toNestedArray"]>, boolean[][]>>;
+
+// toJSON(): `data` is `boolean[]` for a bool array, `number[]` for every
+// other dtype (D3) — pinned for both ends of that split.
+type DT_TOJSON_BOOL = Expect<Equal<ReturnType<(typeof dtBoolArr)["toJSON"]>, { shape: number[]; data: boolean[] }>>;
+const dtFloat64Arr = NDArray.zeros([2, 3]);
+type DT_TOJSON_FLOAT64 = Expect<Equal<ReturnType<(typeof dtFloat64Arr)["toJSON"]>, { shape: number[]; data: number[] }>>;
+
+// item() on a bool array: returns `boolean`, not `number` (D5).
+const dtBoolItem = dtBoolArr.item(0, 0);
+type DT_ITEM_BOOL = Expect<Equal<typeof dtBoolItem, boolean>>;
+
+// A union dtype INCLUDING float64 (`NDArray<[3], "int32" | "float64">`)
+// calling a locked op: DOCUMENTED no-claim path (CLAUDE.md "distributive
+// helpers yield union verdicts"). `DTypeLock<D, Op>` is a naked conditional
+// on `D`, so it distributes over the union to `true | ShapeError<...>`;
+// `Guard`'s own `[Result] extends [ShapeError<infer M>]` check does NOT
+// match a union that includes `true`, so the call compiles clean — even
+// though an ACTUAL int32 instance at this static type would be rejected if
+// its dtype were known precisely. This deliberately COMPILES (no
+// `@ts-expect-error`): the point of the pin is that the union case is
+// honest no-claim, not a false accept limited to one branch. The runtime
+// backstop for an actual int32 instance at this call is pinned below
+// (scalar-mean.test.ts's own dt1 section covers the single-dtype cases;
+// see "union dtype degrades to no-claim, runtime still rejects an actual
+// non-float64 instance" in that file for this specific union case).
+declare const dtUnionRecv: NDArray<[3], "int32" | "float64">;
+const dtUnionAdded = dtUnionRecv.add(1); // must compile clean (no-claim), never a false accept OR a false reject
+type DT_UNION_ADD_SHAPE = Expect<Equal<(typeof dtUnionAdded)["shape"], readonly [3]>>;
