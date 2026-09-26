@@ -131,15 +131,82 @@ export type Guard<Result, Actual> = [Result] extends [ShapeError<infer Message>]
  * "missing property" shape, word-identical (M3) to the runtime throw
  * (`BOOL_ARITHMETIC_MESSAGE`, imported, never re-typed here).
  */
-export type Promote<A extends DType, B extends DType> = IsUnion<A> extends true
+/**
+ * dt2 Commit D (G1 fix, post-3b-verify regression): is `T` literally the
+ * `any` type? Built on the standard `0 extends 1 & T` idiom (`T` on the
+ * TARGET side of extends only — never the naked checked type — so `T`
+ * being `any` hits ordinary deterministic structural subtyping via
+ * intersection-with-`any` absorption, `1 & any` = `any`, `0 extends any` =
+ * `true`; a real dtype gives `1 & "float32"` = `never`, `0 extends never` =
+ * `false`), but LAUNDERED through `T extends infer U ? (...) : never`
+ * first — load-bearing, not stylistic (measured on real tsc 7.0.2, see
+ * below): applying `0 extends 1 & T` DIRECTLY to a CONSTRAINED type
+ * parameter (`A extends DType`, as `Promote`'s own `A`/`B` are) silently
+ * fails to detect `any` at all. Empirically isolated by a minimal
+ * side-by-side probe: the identical check inlined into an UNCONSTRAINED
+ * `<A, B>` correctly flags `any`; the exact same check on a `<A extends
+ * DType, B extends DType>` does not (confirmed both directly and via an
+ * extra layer of helper-type indirection, so it is not about indirection).
+ * Root cause: TypeScript can prove `0 extends 1 & X` is `false` for EVERY
+ * individual member of the `DType` constraint (all four literals, and any
+ * union of them, since a numeric literal never overlaps a string-literal
+ * type) — a result that's uniform across the WHOLE constraint — and once a
+ * conditional's truth value is provably constant over a constrained
+ * parameter's entire domain, tsc appears to fold it to that constant at
+ * the parameter's declared bound rather than re-checking it against an
+ * actual (constraint-violating, `any`-bypasses-everything) argument at each
+ * instantiation. Laundering `T` through a fresh `infer U` first breaks this
+ * chain: `U` is a brand-new, UNCONSTRAINED inference variable (an
+ * `infer`-introduced variable never inherits the outer parameter's
+ * constraint), so the nested `0 extends 1 & U` check is no longer uniform
+ * over any known domain and tsc must defer it to actual instantiation,
+ * where `U` correctly resolves to the real argument (including `any`).
+ * Re-verified (reveal-probe harness, same session): the laundered form
+ * flags `Promote<any, "float32">`/`Promote<"float32", any>` as `DType`
+ * (never `any` itself, confirmed by a narrower-literal `@ts-expect-error`
+ * companion assertion) while leaving every real numeric pair (including
+ * `int32⊕int32` staying `int32`, never accidentally widened) and the bool
+ * rejection untouched.
+ *
+ * Root cause this closes (found by 3b verify, reproduced against dt1 base
+ * `e7087b5` via a real-tsc reveal probe): `IsUnion<any>` itself resolves
+ * cleanly to `false` (does NOT catch `any`), so `any` fell through
+ * `Promote`/`PromoteDiv` into the numeric table's indexed-access leaf
+ * `(typeof PROMOTE_NUMERIC)[A & NumericDType][B & NumericDType]`. Indexed
+ * access is NOT a conditional type, so it is immune to the constraint-fold
+ * above — it genuinely, dynamically evaluates `A & NumericDType` per
+ * instantiation, and for `A = any` that's `any` (absorption again), and
+ * indexing ANY object type with an `any` KEY itself yields `any` — so
+ * `Promote<any, B>` as a WHOLE collapsed to the literal `any` type
+ * (confirmed: `Promote<any, "float32">` type-checks as assignable to an
+ * unrelated string-literal type, something only `any` can do). Downstream,
+ * `Guard<any, Actual>`'s tuple-wrapped check `[any] extends [ShapeError<
+ * infer M>]` is then unconditionally `true` too — `[any]` is, again by
+ * ordinary deterministic structural subtyping (the checked type is the
+ * concrete `[Result]`, never a naked parameter here either), a subtype of
+ * every tuple type — so EVERY call with an `any` dtype operand hit the
+ * `__shapeError` branch, rejecting perfectly valid code
+ * (`AnyNDArray.add(NDArray<[3],"float32">)` and friends) with TS2769. A
+ * real M2 regression: dt1 base `e7087b5`'s `DTypeLockPair` had no such
+ * hole, because its own leaf never indexes an object type BY the dtype.
+ * Gated here on BOTH operands, BEFORE the union gate and the table, so
+ * `any` degrades exactly like a union does: to the wide `DType` — no
+ * claim, never a false reject, the runtime backstop still applies. */
+type IsAnyDType<T> = T extends infer U ? (0 extends 1 & U ? true : false) : never;
+
+export type Promote<A extends DType, B extends DType> = IsAnyDType<A> extends true
   ? DType
-  : IsUnion<B> extends true
+  : IsAnyDType<B> extends true
     ? DType
-    : A extends "bool"
-      ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
-      : B extends "bool"
-        ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
-        : (typeof PROMOTE_NUMERIC)[A & NumericDType][B & NumericDType];
+    : IsUnion<A> extends true
+      ? DType
+      : IsUnion<B> extends true
+        ? DType
+        : A extends "bool"
+          ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
+          : B extends "bool"
+            ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
+            : (typeof PROMOTE_NUMERIC)[A & NumericDType][B & NumericDType];
 
 /** dt2 P2 (D5): `div`'s own promotion rule — ALWAYS floating-point, never
  * int32 (unlike `Promote` above, which lets int32⊕int32 stay int32):
@@ -151,20 +218,36 @@ export type Promote<A extends DType, B extends DType> = IsUnion<A> extends true
  * parameter, `Promote<A,B>`'s result alone can't distinguish "both operands
  * were float32" from "the result happens to be float32" (e.g.
  * `Promote<int32,int32>` and a mixed pair that also happens to yield
- * `int32` aren't distinguishable after the fact). */
-export type PromoteDiv<A extends DType, B extends DType> = IsUnion<A> extends true
+ * `int32` aren't distinguishable after the fact).
+ *
+ * dt2 Commit D (G1 fix): also `IsAnyDType`-gated first, BEFORE the union
+ * gate, same as `Promote` above — see that gate's doc comment for the full
+ * mechanism. Empirically (reveal probe), THIS type's current hand-written
+ * nested-ternary leaf does not itself collapse to `any` the way `Promote`'s
+ * indexed-access leaf does (no object-indexed-by-`any` step here yet), so
+ * `div`'s array/scalar overloads were never actually hit by the G1
+ * regression — but Commit E (G3) rewrites this leaf to read the new
+ * `PROMOTE_DIV` table via the SAME indexed-access shape `Promote` uses (one
+ * source, M2), which WOULD reintroduce the exact hole without this gate.
+ * Added defensively alongside `Promote`'s fix rather than only after
+ * Commit E, so the gate is never contingent on leaf-shape details. */
+export type PromoteDiv<A extends DType, B extends DType> = IsAnyDType<A> extends true
   ? DType
-  : IsUnion<B> extends true
+  : IsAnyDType<B> extends true
     ? DType
-    : A extends "bool"
-      ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
-      : B extends "bool"
-        ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
-        : A extends "float32"
-          ? B extends "float32"
-            ? "float32"
-            : "float64"
-          : "float64";
+    : IsUnion<A> extends true
+      ? DType
+      : IsUnion<B> extends true
+        ? DType
+        : A extends "bool"
+          ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
+          : B extends "bool"
+            ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
+            : A extends "float32"
+              ? B extends "float32"
+                ? "float32"
+                : "float64"
+              : "float64";
 
 /** Mirrors `OkShape` above, for a `Promote`/`PromoteDiv` result: strips the
  * `ShapeError` branch down to a real `DType` (never `never` for the
