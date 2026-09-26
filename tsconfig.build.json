@@ -19,5 +19,5 @@
   // keep using directly from spike/src — not a supported public entry point
   // (WasmBackend/ThreadedBackend replaced it, Item 10). The FILE stays;
   // only the publishable dist/ build excludes it.
-  "exclude": ["spike/src/wasm/backend.ts"]
+  "exclude": ["spike/src/wasm/backend.ts", "spike/src/__*-mutant-*-tmp*.ts"]
 }

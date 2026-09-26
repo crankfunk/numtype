@@ -17,6 +17,7 @@
     "spike/tests-browser",
     "spike/tests-package/consumer",
     "spike/tests-package/consumer-strict",
-    "spike/bench-dx/scale-workloads"
+    "spike/bench-dx/scale-workloads",
+    "spike/src/__*-mutant-*-tmp*.ts"
   ]
 }

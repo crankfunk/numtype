@@ -1605,10 +1605,14 @@ test("DTypeLockPair (F2 pin): receiver-first ordering is provable at COMPILE TIM
     // imports several relative siblings (runtime.ts, broadcast.ts, vector.ts,
     // …), so a standalone copy elsewhere would fail to resolve those and
     // produce unrelated compile errors instead of proving anything about
-    // `DTypeLockPair`. This file is NEVER part of any include/tsconfig glob
-    // in the repo (nothing but this throwaway fixture ever imports it), and
-    // is removed immediately after the mutant compile runs.
-    const mutantNdarrayPath = fileURLToPath(new URL("../src/__dtypelockpair-mutant-f2-tmp.ts", import.meta.url).href);
+    // `DTypeLockPair`. The file lives inside spike/src, so the three tsconfig
+    // globs that cover that directory (root, tsconfig.build.json,
+    // tests-browser/tsconfig.emit.json) EXCLUDE the pattern
+    // `__*-mutant-*-tmp*.ts` — a copy orphaned by a hard kill can therefore
+    // neither shift nor break `pnpm check`/check:diag, nor reach dist/ and the
+    // npm tarball. The name carries a timestamp + random suffix so concurrent runs on one
+    // checkout never collide. Removed in `finally` after the mutant compile.
+    const mutantNdarrayPath = fileURLToPath(new URL(`../src/__dtypelockpair-mutant-f2-tmp-${Date.now()}-${Math.random().toString(36).slice(2)}.ts`, import.meta.url).href);
     const mutantDir = mkdtempSync(join(tmpdir(), "numtype-dtypelockpair-mutant-"));
     try {
       const originalSource = readFileSync(ndarrayPath, "utf8");

@@ -33,5 +33,6 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true
   },
-  "include": ["../src/**/*.ts", "../src/ambient.d.ts"]
+  "include": ["../src/**/*.ts", "../src/ambient.d.ts"],
+  "exclude": ["../src/__*-mutant-*-tmp*.ts"]
 }
