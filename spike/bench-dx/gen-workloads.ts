@@ -50,9 +50,14 @@ const WORKLOAD_COMPILER_OPTIONS = {
 // ---------------------------------------------------------------------------
 
 /** Render a shape (numbers, or the literal string "number" for a dynamic
- * dim) the same way NDArray's hover does: `NDArray<[2, 4]>`. */
+ * dim) the same way NDArray's hover does: `NDArray<[2, 4], "float64">` (dt1,
+ * docs/dtype-dt1-spec.md K6; Covenant M3 v8: the dtype ALWAYS shows in the
+ * class hover, even at its default — measured against the real `tsc --lsp
+ * --stdio`, not read off the source). Every workload here builds plain
+ * float64 arrays (dtype does not exist prior to dt1), so the dtype argument
+ * is always the literal `"float64"`. */
 function fmtShape(dims: readonly (number | "number")[]): string {
-  return `NDArray<[${dims.join(", ")}]>`;
+  return `NDArray<[${dims.join(", ")}], "float64">`;
 }
 
 interface HoverSpec {
@@ -607,7 +612,10 @@ function buildW7(): WorkloadSpec {
       label: "W7 union-axis sum() degraded",
       line: degradedLine,
       character: charIn(lines[degradedLine]!, degradedName),
-      expected: "NDArray<readonly number[]>",
+      // dt1 (K6, Covenant M3 v8): the dtype now always shows in the class
+      // hover, even on this shape-degraded (union-axis) path — measured
+      // against the real `tsc --lsp --stdio`, not read off the source.
+      expected: 'NDArray<readonly number[], "float64">',
     },
   ];
   const completion: CompletionSpec = { label: "W7 member access", line: degradedLine, character: charAfterDot(lines[degradedLine]!, "sum") };

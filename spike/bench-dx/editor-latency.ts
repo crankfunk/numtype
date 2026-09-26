@@ -913,15 +913,32 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // (rules out this slice's new runtime tests as the cause) -- left as an
 // observed, disclosed anomaly rather than force-matched. Measured twice,
 // byte-identical both times.
+// Re-pinned 2026-09-26 (dt1, docs/dtype-dt1-spec.md K6): `NDArray` gains its
+// second type parameter `D extends DType` plus the full dtype core (storage,
+// creation, `astype`, the dtype-neutral movement ops, and the O2(a) locks on
+// every other op) — the same single-class-surface ripple mechanism as every
+// prior re-pin above, this time on `NDArray` (not `WNDArray`), plus the class
+// hover itself now carries the dtype (`fmtShape`/gen-workloads.ts updated to
+// match, K6). NOT perfectly uniform this time (+2,288..+2,531, spread 243) —
+// every workload's own call sites (add/sub/mul/div/matmul/dot/sum/mean/
+// argmax/topk/sqrt/transpose/slice/reshape/flatten/item) now resolve against
+// overload sets carrying `DTypeLock`/`DTypeLockPair` conditionals instead of
+// the old bare `Guard<Broadcast<...>>` forms, so the marginal cost differs by
+// which ops each workload actually calls (the same kind of non-uniformity
+// S3/item+stack's own re-pin comment already documents for a different
+// reason). Measured TWICE, byte-identical both times (gen-workloads.ts run
+// fresh each time). Correctness gate (every hover position, including the
+// updated `fmtShape`/W7 dtype-bearing expectations) and latency medians
+// unaffected (still PASS, still under the 2x ceiling).
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 37800,
-  w2: 39633,
-  w3: 70775,
-  w4: 37955,
-  w5: 43254,
-  w6: 44448,
-  w7: 37004,
-  w8: 44693,
+  w1: 40219,
+  w2: 42160,
+  w3: 73097,
+  w4: 40374,
+  w5: 45785,
+  w6: 46736,
+  w7: 39300,
+  w8: 47184,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {
