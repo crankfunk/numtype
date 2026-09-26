@@ -1,6 +1,6 @@
 # dt1 — dtype-Kern auf `NDArray` — bindende Spec (Stufe 3b)
 
-**Version:** v2 (2026-09-26) · **Status:** Owner-abgenommen (A1–A3), Baustein 0 gelaufen, drei
+**Version:** v2.1 (2026-09-26, redaktionell nach der Verify-Runde) · **Status:** Owner-abgenommen (A1–A3), Baustein 0 gelaufen, drei
 A-Punkte vom Owner nachentschieden 2026-09-26 → **implementierungsreif**
 
 **Änderungslog v1 → v2 (Baustein 0, Addendum am Ende):** A1 um das Feld `data` ergänzt (Owner);
@@ -44,7 +44,7 @@ verhält sich exakt wie heute. **Keine Veröffentlichung** vor dt5 (Arbeitsregel
 - **K4 Sperren** (O2 a) für alle rechnenden Ops bei D ≠ float64: `add`/`sub`/`mul`/`div`
   (Array- und Skalar-Form), `matmul`, `dot`, `cosineSimilarity`, `sum`, `mean`, `argmax`, `topk`,
   `stack`, `sqrt`, `norm`. Guard-Meldung am Argument, wortgleich zur Laufzeit; Ops ohne
-  Argumentposition (`sqrt`, `norm`, 0-arg `mean`/`argmax`) nur zur Laufzeit (Grenze 2 der
+  Argumentposition (`sqrt`, `norm`, 0-arg `sum`/`mean`/`argmax` — `sum` in v2.1 ergänzt, Baustein C) nur zur Laufzeit (Grenze 2 der
   Ergebnisse — per M2-Erweiterung unten gedeckt).
 - **K5 Defekte aus dem Prototyp:** `AnyNDArray = NDArray<any, any>` (F1); Test mit zwei
   VERSCHIEDENEN Nicht-float64-dtypes an einer gesperrten Zwei-Operanden-Op (F4).
@@ -70,7 +70,8 @@ Konstruktor, `zeros`, `ones`, `fromArray`, `stack`, `add`, `sub`, `mul`, `div`, 
 **A2 — zwei benannte Änderungen an bestehenden Test-Artefakten** (Hausregel (b) verbietet sie
 sonst): (1) der Pin `NDAnyTop` in `spike/tests/ndarray.test-d.ts` weitet sich von `NestedValue` auf
 `NestedValue | NestedBoolValue`, weil `AnyNDArray` jetzt jeden dtype umfasst (zwingende Folge von
-K5); (2) die Hover-Erwartungen des Editor-Messwerkzeugs (K6). Beide ändern keine
+K5); (2) die Hover-Erwartungen des Editor-Messwerkzeugs (K6) samt der daraus folgenden
+Neusetzung seiner Instantiation-Pin-Tabelle in `editor-latency.ts` (v2.1 klargestellt, Baustein A). Beide ändern keine
 Verhaltensaussage über float64-Code.
 
 **A3 — Covenant-Wortlaut** (Version 8):
@@ -138,3 +139,14 @@ A3 (→ nach dt2, Owner); K6 zwei Stellen; Test-/Pin-Anteil der Herleitung nicht
 `data` vollständig (29 Member abgeglichen); NDArray hat keine Views; `backend()`/`strides` sicher;
 Baseline 227,405 und Prototyp-Stand 234,385 exakt reproduziert. **Nebenbefund:** der
 `AnyNDArray`-Fix war im Prototyp nie gebaut — Baustein 0 hat ihn als Erster geprüft.
+
+## Redaktionelle Nachträge v2.1 (Verify-Runde, 2026-09-26)
+
+- K4: 0-arg `sum()` ist wie `mean`/`argmax` nur zur Laufzeit gesperrt (Code und FOLLOWUPS führten
+  es bereits korrekt; nur die Aufzählung fehlte).
+- D3/K2: `fromArray` mit explizitem `{ dtype }` akzeptiert neben `number[]` auch die Typed Arrays als
+  Quelle und konvertiert/prüft sie nach denselben Regeln — getestete Obermenge, kein Widerspruch.
+- A2: die Pin-Tabelle des Editor-Messwerkzeugs ist die zwingende Folge von A2 (2), keine dritte
+  Änderung.
+- Prozess-Lehre: der Budget-Stopp nach Schritt 2 konnte nicht greifen, weil K1–K5 in EINEM Commit
+  entstanden; künftige Specs verlangen den Messpunkt als eigenen Commit VOR dem nächsten Baustein.
