@@ -1654,3 +1654,81 @@ export function elementwiseDivTyped(
   }
   return { shape: outShape, data: out, resultDtype };
 }
+
+// ---------------------------------------------------------------------------
+// dt2, Commit B — P3 (the D6 scalar rule for add/sub/mul) + P4 (bool
+// permanently rejected, both overloads, "use astype()" message). The int32
+// message stem below is kept word-identical (M3) to the compile-time
+// `ArithScalarOperand<D,N,Op>`'s own `ShapeError` text (ndarray.ts) by hand
+// — like dt1's `lockedOpMessage`, it interpolates the actual scalar value,
+// so it cannot be a single shared `const` the way `BOOL_ARITHMETIC_MESSAGE`
+// is; pinned instead by a runtime test reproducing the exact wording
+// (Arbeitsregel 2).
+// ---------------------------------------------------------------------------
+
+/**
+ * D6/D7/D8 (dt2 P3/P4): dtype-aware scalar `add`/`sub`/`mul` —
+ * `x.add(s)`/`x.sub(s)`/`x.mul(s)`. float64/float32 keep D unconditionally
+ * (float32 via `Math.fround` per element, D8); int32 keeps D too (E4) but
+ * ONLY for an integer scalar within int32 range — throws otherwise (D6's
+ * runtime backstop for the cases the compile-time dot-form check can't
+ * prove: a wide `number`, or an exponent-form literal). bool has no scalar
+ * arithmetic at all (D7/P4), throws `BOOL_ARITHMETIC_MESSAGE` unconditionally
+ * — the SAME permanent message the array path's `promoteDType` throws,
+ * replacing dt1's transitional `lockedOpMessage` for this case.
+ */
+export function scalarArithTyped(op: "add" | "sub" | "mul", dtype: DType, data: DataOfRuntime, s: number): DataOfRuntime {
+  if (dtype === "bool") {
+    throw new Error(BOOL_ARITHMETIC_MESSAGE);
+  }
+  if (dtype === "int32") {
+    if (!Number.isInteger(s) || s < -2147483648 || s > 2147483647) {
+      throw new Error(`${op}: int32 scalar ${s} is not a valid integer operand (must be an integer in [-2147483648, 2147483647])`);
+    }
+    const out = new Int32Array(data.length);
+    for (let i = 0; i < data.length; i++) {
+      const x = data[i] ?? 0;
+      out[i] = op === "mul" ? Math.imul(x, s) : op === "add" ? (x + s) | 0 : (x - s) | 0;
+    }
+    return out;
+  }
+  if (dtype === "float32") {
+    const out = new Float32Array(data.length);
+    for (let i = 0; i < data.length; i++) {
+      const x = data[i] ?? 0;
+      const raw = op === "add" ? x + s : op === "sub" ? x - s : x * s;
+      out[i] = Math.fround(raw);
+    }
+    return out;
+  }
+  const out = new Float64Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    const x = data[i] ?? 0;
+    out[i] = op === "add" ? x + s : op === "sub" ? x - s : x * s;
+  }
+  return out;
+}
+
+/**
+ * D5/D7 (dt2 P3/P4): dtype-aware scalar `div` — `x.div(s)`. Unlike
+ * `scalarArithTyped` above, int32 has NO integer-scalar restriction at all
+ * (D5: "div → float64" unconditionally — a fractional scalar is always
+ * meaningful once the result widens to float64): float64 and int32 both
+ * divide in float64. float32 stays float32 (`Math.fround` per element,
+ * D8). bool has no scalar arithmetic at all (D7/P4), throws
+ * `BOOL_ARITHMETIC_MESSAGE` unconditionally, same as the array path's
+ * `promoteDTypeDiv`.
+ */
+export function scalarDivTyped(dtype: DType, data: DataOfRuntime, s: number): DataOfRuntime {
+  if (dtype === "bool") {
+    throw new Error(BOOL_ARITHMETIC_MESSAGE);
+  }
+  if (dtype === "float32") {
+    const out = new Float32Array(data.length);
+    for (let i = 0; i < data.length; i++) out[i] = Math.fround((data[i] ?? 0) / s);
+    return out;
+  }
+  const out = new Float64Array(data.length);
+  for (let i = 0; i < data.length; i++) out[i] = (data[i] ?? 0) / s;
+  return out;
+}

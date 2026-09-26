@@ -51,6 +51,8 @@ import {
   onesData,
   product,
   PROMOTE_NUMERIC,
+  scalarArithTyped,
+  scalarDivTyped,
   scalarElementwiseRuntime,
   sliceDtyped,
   type SliceSpec,
@@ -61,7 +63,7 @@ import {
   transposeDtyped,
   zerosData,
 } from "./runtime.ts";
-import type { LiteralShapeProduct } from "./literal-arithmetic.ts";
+import type { IsDotFormStep, LiteralShapeProduct } from "./literal-arithmetic.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "./slice.ts";
 import type { DotCheck, ItemGuard, StackCheck, StackShape, TopkCheck, TopkShape } from "./vector.ts";
 import { checkThreadedEnv, WasmBackend, type BackendKind, type ThreadedBackendOptions } from "./wasm/backend-api.ts";
@@ -169,6 +171,76 @@ export type PromoteDiv<A extends DType, B extends DType> = IsUnion<A> extends tr
  * union-degraded ACCEPT case — `DType` itself already satisfies `extends
  * DType`). */
 export type OkDType<P> = P extends ShapeError<string> ? never : P extends DType ? P : never;
+
+/** dt2 P3 (D6): does `N`'s own literal template form PROVE it non-integer
+ * via the dot-form pattern (`2.5`, never `2.5e0`)? Built from the exported
+ * `IsDotFormStep` (literal-arithmetic.ts) — no changes to that file (spec
+ * scope: A1 permits only new module-level types here). `false` (no claim)
+ * for a union, an exponent-form literal, or a genuine integer; `true` only
+ * for a literal the checker can PROVE non-integer. Never wrong, only
+ * incomplete (M2): the remaining cases (a wide `number`, an exponent-form
+ * non-integer) are caught by the runtime `Number.isInteger` check instead
+ * (`scalarArithTyped`, D6). */
+type IsProvablyNonIntegerScalar<N extends number> = IsUnion<N> extends true ? false : IsDotFormStep<`${N}`> extends true ? true : false;
+
+/**
+ * dt2 P3/P4 (D6/D7): the scalar-operand guard shared by `add`/`sub`/`mul`'s
+ * scalar overloads — keeps the receiver's own `D` (E4: "Skalare auf int32
+ * bleiben int32"). `bool` rejects unconditionally via the same
+ * `Guard`/`ShapeError` mechanism a shape mismatch uses (D7/P4, the
+ * PERMANENT "use astype()" message, replacing dt1's transitional lock);
+ * `int32` additionally proves a literal dot-form scalar (`2.5`) non-integer
+ * AT the argument (D6); a wide `number`/exponent-form literal/union
+ * degrades to no compile-time claim, backstopped at runtime
+ * (`scalarArithTyped`). Union-gated on `D` FIRST (D4, "Dasselbe Gate gilt
+ * für jede dtype-Funktion"): a union receiver dtype (e.g. `NDArray<S,
+ * DType>`) never gets a compile-time claim either way — the exact pin dt1
+ * already carries for `add` on a union receiver (ndarray.test-d.ts, "must
+ * compile clean"), confirmed to still hold after dt2 (Baustein 0).
+ *
+ * M3 v9 named exception (A3, docs/dtype-dt2-spec.md): a call that DOES fail
+ * here is still a genuine compile error (M2 holds), but real tsc attributes
+ * a total overload-resolution mismatch to the LAST-declared overload (the
+ * array form below) — so the diagnostic TEXT an editor shows is that
+ * overload's generic TS2769, never this type's own `ShapeError` message
+ * (measured, docs/dtype-design-ergebnisse.md "Lösungsversuch
+ * Skalar-Maskierung: NO-GO", reproduced for dt2 in Baustein 0). The runtime
+ * throws the OWN word-identical message regardless (M2). */
+type ArithScalarOperand<D extends DType, N extends number, Op extends string> = IsUnion<D> extends true
+  ? N
+  : D extends "bool"
+    ? Guard<ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>, N>
+    : D extends "int32"
+      ? Guard<
+          IsProvablyNonIntegerScalar<N> extends true
+            ? ShapeError<`${Op}: int32 scalar ${N} is not an integer — int32 arithmetic requires an integer operand`>
+            : true,
+          N
+        >
+      : N;
+
+/** dt2 P3 (D5): `div`'s own scalar-operand guard — `bool` rejects
+ * unconditionally (D7/P4), same mechanism as `ArithScalarOperand` above; NO
+ * int32 integer restriction at all (D5: "div → float64" unconditionally —
+ * unlike add/sub/mul, a fractional scalar is always meaningful once the
+ * result widens to float64). Same union gate on `D` as every other
+ * dtype-checking consumer here (D4). */
+type DivScalarOperand<D extends DType, N extends number> = IsUnion<D> extends true
+  ? N
+  : D extends "bool"
+    ? Guard<ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>, N>
+    : N;
+
+/** dt2 P3 (D5): `div`'s scalar-overload result dtype — independent of the
+ * scalar's own value (NEP 50: scalars are "weak", never affecting the
+ * result dtype). Mirrors `PromoteDiv<D, D>`'s degenerate self-pairing case:
+ * float32 keeps float32 (divided in the receiver's own precision, `fround`
+ * per element); float64 and int32 (which cannot represent a fractional
+ * quotient in general) both widen to float64. Union-gated on `D` like every
+ * other dtype-checking consumer here (D4) — only ever evaluated for the
+ * accepted, non-bool case, since a bool receiver is already rejected by
+ * `DivScalarOperand` above. */
+type DivScalarDType<D extends DType> = IsUnion<D> extends true ? DType : D extends "float32" ? "float32" : "float64";
 
 /**
  * Op-Scheibe W4 (docs/op-w4-stack-spec.md, D2/F1/F2): the `NDArray` ->
@@ -820,27 +892,30 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * test in scalar-mean.test.ts (asserts the broadcast stem in real tsc
    * output — an `@ts-expect-error` alone cannot see message content).
    *
-   * dt2 Commit A (P1/P2, docs/dtype-dt2-spec.md): the ARRAY overload's dtype
-   * check is now `Promote<D, Dd>` (D4/D5) instead of dt1's blanket
+   * dt2 (P1/P2/P3/P4, docs/dtype-dt2-spec.md): the ARRAY overload's dtype
+   * check is `Promote<D, Dd>` (D4/D5) instead of dt1's blanket
    * `DTypeLockPair` — float64/float32/int32 combine per the promotion table
    * (int32⊕int32 wraps two's-complement, a float32⊕float32 result is
    * correctly rounded, D8), bool still rejects unconditionally (D4/D7,
-   * `Promote`'s own `ShapeError` branch). The SCALAR overload is UNCHANGED
-   * in this commit — still locked to `D = "float64"` via `DTypeLock`
-   * (dt2 Commit B adds the D6 scalar rule for float32/int32; the runtime
-   * `assertFloat64Locked` guard accordingly moved from a blanket top-of-body
-   * call to the scalar branch ONLY, since the array branch now legitimately
-   * accepts non-float64 receivers). `<DD extends DType = D>` on the scalar
-   * overload (measured TS 7.0.2 quirk, prototype stage 7, dt1): an overload
-   * signature with NO local type parameter of its own, whose argument type
-   * directly references the ENCLOSING class's `D` inside a `Guard`-wrapped
-   * conditional, fails TS2394 ("not compatible with its implementation
-   * signature") — even though the implementation accepts a strict superset.
-   * Adding a local generic that merely DEFAULTS to `D` (never otherwise
-   * used) resolves it; the array overload already has a local generic (`B`)
-   * for another reason and needs no such workaround (mirrored on `Dd`
-   * below, one more for the argument's own dtype). */
-  add<DD extends DType = D>(s: Guard<DTypeLock<DD, "add">, number>): NDArray<S>;
+   * `Promote`'s own `ShapeError` branch). The SCALAR overload carries D6's
+   * int32 rule (`ArithScalarOperand`, Commit B): float64/float32 accept any
+   * scalar unconditionally (E4, keeping `D`); int32 keeps `D` too but only
+   * for a scalar the checker can PROVE integral by literal form (a
+   * non-integer dot-form literal like `2.5` is a compile error at the
+   * argument; a wide `number`/exponent-form literal falls back to the
+   * runtime `Number.isInteger` check, `scalarArithTyped`); bool rejects
+   * UNCONDITIONALLY (D7/P4) with the same permanent `BOOL_ARITHMETIC_MESSAGE`
+   * the array path throws — replacing dt1's transitional lock message for
+   * this case. `<const N extends number>` on the scalar overload (measured,
+   * prototype stage 4): a local generic capturing the scalar's own literal
+   * type is what `ArithScalarOperand`/`IsProvablyNonIntegerScalar` need to
+   * see the dot-form; it also satisfies the TS2394 workaround dt1's `<DD =
+   * D>` existed for (an overload with NO local type parameter referencing
+   * only the enclosing class's `D` inside a `Guard`-wrapped conditional).
+   * `assertFloat64Locked` is gone from the scalar branch too now (float32/
+   * int32 legitimately compute); only bool still throws, via
+   * `scalarArithTyped` itself. */
+  add<const N extends number>(s: ArithScalarOperand<D, N, "add">): NDArray<S, D>;
   add<B extends Shape, Dd extends DType>(
     other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
   ): NDArray<OkShape<Broadcast<S, B>>, OkDType<Promote<D, Dd>>>;
@@ -848,9 +923,8 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
     other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
   ): NDArray<any, any> {
     if (typeof other === "number") {
-      assertFloat64Locked("add", this.dtype);
-      const data = scalarElementwiseRuntime("add", this.data as unknown as Float64Array, other);
-      return new NDArray<any, any>(this.shape, "float64", data);
+      const data = scalarArithTyped("add", this.dtype, this.data as unknown as DataOfRuntime, other);
+      return new NDArray<any, any>(this.shape, this.dtype, data);
     }
     const o = other as unknown as NDArray<B, Dd>;
     const { shape, data, resultDtype } = elementwiseBinaryTyped(
@@ -877,10 +951,10 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * order (scalar first, generic Guard-carrier last — Verify-B F1), and
    * `NDArray.backend(kind)` precedent as `add` above — see its doc comment.
    *
-   * dt2 Commit A: same mechanism as `add` above — array overload uses
-   * `Promote<D, Dd>`, scalar overload unchanged (still `DTypeLock`-locked to
-   * float64 in this commit). */
-  sub<DD extends DType = D>(s: Guard<DTypeLock<DD, "sub">, number>): NDArray<S>;
+   * dt2: same mechanism as `add` above — array overload uses `Promote<D,
+   * Dd>`, scalar overload carries `ArithScalarOperand` (D6's int32 rule,
+   * bool permanently rejected, P3/P4). */
+  sub<const N extends number>(s: ArithScalarOperand<D, N, "sub">): NDArray<S, D>;
   sub<B extends Shape, Dd extends DType>(
     other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
   ): NDArray<OkShape<Broadcast<S, B>>, OkDType<Promote<D, Dd>>>;
@@ -888,9 +962,8 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
     other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
   ): NDArray<any, any> {
     if (typeof other === "number") {
-      assertFloat64Locked("sub", this.dtype);
-      const data = scalarElementwiseRuntime("sub", this.data as unknown as Float64Array, other);
-      return new NDArray<any, any>(this.shape, "float64", data);
+      const data = scalarArithTyped("sub", this.dtype, this.data as unknown as DataOfRuntime, other);
+      return new NDArray<any, any>(this.shape, this.dtype, data);
     }
     const o = other as unknown as NDArray<B, Dd>;
     const { shape, data, resultDtype } = elementwiseBinaryTyped(
@@ -916,13 +989,14 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * order (scalar first, generic Guard-carrier last — Verify-B F1), and
    * `NDArray.backend(kind)` precedent as `add` above — see its doc comment.
    *
-   * dt2 Commit A: same mechanism as `add` above — array overload uses
-   * `Promote<D, Dd>`; int32⊕int32 wraps EXCLUSIVELY via `Math.imul` (dt2
-   * spec B1/v1.1), never `(a*b)|0` — see `elementwiseBinaryTyped`'s own doc
-   * comment (runtime.ts) for why the naive form silently loses precision
-   * once the product exceeds 2^53. Scalar overload unchanged (still
-   * `DTypeLock`-locked to float64 in this commit). */
-  mul<DD extends DType = D>(s: Guard<DTypeLock<DD, "mul">, number>): NDArray<S>;
+   * dt2: same mechanism as `add` above — array overload uses `Promote<D,
+   * Dd>`; int32⊕int32 wraps EXCLUSIVELY via `Math.imul` (dt2 spec B1/v1.1),
+   * never `(a*b)|0` — see `elementwiseBinaryTyped`'s own doc comment
+   * (runtime.ts) for why the naive form silently loses precision once the
+   * product exceeds 2^53; `scalarArithTyped`'s int32 scalar branch applies
+   * the same `Math.imul` rule. Scalar overload carries `ArithScalarOperand`
+   * (D6's int32 rule, bool permanently rejected, P3/P4). */
+  mul<const N extends number>(s: ArithScalarOperand<D, N, "mul">): NDArray<S, D>;
   mul<B extends Shape, Dd extends DType>(
     other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
   ): NDArray<OkShape<Broadcast<S, B>>, OkDType<Promote<D, Dd>>>;
@@ -930,9 +1004,8 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
     other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
   ): NDArray<any, any> {
     if (typeof other === "number") {
-      assertFloat64Locked("mul", this.dtype);
-      const data = scalarElementwiseRuntime("mul", this.data as unknown as Float64Array, other);
-      return new NDArray<any, any>(this.shape, "float64", data);
+      const data = scalarArithTyped("mul", this.dtype, this.data as unknown as DataOfRuntime, other);
+      return new NDArray<any, any>(this.shape, this.dtype, data);
     }
     const o = other as unknown as NDArray<B, Dd>;
     const { shape, data, resultDtype } = elementwiseBinaryTyped(
@@ -965,15 +1038,17 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * still works (byte-identical to this overload for rank >= 1, D3), just
    * no longer necessary.
    *
-   * dt2 Commit A (P2, D5): the ARRAY overload's dtype check is
-   * `PromoteDiv<D, Dd>` — its OWN table, not `Promote` (div is ALWAYS
-   * floating-point: float32⊕float32 → float32, everything else, INCLUDING
-   * int32⊕int32, → float64 — `Promote` would keep int32⊕int32 as int32).
-   * Scalar overload unchanged in this commit (still `DTypeLock`-locked to
-   * float64; dt2 Commit B gives it `PromoteDiv`'s degenerate self-pairing
-   * rule instead of D6's int32-integer restriction, since div never needs
-   * an integer scalar). */
-  div<DD extends DType = D>(s: Guard<DTypeLock<DD, "div">, number>): NDArray<S>;
+   * dt2 (P2/P3/P4, D5): the ARRAY overload's dtype check is `PromoteDiv<D,
+   * Dd>` — its OWN table, not `Promote` (div is ALWAYS floating-point:
+   * float32⊕float32 → float32, everything else, INCLUDING int32⊕int32, →
+   * float64 — `Promote` would keep int32⊕int32 as int32). The SCALAR
+   * overload uses `DivScalarOperand`/`DivScalarDType` — `PromoteDiv`'s
+   * degenerate self-pairing rule (float32 stays float32, float64/int32 →
+   * float64), with NO int32-integer restriction at all (unlike
+   * add/sub/mul's D6 rule: a fractional scalar is always meaningful once
+   * the result widens to float64). bool rejects UNCONDITIONALLY (D7/P4),
+   * same permanent `BOOL_ARITHMETIC_MESSAGE` as every other op. */
+  div<const N extends number>(s: DivScalarOperand<D, N>): NDArray<S, DivScalarDType<D>>;
   div<B extends Shape, Dd extends DType>(
     other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : PromoteDiv<D, Dd>, NDArray<B, Dd>>,
   ): NDArray<OkShape<Broadcast<S, B>>, OkDType<PromoteDiv<D, Dd>>>;
@@ -981,9 +1056,9 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
     other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : PromoteDiv<D, Dd>, NDArray<B, Dd>>,
   ): NDArray<any, any> {
     if (typeof other === "number") {
-      assertFloat64Locked("div", this.dtype);
-      const data = scalarElementwiseRuntime("div", this.data as unknown as Float64Array, other);
-      return new NDArray<any, any>(this.shape, "float64", data);
+      const data = scalarDivTyped(this.dtype, this.data as unknown as DataOfRuntime, other);
+      const resultDtype: DType = this.dtype === "float32" ? "float32" : "float64";
+      return new NDArray<any, any>(this.shape, resultDtype, data);
     }
     const o = other as unknown as NDArray<B, Dd>;
     const { shape, data, resultDtype } = elementwiseDivTyped(
