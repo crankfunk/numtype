@@ -1,6 +1,7 @@
 # dt2 — Promotion und elementweise Arithmetik — bindende Spec (Stufe 3b)
 
-**Version:** v1 (2026-09-26) · **Status:** Owner-abgenommen 2026-09-26 (A1–A3) → Baustein 0 läuft
+**Version:** v1.1 (2026-09-26) · **Status:** Owner-abgenommen (A1–A3), Baustein 0 gelaufen (kein Blocker,
+A1–A3 bestätigt, zwei Präzisierungen eingearbeitet) → **implementierungsreif**
 **Stufe:** 3b — neue Typ-Maschinerie-Klasse (`Promote`) und Covenant-Änderung (v9).
 **Berührte Invarianten:** M2 (Promotion, Skalar-Regel), M3 (Meldungen, benannte Skalar-Ausnahme),
 M1 (neue kernel-lose Referenzen, Tracking), Z1.
@@ -25,8 +26,12 @@ dt1 gesperrt. Keine Veröffentlichung vor dt5.
 - **P2 Array ⊕ Array** für `add`/`sub`/`mul`: Ergebnis `NDArray<Broadcast<S, B>, Promote<D, Dd>>`;
   `div`: Gleitkomma immer (float32/float32 → float32, sonst float64). Laufzeit (D8): float32 in f64
   rechnen und nach JEDER Operation `Math.fround`; int32 `(a + b) | 0`, `(a - b) | 0`,
-  `Math.imul(a, b)` (Zweierkomplement-Wrap). Neue Referenzfunktionen an `runtime.ts` ANGEHÄNGT; die
-  bestehenden float64-Pfade bleiben byte-gleich und werden für float64 ⊕ float64 weiter benutzt.
+  `Math.imul(a, b)` (Zweierkomplement-Wrap). Neue, dtype-generische Referenzfunktionen an `runtime.ts` ANGEHÄNGT und
+  von den vier Methoden für JEDEN dtype benutzt (Muster dt1 `transposeDtyped`); die bestehenden
+  float64-Funktionen (`elementwiseBinary`, `scalarElementwiseRuntime`) bleiben byte-gleich und dienen
+  als Test-Orakel für float64 ⊕ float64 (v1.1, Baustein 0). **int32-`mul` ausschließlich über
+  `Math.imul`** — `(a * b) | 0` ist falsch, sobald das Produkt 2^53 übersteigt
+  (`2147483647 * 2147483647 | 0` ergibt 0 statt 1); der Prototyp baute nur `add`.
 - **P3 Skalar-Überladungen** (D6): float32/float64 behalten D (Skalar bei float32 per `fround`);
   int32 `add`/`sub`/`mul` behalten int32 — ein Literal mit Punkt (`2.5`) ist ein Compile-Fehler
   (vorhandenes `IsDotFormStep`), ein nicht-ganzzahliger Laufzeitwert wirft mit derselben Meldung;
@@ -36,7 +41,8 @@ dt1 gesperrt. Keine Veröffentlichung vor dt5.
   dauerhaften Meldung „use astype()" statt der dt1-Übergangsmeldung.
 - **P5 Tests und Pins:** Promotionstabelle vollständig (Typ-Pins + Laufzeit, beides gegen die eine
   Quelle), float32 bit-identisch gegen eine unabhängige `Float32Array`-Referenz, int32-Wrap an
-  ±2^31 gegen `BigInt.asIntN(32, …)`, Broadcasting über gemischte dtypes, Union-Gate-Pins
+  ±2^31 gegen `BigInt.asIntN(32, …)` — für `mul` ausdrücklich mit GROSSEN Produkten jenseits 2^53
+  (v1.1), Broadcasting über gemischte dtypes, Union-Gate-Pins
   (`NDArray<S, DType>`, `"bool" | "int32"`), Skalar-Regel an den Rändern (`2.0`, `-0`, `1e3`,
   `2.5`, wide `number`), Diagnose-INHALTE per tsc-Fixture (Arbeitsregel 2), Hovers per LSP
   (Regel 13).
@@ -100,3 +106,18 @@ Baustein 0 vor dem Code, danach A + B + C parallel (A auf deep — der erste sta
 lehnte ab). B bekommt ausdrücklich: Bit-Identität float32/int32 gegen unabhängige Referenzen,
 Union-Gate-Löcher (die Blocker-Klasse aus Baustein 0 der Design-Scheibe), Broadcasting über gemischte
 dtypes, float64-Pfade byte- und bitgleich zu vorher.
+
+## Adversariale Spec-Verifikation (Addendum, Baustein 0, 2026-09-26)
+
+`brainroute:deep`, eigener Worktree am `main`, Entwurf von P1–P4 für alle vier Ops gebaut.
+**Kein Blocker, keine falsche Code-Annahme.** **A2 empirisch vollständig:** test:core 1618 → genau die
+vier benannten Tests rot, kein fünfter; resident/package unberührt; der Union-Pin
+`NDArray<[3], "int32" | "float64">.add(1)` bleibt gültig; bestehende float64-Shape-Meldungen
+byte-gleich. **Entwurfsmessung P1–P4:** 238,067 @ 140 (Δ+969, ohne Tests). **Union-Gate** ohne Loch
+(`DType`, `"bool" | "int32"` mit gültigem und ungültigem Skalar, `"int32" | "float32"`, Literal-Union
+`2 | 2.5`, `AnyNDArray`). **D8 bestätigt:** float32 bit-identisch zur `fround`-Referenz inkl. −0/±Inf;
+int32-Division über float64 ehrlich (`5/0 → Infinity`, `0/0 → NaN`); int32 kennt kein −0 (wie
+NumPy). **A3 gemessen:** `i32.add(2.5)` und `boolArr.add(1)` zeigen im Editor die generische TS2769,
+zur Laufzeit die eigene Meldung; `boolArr.add(i32)` zeigt die eigene. **Präzisierungen:** B1
+int32-`mul` nur über `Math.imul` (große Produkte testen); B2 Formulierung zu den float64-Pfaden.
+Nicht gemessen: LSP-Hovers und bench:editor (Pflicht der Umsetzung).
