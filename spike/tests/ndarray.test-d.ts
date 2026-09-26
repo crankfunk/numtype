@@ -1725,6 +1725,16 @@ type PROMOTE_UNION_RIGHT = Expect<Equal<Promote<"int32", "bool" | "int32">, DTyp
 type PROMOTE_UNION_BOTH = Expect<Equal<Promote<DType, DType>, DType>>;
 type PROMOTEDIV_UNION_LEFT = Expect<Equal<PromoteDiv<"bool" | "int32", "int32">, DType>>;
 type PROMOTEDIV_UNION_WIDE = Expect<Equal<PromoteDiv<DType, "float32">, DType>>;
+// G2 fix (post-verify coverage gap): both existing PromoteDiv union pins
+// above put the union on the LEFT (A) operand only (`"bool" | "int32"` or
+// the wide `DType` as A, always a concrete "float32"/"int32" as B) — unlike
+// `Promote`, which has both `PROMOTE_UNION_LEFT` AND `PROMOTE_UNION_RIGHT`.
+// A mutant deleting PromoteDiv's `IsUnion<B> extends true ? DType :` branch
+// (the ARGUMENT side) left `pnpm check` green with only the two pins above
+// — a real, provable M2 hole (a union ARGUMENT dtype could silently drop a
+// bool member the same way the Baustein-0 Blocker F4 class did for
+// `Promote`). Mirrors `PROMOTE_UNION_RIGHT` exactly, union on B this time.
+type PROMOTEDIV_UNION_RIGHT = Expect<Equal<PromoteDiv<"int32", "bool" | "int32">, DType>>;
 
 // OkDType<P>: strips the ShapeError branch down to a real DType, the
 // union-degraded ACCEPT case included (never collapses to `never`).
@@ -1760,6 +1770,12 @@ type DIV_F32_F32_DTYPE = Expect<Equal<typeof divF32F32.dtype, "float32">>;
 declare const dtUnionArg: NDArray<[3], "bool" | "int32">;
 const addUnionArg = dtF64.add(dtUnionArg);
 type ADD_UNION_ARG_DTYPE = Expect<Equal<typeof addUnionArg.dtype, DType>>;
+
+// G2 fix: the method-level companion to PROMOTEDIV_UNION_RIGHT above — a
+// union dtype ARGUMENT on `div`'s array overload (PromoteDiv's own table,
+// not Promote's) must also degrade to no-claim, never a false accept.
+const divUnionArg = dtF64.div(dtUnionArg);
+type DIV_UNION_ARG_DTYPE = Expect<Equal<typeof divUnionArg.dtype, DType>>;
 
 // A CONCRETE bool argument/receiver is still rejected (P4, permanent).
 // @ts-expect-error - bool has no arithmetic (array form, argument)
