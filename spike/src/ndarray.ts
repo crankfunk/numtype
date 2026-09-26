@@ -50,6 +50,7 @@ import {
   type NumericDType,
   onesData,
   product,
+  PROMOTE_DIV,
   PROMOTE_NUMERIC,
   scalarArithTyped,
   scalarDivTyped,
@@ -222,15 +223,24 @@ export type Promote<A extends DType, B extends DType> = IsAnyDType<A> extends tr
  *
  * dt2 Commit D (G1 fix): also `IsAnyDType`-gated first, BEFORE the union
  * gate, same as `Promote` above — see that gate's doc comment for the full
- * mechanism. Empirically (reveal probe), THIS type's current hand-written
- * nested-ternary leaf does not itself collapse to `any` the way `Promote`'s
- * indexed-access leaf does (no object-indexed-by-`any` step here yet), so
- * `div`'s array/scalar overloads were never actually hit by the G1
- * regression — but Commit E (G3) rewrites this leaf to read the new
- * `PROMOTE_DIV` table via the SAME indexed-access shape `Promote` uses (one
- * source, M2), which WOULD reintroduce the exact hole without this gate.
- * Added defensively alongside `Promote`'s fix rather than only after
- * Commit E, so the gate is never contingent on leaf-shape details. */
+ * mechanism. At the time of the G1 fix, this type's leaf was still a
+ * hand-written nested ternary (not an indexed-access expression), so `div`'s
+ * array/scalar overloads were never actually hit by the G1 regression
+ * (verified empirically, reveal probe) — but the gate was added defensively
+ * ahead of Commit E below anyway, so it is never contingent on leaf shape.
+ *
+ * dt2 Commit E (G3 fix, post-3b-verify M2 "single source" gap): the leaf
+ * below now reads `PROMOTE_DIV` (runtime.ts) via `typeof`, the exact same
+ * indexed-access shape `Promote` above uses for `PROMOTE_NUMERIC` — before
+ * this fix, this type was a hand-written nested ternary and the runtime's
+ * `promoteDTypeDiv` was a SEPARATELY hand-written boolean expression, two
+ * independent encodings of the same D5 rule with no shared source (unlike
+ * `Promote`/`promoteDType`, which already read `PROMOTE_NUMERIC` from one
+ * place). This is EXACTLY the leaf shape the G1 fix's own doc comment
+ * warned would reintroduce the `any`-collapses-to-`any` hole without the
+ * `IsAnyDType` gate above — confirmed still gated correctly (re-run reveal
+ * probe + the `AnyNDArray.div(...)` pins, same session, after this
+ * rewrite). */
 export type PromoteDiv<A extends DType, B extends DType> = IsAnyDType<A> extends true
   ? DType
   : IsAnyDType<B> extends true
@@ -243,11 +253,7 @@ export type PromoteDiv<A extends DType, B extends DType> = IsAnyDType<A> extends
           ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
           : B extends "bool"
             ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
-            : A extends "float32"
-              ? B extends "float32"
-                ? "float32"
-                : "float64"
-              : "float64";
+            : (typeof PROMOTE_DIV)[A & NumericDType][B & NumericDType];
 
 /** Mirrors `OkShape` above, for a `Promote`/`PromoteDiv` result: strips the
  * `ShapeError` branch down to a real `DType` (never `never` for the

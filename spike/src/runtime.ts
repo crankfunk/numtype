@@ -1510,6 +1510,26 @@ export const PROMOTE_NUMERIC = {
 } as const;
 
 /**
+ * dt2 Commit E (G3 fix, post-3b-verify): the single source of truth for
+ * `div`'s OWN promotion rule — ALWAYS floating-point, `float32⊕float32` the
+ * ONLY cell that stays float32 (D5), every other cell (including
+ * `int32⊕int32`, which `PROMOTE_NUMERIC` keeps int32) widening to float64.
+ * Before this fix, `PromoteDiv<A,B>` (ndarray.ts, the TYPE level) was a
+ * hand-written nested-ternary and `promoteDTypeDiv` below (the RUNTIME
+ * level) was a SEPARATE hand-written boolean expression — two independent
+ * encodings of the same rule, never verified to agree by construction (M2
+ * "single source", the same discipline `PROMOTE_NUMERIC`/`promoteDType`
+ * already followed for `add`/`sub`/`mul`, `div` never got). Both now read
+ * THIS table: `promoteDTypeDiv` directly, `PromoteDiv` via `typeof` (mirrors
+ * `Promote`'s own `(typeof PROMOTE_NUMERIC)[...][...]` leaf exactly) — so
+ * type and runtime cannot drift apart the way they could before. */
+export const PROMOTE_DIV = {
+  float64: { float64: "float64", float32: "float64", int32: "float64" },
+  float32: { float64: "float64", float32: "float32", int32: "float64" },
+  int32: { float64: "float64", float32: "float64", int32: "float64" },
+} as const;
+
+/**
  * D4 (dt2 P1): runtime dtype promotion for `add`/`sub`/`mul`. Throws
  * `BOOL_ARITHMETIC_MESSAGE` (word-for-word matching the compile-time
  * `Promote<A,B>` rejection, M3) when EITHER operand is `bool` — bool has no
@@ -1530,12 +1550,18 @@ export function promoteDType(a: DType, b: DType): NumericDType {
  * int32): float32⊕float32 → float32, every other combination (including
  * int32⊕int32) → float64. Throws `BOOL_ARITHMETIC_MESSAGE` when either
  * operand is bool, same as `promoteDType`.
+ *
+ * dt2 Commit E (G3 fix): now looks up `PROMOTE_DIV` directly, the single
+ * source the compile-time `PromoteDiv<A,B>` reads too (was a hand-written
+ * `a === "float32" && b === "float32" ? "float32" : "float64"` boolean
+ * expression before this fix — behaviorally identical, but a second,
+ * independent encoding of the same rule rather than a shared source).
  */
 export function promoteDTypeDiv(a: DType, b: DType): "float32" | "float64" {
   if (a === "bool" || b === "bool") {
     throw new Error(BOOL_ARITHMETIC_MESSAGE);
   }
-  return a === "float32" && b === "float32" ? "float32" : "float64";
+  return PROMOTE_DIV[a as NumericDType][b as NumericDType];
 }
 
 /**
