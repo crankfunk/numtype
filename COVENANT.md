@@ -1,5 +1,5 @@
 # Covenant — NumType
-<!-- covenant:version 7 -->
+<!-- covenant:version 8 -->
 
 ## Invarianten
 
@@ -50,7 +50,13 @@
   Compiler-Grenze, keine Aussage der Guard-Maschinerie (gemessen, Scale-Probe: Rang 768 und
   896 passieren, Rang 1024 bricht mit TS2589 auf GÜLTIGEM Code ab). Praktisch irrelevant für
   reale Arrays, aber die publizierte „never wrong"-Aussage benennt ihren Bereich ehrlich.
-  Anker: `spike/src/dim.ts`, `spike/src/literal-arithmetic.ts`, `sym:Guard`, `sym:OkShape`
+  · **Präzisierung v8 — dtype-Maschinerie (Owner-entschieden 2026-09-26):** M2 gilt auch für die
+  dtype-Maschinerie (die dtype-Sperren, die Laufzeit-Tabellen in `runtime.ts`): Ablehnung nur für
+  garantierte Laufzeit-Throws; Union- und breite dtypes degradieren zu `DType` (kein Anspruch).
+  Übergangsweise nur zur Laufzeit gesperrte Ops ohne Argumentposition gelten als „unvollständig,
+  nicht falsch", solange die Laufzeit-Meldung wortgleich zur Sperrmeldung ist und die Sperre in
+  FOLLOWUPS getrackt wird.
+  Anker: `spike/src/dim.ts`, `spike/src/literal-arithmetic.ts`, `sym:Guard`, `sym:OkShape`, `sym:DTypeLock`
   · GESCHLOSSEN in Item 11 / S1 (2026-07-17): der `Literal|undefined`-Verstoß durch OPTIONALE
   Parameter (`sum`s `axis`/`keepdims`) ist behoben. Der `sum`-Overload-Umbau (Overloads nach
   Argument-Anzahl 0/1/2 — keine optionalen Parameter mehr in der Mehr-Argument-Form — plus
@@ -96,6 +102,15 @@
   rekursive Name erscheint und sonst aufgelöste Typen. (Präzedenzfall 0b: `NestedValue =
   number | NestedValue[]` als Rückgabetyp von `toNestedArray()` bei statisch unbestimmtem Rang;
   bei bekanntem Rang hovert dieselbe Methode aufgelöst, z. B. `number[][]`.)
+  · **Präzisierung v8 — dtype im Klassen-Hover (Owner-entschieden 2026-09-26):** Klassen mit
+  dtype-Parameter zeigen im Hover die aufgelöste Shape als Tupel UND den dtype als String-Literal
+  (`NDArray<[2, 3], "float64">`), auch wenn er dem Default entspricht (TypeScript blendet
+  Default-Typargumente nicht aus — gemessen). Klassen ohne dtype-Parameter (derzeit `WNDArray`)
+  bleiben bei `WNDArray<[2, 3]>`.
+  · **Präzisierung v8 — befristete Ausnahme `stack` (Owner-entschieden 2026-09-26):** lehnt
+  `stack` eine Zeile wegen ihres dtypes ab, zeigt der Editor bis zur Scheibe dt5 die native
+  TS-Strukturmeldung statt einer eigenen; die Laufzeit wirft die eigene Sperrmeldung. Entfällt mit
+  dt5 (dann trägt `stack` jeden dtype). Im Quelltext an `stack` dokumentiert.
   Anker: `sym:Guard`, `sym:ShowShape`
 - **M4** · Frozen Baseline: v1-Kerne/-Einstiegspunkte bleiben byte-unberührt; der bindende
   Freeze-Beweis ist der Artefakt-Hash aus einem Clean-Rebuild; abi.rs/matmul_blocked.rs/shape.rs
@@ -154,6 +169,15 @@
 - Keine transzendenten Ops ohne eigene Determinismus-Entscheidung (brechen Bit-Parität).
 
 ## Änderungslog
+- v8 (2026-09-26) · **Einführung der dtypes (Scheibe dt1, docs/dtype-dt1-spec.md v2).** M3:
+  Klassen-Hover zeigen den dtype mit (TS blendet Default-Typargumente nicht aus — zwei Varianten
+  per LSP gemessen); befristete Ausnahme für die native Meldung von `stack` bis dt5. M2: die
+  dtype-Maschinerie fällt unter dieselbe Norm, neuer Anker `sym:DTypeLock`; nur zur Laufzeit
+  gesperrte Ops ohne Argumentposition gelten übergangsweise als unvollständig, nicht falsch
+  (Bedingung: wortgleiche Meldung, FOLLOWUPS-Eintrag). Wortlaut vom Owner abgenommen
+  2026-09-26; eine Abweichung offengelegt: im M2-Satz entfällt die Nennung von `Promote`, weil der
+  Owner am selben Tag entschied, alle dt2-Inhalte (Promotion, Skalar-Ausnahme, Anker
+  `sym:Promote`) in die dt2-Änderung zu verschieben. Norm-Absicht von M2/M3 unverändert.
 - v7 (2026-09-24) · **M3: rekursive Aliase in Rückgabe-Position präzisiert.** Anlass:
   `covenant-verify`-Befund (Baustein C) der Scheibe 0b (typisiertes `toNestedArray`): bei
   statisch unbestimmtem Rang hovert der Rückgabetyp als `NestedValue` — wörtlich ein
