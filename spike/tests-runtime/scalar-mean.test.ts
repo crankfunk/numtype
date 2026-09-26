@@ -501,7 +501,7 @@ test("non-vacuity: nextF64Special/genDataSpecial with high specialProb reliably 
 // a throwaway fixture (OUTSIDE the repo, so the deliberately-broken code
 // never joins any type corpus) and asserts the message CONTENT.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1154,7 +1154,19 @@ test("item(): sliced receiver — item reads into the freshly-copied slice buffe
 // FOLLOWUPS). Appended at the end of this file.
 // =============================================================================
 import { type AnyNDArray, type NestedBoolValue, type NestedValue } from "../src/ndarray.ts";
-import { lockedOpMessage, normalizeSliceSpecs, sliceDtyped, transposeDtyped, type DType } from "../src/runtime.ts";
+import {
+  astypeConvert,
+  convertToDType,
+  lockedOpMessage,
+  normalizeSliceSpecs,
+  onesData,
+  sameKindArray,
+  sliceDtyped,
+  transposeDtyped,
+  type DType,
+  zerosData,
+} from "../src/runtime.ts";
+import { copySameKindArray } from "../src/ndarray.ts";
 import { naturalStrides } from "./assert-helpers.ts";
 
 const DTYPES: readonly DType[] = ["float64", "float32", "int32", "bool"];
@@ -1475,6 +1487,243 @@ test("a locked two-operand op with TWO DIFFERENT non-float64 dtypes rejects on t
     () => boolArr.add(i32 as unknown as Parameters<typeof boolArr.add>[0]),
     lockedMsgRegex("add", "bool"),
     "bool receiver + int32 argument must reject on bool first",
+  );
+});
+
+// --- Section dt1.6 (F2 post-review fix): DTypeLockPair receiver-first order,
+// proved at COMPILE TIME, not just at runtime ---------------------------------
+//
+// The test above ("a locked two-operand op with TWO DIFFERENT non-float64
+// dtypes...") only proves `DTypeLockPair`'s receiver-first ordering at the
+// RUNTIME boundary (`assertFloat64Locked`/`lockedOpMessage`, called from
+// inside `add`'s implementation). It says nothing about the COMPILE-TIME
+// half — `DTypeLockPair<D, Dd, Op>` in ndarray.ts, which decides which
+// operand's dtype the type-level `DTypeLock` message NAMES. That half had NO
+// test at all: swapping `DTypeLockPair`'s two branches (receiver-checked-
+// first becomes argument-checked-first, or vice versa) leaves every existing
+// test green — `f64.add(int32Arg)` and `int32Receiver.add(f64Arg)` BOTH still
+// produce *a* diagnostic either way (an `@ts-expect-error` pin, if one
+// existed, would only assert "some error here"), so nothing in the suite
+// previously distinguished the correct branch order from the swapped one.
+// Verified empirically THIS session (dt1 post-review, not asserted by any
+// automated test): swapping the two `DTypeLock<Dd, Op> : DTypeLock<D, Op>`
+// arms in `DTypeLockPair` (ndarray.ts) makes BOTH probe calls below compile
+// with ZERO errors (`tsc --noEmit` exits 0) — a silently wrong "not
+// implemented" claim in the OPPOSITE direction from the one M2 demands, and
+// no green test would have caught it. This test follows the SAME real-
+// compiler-on-a-throwaway-fixture pattern as the "diagnostic quality (F1
+// pin)" test above (spawnSync tsc against an out-of-repo dir, so the
+// deliberately non-float64 fixture code never joins any type corpus), and
+// additionally asserts CROSS-LAYER PARITY: the compile-time message text
+// must equal `lockedOpMessage(op, dtype)` — the exact same function the
+// runtime tests above import from runtime.ts — never a hand-typed
+// duplicate, for `add` (array + scalar form), `matmul`, and `sum(0)`.
+test("DTypeLockPair (F2 pin): receiver-first ordering is provable at COMPILE TIME, and matches lockedOpMessage exactly (add/matmul/sum cross-layer parity)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "numtype-dtypelockpair-pin-"));
+  try {
+    const ndarrayPath = fileURLToPath(new URL("../src/ndarray.ts", import.meta.url).href);
+    const ambientPath = fileURLToPath(new URL("../src/ambient.d.ts", import.meta.url).href);
+    const repoRoot = fileURLToPath(new URL("../..", import.meta.url).href);
+    writeFileSync(
+      join(dir, "probe.ts"),
+      `import { NDArray } from ${JSON.stringify(ndarrayPath)};\n` +
+        // Case 1: receiver float64, argument int32 -> message must name the
+        // ARGUMENT's dtype (int32) — DTypeLockPair checks the receiver
+        // first, sees float64, defers to DTypeLock<Dd, Op>.
+        `const f64Recv = NDArray.fromArray([2], [1, 2]);\n` +
+        `const i32Arg = NDArray.fromArray([2], [1, 0], { dtype: "int32" });\n` +
+        `f64Recv.add(i32Arg); // must name int32 (the ARGUMENT)\n` +
+        // Case 2: receiver int32, argument float64 -> message must name the
+        // RECEIVER's dtype (int32) — the exact swap-sensitive case: with the
+        // branches flipped, this call wrongly compiles clean instead.
+        `const i32Recv = NDArray.fromArray([2], [1, 0], { dtype: "int32" });\n` +
+        `const f64Arg = NDArray.fromArray([2], [1, 2]);\n` +
+        `i32Recv.add(f64Arg); // must name int32 (the RECEIVER)\n` +
+        // Scalar form on a locked (int32) receiver — same DTypeLock, no Dd.
+        `i32Recv.add(1); // scalar overload on a locked receiver\n` +
+        // matmul: same DTypeLockPair, receiver float64 / argument int32.
+        `const f64Mat = NDArray.fromArray([2, 2], [1, 2, 3, 4]);\n` +
+        `const i32Mat = NDArray.fromArray([2, 2], [1, 0, 0, 1], { dtype: "int32" });\n` +
+        `f64Mat.matmul(i32Mat); // must name int32 (the ARGUMENT)\n` +
+        // sum(0): single-operand DTypeLock (no pair), locked receiver.
+        `const i32Sum = NDArray.fromArray([2, 2], [1, 0, 0, 1], { dtype: "int32" });\n` +
+        `i32Sum.sum(0); // must name int32 (the RECEIVER)\n`,
+    );
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "bundler",
+          noEmit: true,
+          allowImportingTsExtensions: true,
+          skipLibCheck: true,
+          noUncheckedIndexedAccess: true,
+          exactOptionalPropertyTypes: true,
+        },
+        include: ["probe.ts", ambientPath],
+      }),
+    );
+    const res = spawnSync("pnpm", ["exec", "tsc", "--noEmit", "-p", dir], { cwd: repoRoot, encoding: "utf8" });
+    const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
+    assert.notStrictEqual(res.status, 0, `fixture must fail to compile (every locked call is a genuine dtype mismatch):\n${out}`);
+
+    const probeErrors = out.split("\n").filter((l) => l.includes("probe.ts(") && l.includes("error TS"));
+    assert.strictEqual(probeErrors.length, 5, `expected exactly FIVE fixture errors, one per locked call:\n${out}`);
+
+    // Cross-layer parity: the compile-time message text must equal
+    // lockedOpMessage(op, dtype) verbatim — imported from runtime.ts, never
+    // re-derived by hand, so this can never silently drift (same discipline
+    // as lockedMsgRegex above). tsc prints the message as the CONTENT of a
+    // quoted string-literal type, so its own embedded `"` chars come out
+    // backslash-escaped (`\"float64\"` instead of `"float64"`); comparing
+    // through `JSON.stringify(...).slice(1, -1)` reproduces that exact
+    // escaping instead of hand-duplicating it.
+    const escaped = (op: string, dtype: DType) => JSON.stringify(lockedOpMessage(op, dtype)).slice(1, -1);
+    assert.ok(
+      out.includes(escaped("add", "int32")),
+      `f64Recv.add(i32Arg) must surface lockedOpMessage("add", "int32") verbatim (argument's dtype, receiver is float64):\n${out}`,
+    );
+    // Both add() cases (array-form case 2, and the scalar-form case) name
+    // int32 via the SAME message text; distinguishing which occurrence is
+    // which is exactly what the swapped-branch mutant breaks (both would
+    // otherwise vanish instead), so the mutant proof below is the real
+    // discriminator — the string-parity check here proves the TEXT is
+    // right, not yet that the ORDER is right.
+    assert.ok(
+      out.includes(escaped("matmul", "int32")),
+      `f64Mat.matmul(i32Mat) must surface lockedOpMessage("matmul", "int32") verbatim:\n${out}`,
+    );
+    assert.ok(out.includes(escaped("sum", "int32")), `i32Sum.sum(0) must surface lockedOpMessage("sum", "int32") verbatim:\n${out}`);
+
+    // --- Non-vacuity (F2 mandate): the swapped-branch mutant must make this
+    // very fixture compile CLEAN. The mutated source is written as a SIBLING
+    // of the real ndarray.ts (inside spike/src/, deleted in `finally`
+    // no matter what) rather than into an isolated tmp dir — ndarray.ts
+    // imports several relative siblings (runtime.ts, broadcast.ts, vector.ts,
+    // …), so a standalone copy elsewhere would fail to resolve those and
+    // produce unrelated compile errors instead of proving anything about
+    // `DTypeLockPair`. This file is NEVER part of any include/tsconfig glob
+    // in the repo (nothing but this throwaway fixture ever imports it), and
+    // is removed immediately after the mutant compile runs.
+    const mutantNdarrayPath = fileURLToPath(new URL("../src/__dtypelockpair-mutant-f2-tmp.ts", import.meta.url));
+    const mutantDir = mkdtempSync(join(tmpdir(), "numtype-dtypelockpair-mutant-"));
+    try {
+      const originalSource = readFileSync(ndarrayPath, "utf8");
+      const marker = `type DTypeLockPair<D extends DType, Dd extends DType, Op extends string> = D extends "float64" ? DTypeLock<Dd, Op> : DTypeLock<D, Op>;`;
+      const mutantLine = `type DTypeLockPair<D extends DType, Dd extends DType, Op extends string> = D extends "float64" ? DTypeLock<D, Op> : DTypeLock<Dd, Op>;`;
+      assert.ok(originalSource.includes(marker), "DTypeLockPair's declaration text must match the expected pre-mutant form (source drifted?)");
+      writeFileSync(mutantNdarrayPath, originalSource.replace(marker, mutantLine));
+      writeFileSync(
+        join(mutantDir, "probe.ts"),
+        `import { NDArray } from ${JSON.stringify(mutantNdarrayPath)};\n` +
+          `const f64Recv = NDArray.fromArray([2], [1, 2]);\n` +
+          `const i32Arg = NDArray.fromArray([2], [1, 0], { dtype: "int32" });\n` +
+          `f64Recv.add(i32Arg);\n` +
+          `const i32Recv = NDArray.fromArray([2], [1, 0], { dtype: "int32" });\n` +
+          `const f64Arg = NDArray.fromArray([2], [1, 2]);\n` +
+          `i32Recv.add(f64Arg);\n`,
+      );
+      writeFileSync(
+        join(mutantDir, "tsconfig.json"),
+        JSON.stringify({
+          compilerOptions: {
+            strict: true,
+            target: "ES2022",
+            module: "ESNext",
+            moduleResolution: "bundler",
+            noEmit: true,
+            allowImportingTsExtensions: true,
+            skipLibCheck: true,
+            noUncheckedIndexedAccess: true,
+            exactOptionalPropertyTypes: true,
+          },
+          include: ["probe.ts", ambientPath],
+        }),
+      );
+      const mutantRes = spawnSync("pnpm", ["exec", "tsc", "--noEmit", "-p", mutantDir], { cwd: repoRoot, encoding: "utf8" });
+      const mutantOut = `${mutantRes.stdout ?? ""}\n${mutantRes.stderr ?? ""}`;
+      assert.strictEqual(
+        mutantRes.status,
+        0,
+        `non-vacuity check: the branch-swapped DTypeLockPair mutant must make BOTH mismatched-dtype add() calls compile CLEAN (proving the real, unmutated DTypeLockPair is what rejects them, not something else):\n${mutantOut}`,
+      );
+    } finally {
+      rmSync(mutantDir, { recursive: true, force: true });
+      rmSync(mutantNdarrayPath, { force: true });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- Section dt1.7 (F1 post-review fix): every DType switch is exhaustive,
+// and never silently mislabels an unrecognized value as float64 -------------
+//
+// Before this fix, `zerosData`/`onesData`/`convertToDType`/`astypeConvert`
+// were `switch (dtype)` statements over the closed `DType` union with NO
+// `default` arm — an invalid dtype string smuggled in past the type layer
+// (e.g. `"invalid" as DType`, or a value read from JSON/an external
+// boundary) fell through with no return value, so `data` silently became
+// `undefined` instead of throwing (an M2 violation: confidently wrong,
+// not an honest failure). Likewise `sameKindArray`/`copySameKindArray`
+// (K3's typed-array-preserving helpers for transpose/slice/reshape/flatten)
+// used to fall back to `new Float64Array(...)` for ANY unrecognized backing
+// store instead of throwing — silently mislabeling e.g. a foreign typed
+// array as float64 data.
+
+test("zerosData/onesData/convertToDType/astypeConvert: throw a clear message naming the invalid dtype, never return undefined data", () => {
+  const bad = "invalid" as unknown as DType;
+  assert.throws(() => zerosData(bad, 3), /zerosData: invalid dtype "invalid"/, "zerosData must throw, not silently return undefined data");
+  assert.throws(() => onesData(bad, 3), /onesData: invalid dtype "invalid"/, "onesData must throw, not silently return undefined data");
+  assert.throws(
+    () => convertToDType(bad, [1, 2, 3]),
+    /convertToDType: invalid dtype "invalid"/,
+    "convertToDType must throw, not silently return undefined data",
+  );
+  assert.throws(
+    () => astypeConvert(bad, new Float64Array([1, 2, 3])),
+    /astypeConvert: invalid dtype "invalid"/,
+    "astypeConvert must throw, not silently return undefined data",
+  );
+});
+
+test("sameKindArray/copySameKindArray: allocate/copy the correct typed-array class for every real DType, and throw (never fall back to Float64Array) for an unrecognized input", () => {
+  // Positive cases: every real DType's backing store round-trips through
+  // its OWN class, including float64 itself (the pre-fix code path for
+  // float64 relied on the same silent "everything unmatched is float64"
+  // fallback branch this fix removes — this proves float64 is still
+  // handled correctly by its own explicit check, not by accident).
+  const f64 = new Float64Array([1, 2, 3]);
+  const f32 = new Float32Array([1, 2, 3]);
+  const i32 = new Int32Array([1, 2, 3]);
+  const b8 = new Uint8Array([1, 0, 1]);
+  assert.ok(sameKindArray(f64, 3) instanceof Float64Array, "sameKindArray(float64) allocates Float64Array");
+  assert.ok(sameKindArray(f32, 3) instanceof Float32Array, "sameKindArray(float32) allocates Float32Array");
+  assert.ok(sameKindArray(i32, 3) instanceof Int32Array, "sameKindArray(int32) allocates Int32Array");
+  assert.ok(sameKindArray(b8, 3) instanceof Uint8Array, "sameKindArray(bool) allocates Uint8Array");
+  assert.ok(copySameKindArray(f64) instanceof Float64Array, "copySameKindArray(float64) copies into Float64Array");
+  assert.ok(copySameKindArray(f32) instanceof Float32Array, "copySameKindArray(float32) copies into Float32Array");
+  assert.ok(copySameKindArray(i32) instanceof Int32Array, "copySameKindArray(int32) copies into Int32Array");
+  assert.ok(copySameKindArray(b8) instanceof Uint8Array, "copySameKindArray(bool) copies into Uint8Array");
+  assert.deepStrictEqual([...(copySameKindArray(i32) as Int32Array)], [1, 2, 3], "copySameKindArray must copy values, not just class");
+  assert.notStrictEqual(copySameKindArray(i32), i32, "copySameKindArray must never alias the source buffer");
+
+  // Negative case: an unrecognized typed array (bypassing the type layer,
+  // e.g. a BigInt64Array — never a legal DataOfRuntime) must THROW, not
+  // silently fall back to allocating/copying as Float64Array.
+  const foreign = new BigInt64Array([1n, 2n, 3n]) as unknown as ReturnType<typeof zerosData>;
+  assert.throws(
+    () => sameKindArray(foreign, 3),
+    /sameKindArray: unrecognized typed array/,
+    "sameKindArray must throw for an unrecognized backing store, never silently allocate Float64Array",
+  );
+  assert.throws(
+    () => copySameKindArray(foreign),
+    /copySameKindArray: unrecognized typed array/,
+    "copySameKindArray must throw for an unrecognized backing store, never silently copy as Float64Array",
   );
 });
 
