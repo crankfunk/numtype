@@ -1983,6 +1983,36 @@ test("add (int32 scalar): D6 edge values — 2.0/-0/1e3 compute correctly (dot-f
   );
 });
 
+// G5 fix (post-verify coverage gap): the test above proves the range check
+// exists (via a value far outside int32, 3000000000) but never pins the
+// EXACT boundary -- a ±1 mutant on either bound comparison in
+// `scalarArithTyped` (`s < -2147483648` / `s > 2147483647`) survived
+// `pnpm check`/`test:core` with no test failing (verified this session by
+// re-applying the mutant, backup copy + diff proof). This test closes that
+// gap: both edges (INT32_MIN/INT32_MAX) must be ACCEPTED, and one step past
+// either edge must be REJECTED.
+test("G5 parity pin: int32 scalar range boundary is EXACTLY [-2147483648, 2147483647] — both edges accepted, one step past either edge rejected", () => {
+  const i32 = NDArray.fromArray([1], [0], { dtype: "int32" });
+
+  // In-range boundary values themselves: must compute (D6's range check is
+  // inclusive on both ends).
+  assert.deepStrictEqual([...i32.add(2147483647).data], [2147483647], "INT32_MAX (2147483647) must be accepted as a valid int32 scalar");
+  assert.deepStrictEqual([...i32.add(-2147483648).data], [-2147483648], "INT32_MIN (-2147483648) must be accepted as a valid int32 scalar");
+
+  // One step past either edge: must reject, with the exact G4-fixed message
+  // (word-identical to the type level, pinned separately above).
+  assert.throws(
+    () => i32.add(2147483648),
+    /add: int32 scalar 2147483648 is not a valid integer operand \(must be an integer in \[-2147483648, 2147483647\]\)/,
+    "2147483648 (INT32_MAX + 1) must be rejected -- a `s > 2147483647` -> `s >= 2147483647` mutant would silently accept this",
+  );
+  assert.throws(
+    () => i32.add(-2147483649),
+    /add: int32 scalar -2147483649 is not a valid integer operand \(must be an integer in \[-2147483648, 2147483647\]\)/,
+    "-2147483649 (INT32_MIN - 1) must be rejected -- a `s < -2147483648` -> `s <= -2147483648` mutant would silently accept this",
+  );
+});
+
 test("div (int32 scalar): NO integer restriction at all — a fractional scalar computes, widening to float64 (D5, unlike add/sub/mul's D6 rule)", () => {
   const i32 = NDArray.fromArray([2], [10, 20], { dtype: "int32" });
   const r = i32.div(2.5);
