@@ -198,11 +198,16 @@ type DTypeLockPair<D extends DType, Dd extends DType, Op extends string> = D ext
  * Deliberately kept INLINE in this file (not appended to `runtime.ts`,
  * spec K3(b)): it needs no `Guard`/type-level machinery, only an
  * `instanceof` dispatch over the four typed-array kinds. */
-function copySameKindArray(data: DataOfRuntime): DataOfRuntime {
+export function copySameKindArray(data: DataOfRuntime): DataOfRuntime {
+  if (data instanceof Float64Array) return new Float64Array(data);
   if (data instanceof Float32Array) return new Float32Array(data);
   if (data instanceof Int32Array) return new Int32Array(data);
   if (data instanceof Uint8Array) return new Uint8Array(data);
-  return new Float64Array(data);
+  // F1 fix (dt1 post-review): same reasoning as runtime.ts's `sameKindArray`
+  // — the pre-fix `return new Float64Array(data)` fallback silently
+  // mislabeled any unrecognized backing store as float64 (M2 violation)
+  // instead of surfacing the impossible state.
+  throw new Error(`copySameKindArray: unrecognized typed array (not Float64Array | Float32Array | Int32Array | Uint8Array)`);
 }
 
 /**

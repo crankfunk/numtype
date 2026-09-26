@@ -1189,6 +1189,21 @@ export type DataOf<D extends DType> = D extends "float32" ? Float32Array : D ext
  * generic `D` narrows it back down). */
 export type DataOfRuntime = Float64Array | Float32Array | Int32Array | Uint8Array;
 
+/** F1 fix (dt1 post-review): every `switch (dtype)` below over the closed
+ * `DType` union was missing a `default` arm, so an invalid dtype string
+ * smuggled in at runtime (`"invalid" as DType`, e.g. past an `as any`/JSON
+ * boundary) fell through the switch with no return value — `data` silently
+ * became `undefined` instead of throwing (M2 violation: a confidently-wrong
+ * silent result, not an honest failure). This helper is both the shared
+ * throw site (one message shape for all four call sites) AND the
+ * exhaustiveness proof: passing anything but `never` here is now a TS2345
+ * compile error at the call site, so a future fifth `DType` member that
+ * forgets to update one of these switches fails the BUILD, not just at
+ * runtime. */
+function assertNeverDType(dtype: never, context: string): never {
+  throw new Error(`${context}: invalid dtype ${JSON.stringify(dtype)} (expected one of "float64" | "float32" | "int32" | "bool")`);
+}
+
 /** K2 (D3): allocate a fresh all-zeros buffer for `dtype` (the runtime
  * backing for `NDArray.zeros`). */
 export function zerosData(dtype: DType, size: number): DataOfRuntime {
@@ -1201,6 +1216,8 @@ export function zerosData(dtype: DType, size: number): DataOfRuntime {
       return new Int32Array(size);
     case "bool":
       return new Uint8Array(size);
+    default:
+      return assertNeverDType(dtype, "zerosData");
   }
 }
 
@@ -1217,6 +1234,8 @@ export function onesData(dtype: DType, size: number): DataOfRuntime {
       return new Int32Array(size).fill(1);
     case "bool":
       return new Uint8Array(size).fill(1);
+    default:
+      return assertNeverDType(dtype, "onesData");
   }
 }
 
@@ -1273,6 +1292,8 @@ export function convertToDType(dtype: DType, values: ArrayLike<number>): DataOfR
       }
       return out;
     }
+    default:
+      return assertNeverDType(dtype, "convertToDType");
   }
 }
 
@@ -1326,6 +1347,8 @@ export function astypeConvert(target: DType, data: DataOfRuntime): DataOfRuntime
       for (let i = 0; i < n; i++) out[i] = (data[i] ?? 0) !== 0 ? 1 : 0;
       return out;
     }
+    default:
+      return assertNeverDType(target, "astypeConvert");
   }
 }
 
@@ -1335,11 +1358,18 @@ export function astypeConvert(target: DType, data: DataOfRuntime): DataOfRuntime
  * their OUTPUT allocated in the same typed-array class as their INPUT,
  * unlike `transposeRuntime`/`sliceRuntime` above (which allocate
  * unconditionally `Float64Array` and stay byte-identical, untouched). */
-function sameKindArray(data: DataOfRuntime, size: number): DataOfRuntime {
+export function sameKindArray(data: DataOfRuntime, size: number): DataOfRuntime {
+  if (data instanceof Float64Array) return new Float64Array(size);
   if (data instanceof Float32Array) return new Float32Array(size);
   if (data instanceof Int32Array) return new Int32Array(size);
   if (data instanceof Uint8Array) return new Uint8Array(size);
-  return new Float64Array(size);
+  // F1 fix (dt1 post-review): the pre-fix `return new Float64Array(size)`
+  // fallback here silently mislabeled ANY unrecognized input as float64 data
+  // (M2 violation) instead of surfacing the impossible state. Every real
+  // `DataOfRuntime` value is one of the four `instanceof` checks above; this
+  // is reachable only via an `as any`/foreign-typed-array bypass of the type
+  // layer, and the honest response is to throw, not to guess a dtype.
+  throw new Error(`sameKindArray: unrecognized typed array (not Float64Array | Float32Array | Int32Array | Uint8Array)`);
 }
 
 /**
