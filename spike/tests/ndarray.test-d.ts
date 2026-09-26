@@ -1651,19 +1651,145 @@ const dtBoolItem = dtBoolArr.item(0, 0);
 type DT_ITEM_BOOL = Expect<Equal<typeof dtBoolItem, boolean>>;
 
 // A union dtype INCLUDING float64 (`NDArray<[3], "int32" | "float64">`)
-// calling a locked op: DOCUMENTED no-claim path (CLAUDE.md "distributive
-// helpers yield union verdicts"). `DTypeLock<D, Op>` is a naked conditional
-// on `D`, so it distributes over the union to `true | ShapeError<...>`;
-// `Guard`'s own `[Result] extends [ShapeError<infer M>]` check does NOT
-// match a union that includes `true`, so the call compiles clean — even
-// though an ACTUAL int32 instance at this static type would be rejected if
-// its dtype were known precisely. This deliberately COMPILES (no
+// calling `add`'s scalar overload: DOCUMENTED no-claim path. dt1 got this
+// FOR FREE from `DTypeLock<D, Op>` being a naked conditional on `D` (it
+// distributed over the union to `true | ShapeError<...>`, and `Guard`'s own
+// tuple-wrapped check doesn't match a mixed union). dt2 (P1/P3,
+// docs/dtype-dt2-spec.md) replaces that mechanism with an EXPLICIT
+// `IsUnion<D>` gate in `ArithScalarOperand` (same discipline `Promote`
+// itself uses, D4 "Dasselbe Gate gilt für jede dtype-Funktion") — confirmed
+// (Baustein 0) that this exact pin's ASSERTION stays valid unchanged even
+// though the underlying mechanism is now deliberate rather than a naked-
+// distribution side effect. This deliberately COMPILES (no
 // `@ts-expect-error`): the point of the pin is that the union case is
 // honest no-claim, not a false accept limited to one branch. The runtime
-// backstop for an actual int32 instance at this call is pinned below
-// (scalar-mean.test.ts's own dt1 section covers the single-dtype cases;
-// see "union dtype degrades to no-claim, runtime still rejects an actual
-// non-float64 instance" in that file for this specific union case).
+// backstop for an actual int32 instance at this call is pinned in
+// scalar-mean.test.ts's dt1/dt2 sections.
 declare const dtUnionRecv: NDArray<[3], "int32" | "float64">;
 const dtUnionAdded = dtUnionRecv.add(1); // must compile clean (no-claim), never a false accept OR a false reject
 type DT_UNION_ADD_SHAPE = Expect<Equal<(typeof dtUnionAdded)["shape"], readonly [3]>>;
+// dt2 addition: the RESULT dtype is `D` VERBATIM (the scalar overload's
+// return type is `NDArray<S, D>`, unconditionally) — for a union `D` this is
+// the PRECISE original union, never widened to the full `DType`, and never
+// falsely narrowed to a single member either.
+type DT_UNION_ADD_DTYPE = Expect<Equal<(typeof dtUnionAdded)["dtype"], "int32" | "float64">>;
+
+// =============================================================================
+// dt2 (docs/dtype-dt2-spec.md, P5): Promote<A,B>/PromoteDiv<A,B> type-level
+// pins against the ONE runtime source (`PROMOTE_NUMERIC`, runtime.ts) — the
+// SAME table scalar-mean.test.ts's dt2 section pins at the runtime layer via
+// `promoteDType`/`promoteDTypeDiv`. Appended at the end of this file, no new
+// file (dt2 spec: "Tests an bestehende Dateien anhängen").
+// =============================================================================
+import type { OkDType, Promote, PromoteDiv } from "../src/ndarray.ts";
+import type { ShapeError } from "../src/dim.ts";
+
+// --- Promote<A,B>: the full 3x3 numeric table, hand-written oracle ----------
+
+type PROMOTE_F64_F64 = Expect<Equal<Promote<"float64", "float64">, "float64">>;
+type PROMOTE_F64_F32 = Expect<Equal<Promote<"float64", "float32">, "float64">>;
+type PROMOTE_F64_I32 = Expect<Equal<Promote<"float64", "int32">, "float64">>;
+type PROMOTE_F32_F64 = Expect<Equal<Promote<"float32", "float64">, "float64">>;
+type PROMOTE_F32_F32 = Expect<Equal<Promote<"float32", "float32">, "float32">>;
+type PROMOTE_F32_I32 = Expect<Equal<Promote<"float32", "int32">, "float64">>;
+type PROMOTE_I32_F64 = Expect<Equal<Promote<"int32", "float64">, "float64">>;
+type PROMOTE_I32_F32 = Expect<Equal<Promote<"int32", "float32">, "float64">>;
+type PROMOTE_I32_I32 = Expect<Equal<Promote<"int32", "int32">, "int32">>;
+
+// --- PromoteDiv<A,B>: ALWAYS floating-point, float32⊕float32 is the ONLY
+// cell that stays float32 (D5) — every other cell, INCLUDING int32⊕int32
+// (which Promote keeps int32), widens to float64.
+
+type PROMOTEDIV_F64_F64 = Expect<Equal<PromoteDiv<"float64", "float64">, "float64">>;
+type PROMOTEDIV_F32_F32 = Expect<Equal<PromoteDiv<"float32", "float32">, "float32">>;
+type PROMOTEDIV_I32_I32 = Expect<Equal<PromoteDiv<"int32", "int32">, "float64">>;
+type PROMOTEDIV_F32_I32 = Expect<Equal<PromoteDiv<"float32", "int32">, "float64">>;
+type PROMOTEDIV_I32_F32 = Expect<Equal<PromoteDiv<"int32", "float32">, "float64">>;
+
+// --- bool rejects (either side) via the SAME ShapeError/Guard mechanism a
+// shape mismatch uses — never a plain `never`/silent narrowing.
+
+type PROMOTE_BOOL_LEFT = Expect<Equal<Promote<"bool", "int32">, ShapeError<"dtype 'bool' has no arithmetic — use astype() to convert first">>>;
+type PROMOTE_BOOL_RIGHT = Expect<Equal<Promote<"int32", "bool">, ShapeError<"dtype 'bool' has no arithmetic — use astype() to convert first">>>;
+type PROMOTEDIV_BOOL_LEFT = Expect<Equal<PromoteDiv<"bool", "float64">, ShapeError<"dtype 'bool' has no arithmetic — use astype() to convert first">>>;
+type PROMOTEDIV_BOOL_RIGHT = Expect<Equal<PromoteDiv<"float64", "bool">, ShapeError<"dtype 'bool' has no arithmetic — use astype() to convert first">>>;
+
+// --- Union-Gate (D4): a union on EITHER side degrades the WHOLE result to
+// the wide `DType` — no claim, never a false accept OR a false narrow-reject,
+// even when one union member is bool (the exact Baustein-0 Blocker F4 class:
+// `Promote<"bool" | "int32", "int32">` must NOT silently drop the bool
+// rejection by distributing to `ShapeError<...> | "int32"`).
+
+type PROMOTE_UNION_LEFT = Expect<Equal<Promote<"bool" | "int32", "int32">, DType>>;
+type PROMOTE_UNION_RIGHT = Expect<Equal<Promote<"int32", "bool" | "int32">, DType>>;
+type PROMOTE_UNION_BOTH = Expect<Equal<Promote<DType, DType>, DType>>;
+type PROMOTEDIV_UNION_LEFT = Expect<Equal<PromoteDiv<"bool" | "int32", "int32">, DType>>;
+type PROMOTEDIV_UNION_WIDE = Expect<Equal<PromoteDiv<DType, "float32">, DType>>;
+
+// OkDType<P>: strips the ShapeError branch down to a real DType, the
+// union-degraded ACCEPT case included (never collapses to `never`).
+type OKDTYPE_ACCEPT = Expect<Equal<OkDType<Promote<"int32", "int32">>, "int32">>;
+type OKDTYPE_UNION_ACCEPT = Expect<Equal<OkDType<Promote<"bool" | "int32", "int32">>, DType>>;
+type OKDTYPE_REJECT = Expect<Equal<OkDType<Promote<"bool", "int32">>, never>>;
+
+// --- End-to-end through the public methods: add/sub/mul/div's RESULT dtype
+// matches Promote/PromoteDiv exactly for a representative set of dtype pairs
+// (the runtime layer's own promotion-table test in scalar-mean.test.ts
+// covers the FULL 3x3 grid; this is the type-level companion "beides gegen
+// die eine Quelle" the spec asks for, P5).
+
+const dtF64 = NDArray.zeros([3]);
+const dtF32 = NDArray.zeros([3], "float32");
+const dtI32 = NDArray.zeros([3], "int32");
+const dtBool = NDArray.zeros([3], "bool");
+
+const addF64F32 = dtF64.add(dtF32);
+type ADD_F64_F32_DTYPE = Expect<Equal<typeof addF64F32.dtype, "float64">>;
+const addF32I32 = dtF32.add(dtI32);
+type ADD_F32_I32_DTYPE = Expect<Equal<typeof addF32I32.dtype, "float64">>;
+const mulI32I32 = dtI32.mul(dtI32);
+type MUL_I32_I32_DTYPE = Expect<Equal<typeof mulI32I32.dtype, "int32">>;
+const divI32I32 = dtI32.div(dtI32);
+type DIV_I32_I32_DTYPE = Expect<Equal<typeof divI32I32.dtype, "float64">>;
+const divF32F32 = dtF32.div(dtF32);
+type DIV_F32_F32_DTYPE = Expect<Equal<typeof divF32F32.dtype, "float32">>;
+
+// A union dtype ARGUMENT (not just receiver): `NDArray<[3], "bool" |
+// "int32">` on the array overload must also degrade to no-claim (Union-Gate
+// applies to BOTH operands, D4) — never a false accept of the bool member.
+declare const dtUnionArg: NDArray<[3], "bool" | "int32">;
+const addUnionArg = dtF64.add(dtUnionArg);
+type ADD_UNION_ARG_DTYPE = Expect<Equal<typeof addUnionArg.dtype, DType>>;
+
+// A CONCRETE bool argument/receiver is still rejected (P4, permanent).
+// @ts-expect-error - bool has no arithmetic (array form, argument)
+dtF64.add(dtBool);
+// @ts-expect-error - bool has no arithmetic (array form, receiver)
+dtBool.add(dtF64);
+// @ts-expect-error - bool has no arithmetic (scalar form) — M3 v9 named
+// exception: tsc shows the masked generic TS2769, not this own message, but
+// the call is STILL a genuine compile error (M2), which is all `@ts-expect-
+// error` needs to see.
+dtBool.add(1);
+
+// --- D6 scalar rule pins: int32 keeps D, a dot-form non-integer literal is
+// a compile error, an integer literal/exponent-form/wide number is fine.
+
+const addI32Int = dtI32.add(2);
+type ADD_I32_INT_DTYPE = Expect<Equal<typeof addI32Int.dtype, "int32">>;
+const addI32Exp = dtI32.add(1e3); // exponent form: no static claim, must compile
+type ADD_I32_EXP_DTYPE = Expect<Equal<typeof addI32Exp.dtype, "int32">>;
+declare const wideScalar: number;
+const addI32Wide = dtI32.add(wideScalar); // wide number: no static claim
+type ADD_I32_WIDE_DTYPE = Expect<Equal<typeof addI32Wide.dtype, "int32">>;
+// @ts-expect-error - 2.5 is a PROVEN non-integer dot-form literal on int32 (D6) — M3 v9 named exception (masked generic message), still a genuine compile error.
+dtI32.add(2.5);
+
+// div's scalar overload has NO integer restriction at all (D5) — a
+// fractional literal on an int32 receiver is FINE, unlike add/sub/mul.
+const divI32Frac = dtI32.div(2.5);
+type DIV_I32_FRAC_DTYPE = Expect<Equal<typeof divI32Frac.dtype, "float64">>;
+const divF32Scalar = dtF32.div(2);
+type DIV_F32_SCALAR_DTYPE = Expect<Equal<typeof divF32Scalar.dtype, "float32">>;
+// @ts-expect-error - div's scalar overload still rejects bool unconditionally (P4).
+dtBool.div(1);

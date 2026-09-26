@@ -930,15 +930,28 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // fresh each time). Correctness gate (every hover position, including the
 // updated `fmtShape`/W7 dtype-bearing expectations) and latency medians
 // unaffected (still PASS, still under the 2x ceiling).
+// Re-pinned 2026-09-26 (dt2, docs/dtype-dt2-spec.md): `add`/`sub`/`mul`/`div`
+// gain real dtype Promotion (P1/P2, `Promote<D,Dd>`/`PromoteDiv<D,Dd>`
+// replacing dt1's blanket `DTypeLockPair`) and the D6 scalar rule (P3,
+// `ArithScalarOperand`/`DivScalarOperand`) — every workload's own call sites
+// use `add` (per the spec's own note: "die Workloads benutzen add"), so each
+// one's overload resolution now goes through the new Promotion/scalar-guard
+// machinery instead of the old bare `DTypeLock`/`DTypeLockPair` conditionals.
+// Uniform-ish shift (+540..+674, spread 134 — less spread than dt1's own
+// re-pin above, since dt2 only touches FOUR ops' own overload sets, not
+// every op's `DTypeLock` conditional the way dt1's class-wide dtype-core
+// rollout did). Measured TWICE (fresh `gen-workloads.ts` run each time),
+// byte-identical both times. Correctness gate and latency medians unaffected
+// (still PASS, still under the 2x ceiling).
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 40219,
-  w2: 42160,
-  w3: 73097,
-  w4: 40374,
-  w5: 45785,
-  w6: 46736,
-  w7: 39300,
-  w8: 47184,
+  w1: 40840,
+  w2: 42834,
+  w3: 73637,
+  w4: 40915,
+  w5: 46422,
+  w6: 47276,
+  w7: 39840,
+  w8: 47800,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {

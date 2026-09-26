@@ -1156,6 +1156,7 @@ test("item(): sliced receiver — item reads into the freshly-copied slice buffe
 import { type AnyNDArray, type NestedBoolValue, type NestedValue } from "../src/ndarray.ts";
 import {
   astypeConvert,
+  BOOL_ARITHMETIC_MESSAGE,
   convertToDType,
   lockedOpMessage,
   normalizeSliceSpecs,
@@ -1183,6 +1184,14 @@ const DATA_CTOR: Record<DType, Float64ArrayConstructor | Float32ArrayConstructor
 function lockedMsgRegex(op: string, dtype: DType): RegExp {
   return new RegExp(lockedOpMessage(op, dtype).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 }
+
+/** dt2 (P4): a RegExp matching `BOOL_ARITHMETIC_MESSAGE` verbatim — built
+ * from the SAME constant `runtime.ts` exports (never re-derived by hand),
+ * for the PERMANENT bool-arithmetic rejection (every op, both overloads),
+ * as opposed to `lockedMsgRegex`'s dt1 TRANSITIONAL message above (still
+ * used by ops dt2 does not touch: matmul/dot/cosineSimilarity/sum/mean/
+ * argmax/topk/sqrt/norm/stack). */
+const boolMsgRegex = new RegExp(BOOL_ARITHMETIC_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
 // --- Section dt1.1: construction + round trip per dtype ---------------------
 
@@ -1388,26 +1397,67 @@ test("reshape()/flatten(): dtype-neutral inline copy for every dtype — class, 
 
 const NON_FLOAT64: readonly DType[] = ["float32", "int32", "bool"];
 
-test("add/sub/mul/div: scalar form throws the locked message for every non-float64 receiver", () => {
-  for (const dtype of NON_FLOAT64) {
-    const nd = NDArray.fromArray([2], [1, 0], { dtype });
-    for (const op of ["add", "sub", "mul", "div"] as const) {
-      assert.throws(() => (nd as unknown as { [k: string]: (n: number) => unknown })[op]!(1), lockedMsgRegex(op, dtype), `${op} scalar on [${dtype}]`);
-    }
+// --- Section dt2.1 (dt2 P3/P4, docs/dtype-dt2-spec.md A2 point 1): the dt1
+// scalar-form LOCK is gone for float32/int32 — add/sub/mul/div now compute,
+// keeping the receiver's own dtype (D6/E4, div always widens to float — D5).
+// bool stays PERMANENTLY locked (P4): the dauerhafte "use astype()" message
+// (`BOOL_ARITHMETIC_MESSAGE`), never dt1's transitional `lockedOpMessage`.
+
+test("add/sub/mul/div: scalar form now COMPUTES for float32/int32 (dt2 P3), bool stays PERMANENTLY locked (dt2 P4)", () => {
+  const f32 = NDArray.fromArray([2], [2, 4], { dtype: "float32" });
+  assert.strictEqual(f32.add(1).dtype, "float32");
+  assert.deepStrictEqual([...f32.add(1).data], [3, 5]);
+  assert.strictEqual(f32.sub(1).dtype, "float32");
+  assert.deepStrictEqual([...f32.sub(1).data], [1, 3]);
+  assert.strictEqual(f32.mul(2).dtype, "float32");
+  assert.deepStrictEqual([...f32.mul(2).data], [4, 8]);
+  assert.strictEqual(f32.div(2).dtype, "float32");
+  assert.deepStrictEqual([...f32.div(2).data], [1, 2]);
+
+  const i32 = NDArray.fromArray([2], [10, 20], { dtype: "int32" });
+  assert.strictEqual(i32.add(1).dtype, "int32");
+  assert.deepStrictEqual([...i32.add(1).data], [11, 21]);
+  assert.strictEqual(i32.sub(1).dtype, "int32");
+  assert.deepStrictEqual([...i32.sub(1).data], [9, 19]);
+  assert.strictEqual(i32.mul(2).dtype, "int32");
+  assert.deepStrictEqual([...i32.mul(2).data], [20, 40]);
+  // div on int32 ALWAYS widens to float64 (D5), even given an integer scalar.
+  assert.strictEqual(i32.div(2).dtype, "float64");
+  assert.deepStrictEqual([...i32.div(2).data], [5, 10]);
+
+  // bool: PERMANENT-lock test (A2 point 1) — every op, scalar form, the
+  // dauerhafte "use astype()" message, not dt1's transitional lock.
+  const boolArr = NDArray.fromArray([2], [1, 0], { dtype: "bool" });
+  for (const op of ["add", "sub", "mul", "div"] as const) {
+    assert.throws(() => (boolArr as unknown as { [k: string]: (n: number) => unknown })[op]!(1), boolMsgRegex, `${op} scalar on [bool] must stay permanently locked`);
   }
 });
 
-test("add/sub/mul/div: array form throws the locked message for a non-float64 receiver OR argument", () => {
+test("add/sub/mul/div: array form now COMPUTES across float64/float32/int32 per Promote (dt2 P1/P2), bool stays PERMANENTLY locked as receiver OR argument (dt2 P4)", () => {
   const f64 = NDArray.fromArray([2], [1, 2]);
-  for (const dtype of NON_FLOAT64) {
-    const other = NDArray.fromArray([2], [1, 0], { dtype });
-    for (const op of ["add", "sub", "mul", "div"] as const) {
-      assert.throws(
-        () => (other as unknown as { [k: string]: (n: unknown) => unknown })[op]!(f64),
-        lockedMsgRegex(op, dtype),
-        `${op}: non-float64 RECEIVER [${dtype}] must be rejected first`,
-      );
-    }
+  const f32 = NDArray.fromArray([2], [1, 2], { dtype: "float32" });
+  const i32 = NDArray.fromArray([2], [1, 2], { dtype: "int32" });
+
+  // Mixed-dtype combos: result dtype follows Promote (D4), never a throw.
+  assert.strictEqual(f64.add(f32).dtype, "float64");
+  assert.strictEqual(f64.add(i32).dtype, "float64");
+  assert.strictEqual(f32.add(f32).dtype, "float32");
+  assert.strictEqual(i32.add(i32).dtype, "int32");
+  assert.strictEqual(i32.div(i32).dtype, "float64"); // D5: div always widens to float
+
+  // bool: PERMANENT-lock test (A2 point 2) — as RECEIVER or ARGUMENT, every op.
+  const boolArr = NDArray.fromArray([2], [1, 0], { dtype: "bool" });
+  for (const op of ["add", "sub", "mul", "div"] as const) {
+    assert.throws(
+      () => (boolArr as unknown as { [k: string]: (n: unknown) => unknown })[op]!(f64),
+      boolMsgRegex,
+      `${op}: bool RECEIVER must stay permanently locked`,
+    );
+    assert.throws(
+      () => (f64 as unknown as { [k: string]: (n: unknown) => unknown })[op]!(boolArr),
+      boolMsgRegex,
+      `${op}: bool ARGUMENT must stay permanently locked`,
+    );
   }
 });
 
@@ -1470,55 +1520,55 @@ test("AnyNDArray spans every dtype (K5 fix): a non-float64 array assigned throug
   assert.deepStrictEqual(nested, [1, 2]);
 });
 
-test("a locked two-operand op with TWO DIFFERENT non-float64 dtypes rejects on the RECEIVER's dtype first (prototype F4 gap, message-table order)", () => {
-  const i32 = NDArray.fromArray([2], [1, 0], { dtype: "int32" });
-  const boolArr = NDArray.fromArray([2], [1, 0], { dtype: "bool" });
+// dt2 A2 point 3: `add` is no longer a "locked two-operand op" (dt2 unlocks
+// it for float32/int32; bool now always throws the SAME message regardless
+// of position, so `add` can no longer demonstrate the receiver-FIRST NAMING
+// distinction below). Moved to `matmul` — still fully DTypeLockPair-locked
+// for every non-float64 dtype until dt3 — same intent, same mechanism.
+test("a locked two-operand op with TWO DIFFERENT non-float64 dtypes rejects on the RECEIVER's dtype first (matmul, prototype F4 gap, message-table order)", () => {
+  const i32 = NDArray.fromArray([2, 2], [1, 0, 0, 1], { dtype: "int32" });
+  const boolMat = NDArray.fromArray([2, 2], [1, 0, 0, 1], { dtype: "bool" });
 
   // Receiver int32, argument bool: message must name int32 (the RECEIVER),
   // not bool — proves DTypeLockPair's "receiver checked first" order holds
   // at runtime too, and that a MIXED pair is never silently accepted.
   assert.throws(
-    () => i32.add(boolArr as unknown as Parameters<typeof i32.add>[0]),
-    lockedMsgRegex("add", "int32"),
+    () => i32.matmul(boolMat as unknown as Parameters<typeof i32.matmul>[0]),
+    lockedMsgRegex("matmul", "int32"),
     "int32 receiver + bool argument must reject on int32 first",
   );
   // Reversed: receiver bool, argument int32 — must name bool.
   assert.throws(
-    () => boolArr.add(i32 as unknown as Parameters<typeof boolArr.add>[0]),
-    lockedMsgRegex("add", "bool"),
+    () => boolMat.matmul(i32 as unknown as Parameters<typeof boolMat.matmul>[0]),
+    lockedMsgRegex("matmul", "bool"),
     "bool receiver + int32 argument must reject on bool first",
   );
 });
 
-// --- Section dt1.6 (F2 post-review fix): DTypeLockPair receiver-first order,
-// proved at COMPILE TIME, not just at runtime ---------------------------------
+// --- Section dt1.6 (F2 post-review fix, dt2 A2 point 4 move): DTypeLockPair
+// receiver-first order, proved at COMPILE TIME, not just at runtime --------
 //
 // The test above ("a locked two-operand op with TWO DIFFERENT non-float64
 // dtypes...") only proves `DTypeLockPair`'s receiver-first ordering at the
-// RUNTIME boundary (`assertFloat64Locked`/`lockedOpMessage`, called from
-// inside `add`'s implementation). It says nothing about the COMPILE-TIME
-// half — `DTypeLockPair<D, Dd, Op>` in ndarray.ts, which decides which
-// operand's dtype the type-level `DTypeLock` message NAMES. That half had NO
-// test at all: swapping `DTypeLockPair`'s two branches (receiver-checked-
-// first becomes argument-checked-first, or vice versa) leaves every existing
-// test green — `f64.add(int32Arg)` and `int32Receiver.add(f64Arg)` BOTH still
-// produce *a* diagnostic either way (an `@ts-expect-error` pin, if one
-// existed, would only assert "some error here"), so nothing in the suite
-// previously distinguished the correct branch order from the swapped one.
-// Verified empirically THIS session (dt1 post-review, not asserted by any
-// automated test): swapping the two `DTypeLock<Dd, Op> : DTypeLock<D, Op>`
-// arms in `DTypeLockPair` (ndarray.ts) makes BOTH probe calls below compile
-// with ZERO errors (`tsc --noEmit` exits 0) — a silently wrong "not
-// implemented" claim in the OPPOSITE direction from the one M2 demands, and
-// no green test would have caught it. This test follows the SAME real-
-// compiler-on-a-throwaway-fixture pattern as the "diagnostic quality (F1
-// pin)" test above (spawnSync tsc against an out-of-repo dir, so the
-// deliberately non-float64 fixture code never joins any type corpus), and
-// additionally asserts CROSS-LAYER PARITY: the compile-time message text
-// must equal `lockedOpMessage(op, dtype)` — the exact same function the
+// RUNTIME boundary (`assertFloat64Locked`/`lockedOpMessage`). It says nothing
+// about the COMPILE-TIME half — `DTypeLockPair<D, Dd, Op>` in ndarray.ts,
+// which decides which operand's dtype the type-level `DTypeLock` message
+// NAMES. Originally (dt1) this test used `add` for BOTH directions —
+// swapping `DTypeLockPair`'s two branches (receiver-checked-first becomes
+// argument-checked-first) left every OTHER existing test green, since
+// `f64.add(int32Arg)` and `int32Receiver.add(f64Arg)` both still produced *a*
+// diagnostic either way. dt2 (A2 point 4) UNLOCKS `add` for float32/int32, so
+// it can no longer carry this proof (`i32Recv.add(f64Arg)` now legitimately
+// computes, per `Promote`) — moved to `matmul`, still fully DTypeLockPair-
+// locked for every non-float64 dtype until dt3, same intent and mechanism.
+// This test follows the SAME real-compiler-on-a-throwaway-fixture pattern as
+// the "diagnostic quality (F1 pin)" test above (spawnSync tsc against an
+// out-of-repo dir, so the deliberately non-float64 fixture code never joins
+// any type corpus), and asserts CROSS-LAYER PARITY: the compile-time message
+// text must equal `lockedOpMessage(op, dtype)` — the exact same function the
 // runtime tests above import from runtime.ts — never a hand-typed
-// duplicate, for `add` (array + scalar form), `matmul`, and `sum(0)`.
-test("DTypeLockPair (F2 pin): receiver-first ordering is provable at COMPILE TIME, and matches lockedOpMessage exactly (add/matmul/sum cross-layer parity)", () => {
+// duplicate, for `matmul` (both directions) and `sum(0)`.
+test("DTypeLockPair (F2 pin): receiver-first ordering is provable at COMPILE TIME, and matches lockedOpMessage exactly (matmul/sum cross-layer parity)", () => {
   const dir = mkdtempSync(join(tmpdir(), "numtype-dtypelockpair-pin-"));
   try {
     const ndarrayPath = fileURLToPath(new URL("../src/ndarray.ts", import.meta.url).href);
@@ -1530,22 +1580,17 @@ test("DTypeLockPair (F2 pin): receiver-first ordering is provable at COMPILE TIM
         // Case 1: receiver float64, argument int32 -> message must name the
         // ARGUMENT's dtype (int32) — DTypeLockPair checks the receiver
         // first, sees float64, defers to DTypeLock<Dd, Op>.
-        `const f64Recv = NDArray.fromArray([2], [1, 2]);\n` +
-        `const i32Arg = NDArray.fromArray([2], [1, 0], { dtype: "int32" });\n` +
-        `f64Recv.add(i32Arg); // must name int32 (the ARGUMENT)\n` +
+        `const f64Mat = NDArray.fromArray([2, 2], [1, 2, 3, 4]);\n` +
+        `const i32MatArg = NDArray.fromArray([2, 2], [1, 0, 0, 1], { dtype: "int32" });\n` +
+        `f64Mat.matmul(i32MatArg); // must name int32 (the ARGUMENT)\n` +
         // Case 2: receiver int32, argument float64 -> message must name the
         // RECEIVER's dtype (int32) — the exact swap-sensitive case: with the
         // branches flipped, this call wrongly compiles clean instead.
-        `const i32Recv = NDArray.fromArray([2], [1, 0], { dtype: "int32" });\n` +
-        `const f64Arg = NDArray.fromArray([2], [1, 2]);\n` +
-        `i32Recv.add(f64Arg); // must name int32 (the RECEIVER)\n` +
-        // Scalar form on a locked (int32) receiver — same DTypeLock, no Dd.
-        `i32Recv.add(1); // scalar overload on a locked receiver\n` +
-        // matmul: same DTypeLockPair, receiver float64 / argument int32.
-        `const f64Mat = NDArray.fromArray([2, 2], [1, 2, 3, 4]);\n` +
-        `const i32Mat = NDArray.fromArray([2, 2], [1, 0, 0, 1], { dtype: "int32" });\n` +
-        `f64Mat.matmul(i32Mat); // must name int32 (the ARGUMENT)\n` +
-        // sum(0): single-operand DTypeLock (no pair), locked receiver.
+        `const i32MatRecv = NDArray.fromArray([2, 2], [1, 0, 0, 1], { dtype: "int32" });\n` +
+        `const f64MatArg = NDArray.fromArray([2, 2], [1, 2, 3, 4]);\n` +
+        `i32MatRecv.matmul(f64MatArg); // must name int32 (the RECEIVER)\n` +
+        // sum(0): single-operand DTypeLock (no pair), locked receiver — dt2
+        // does not touch sum (dt3 territory), so this direction is unaffected.
         `const i32Sum = NDArray.fromArray([2, 2], [1, 0, 0, 1], { dtype: "int32" });\n` +
         `i32Sum.sum(0); // must name int32 (the RECEIVER)\n`,
     );
@@ -1571,7 +1616,7 @@ test("DTypeLockPair (F2 pin): receiver-first ordering is provable at COMPILE TIM
     assert.notStrictEqual(res.status, 0, `fixture must fail to compile (every locked call is a genuine dtype mismatch):\n${out}`);
 
     const probeErrors = out.split("\n").filter((l) => l.includes("probe.ts(") && l.includes("error TS"));
-    assert.strictEqual(probeErrors.length, 5, `expected exactly FIVE fixture errors, one per locked call:\n${out}`);
+    assert.strictEqual(probeErrors.length, 3, `expected exactly THREE fixture errors, one per locked call:\n${out}`);
 
     // Cross-layer parity: the compile-time message text must equal
     // lockedOpMessage(op, dtype) verbatim — imported from runtime.ts, never
@@ -1582,19 +1627,15 @@ test("DTypeLockPair (F2 pin): receiver-first ordering is provable at COMPILE TIM
     // through `JSON.stringify(...).slice(1, -1)` reproduces that exact
     // escaping instead of hand-duplicating it.
     const escaped = (op: string, dtype: DType) => JSON.stringify(lockedOpMessage(op, dtype)).slice(1, -1);
-    assert.ok(
-      out.includes(escaped("add", "int32")),
-      `f64Recv.add(i32Arg) must surface lockedOpMessage("add", "int32") verbatim (argument's dtype, receiver is float64):\n${out}`,
-    );
-    // Both add() cases (array-form case 2, and the scalar-form case) name
-    // int32 via the SAME message text; distinguishing which occurrence is
-    // which is exactly what the swapped-branch mutant breaks (both would
-    // otherwise vanish instead), so the mutant proof below is the real
-    // discriminator — the string-parity check here proves the TEXT is
-    // right, not yet that the ORDER is right.
+    // Both matmul() cases (argument-locked case 1, and receiver-locked case
+    // 2) name int32 via the SAME message text; distinguishing which
+    // occurrence is which is exactly what the swapped-branch mutant breaks
+    // (both would otherwise vanish instead), so the mutant proof below is
+    // the real discriminator — the string-parity check here proves the TEXT
+    // is right, not yet that the ORDER is right.
     assert.ok(
       out.includes(escaped("matmul", "int32")),
-      `f64Mat.matmul(i32Mat) must surface lockedOpMessage("matmul", "int32") verbatim:\n${out}`,
+      `f64Mat.matmul(i32MatArg) / i32MatRecv.matmul(f64MatArg) must surface lockedOpMessage("matmul", "int32") verbatim:\n${out}`,
     );
     assert.ok(out.includes(escaped("sum", "int32")), `i32Sum.sum(0) must surface lockedOpMessage("sum", "int32") verbatim:\n${out}`);
 
@@ -1623,12 +1664,12 @@ test("DTypeLockPair (F2 pin): receiver-first ordering is provable at COMPILE TIM
       writeFileSync(
         join(mutantDir, "probe.ts"),
         `import { NDArray } from ${JSON.stringify(mutantNdarrayPath)};\n` +
-          `const f64Recv = NDArray.fromArray([2], [1, 2]);\n` +
-          `const i32Arg = NDArray.fromArray([2], [1, 0], { dtype: "int32" });\n` +
-          `f64Recv.add(i32Arg);\n` +
-          `const i32Recv = NDArray.fromArray([2], [1, 0], { dtype: "int32" });\n` +
-          `const f64Arg = NDArray.fromArray([2], [1, 2]);\n` +
-          `i32Recv.add(f64Arg);\n`,
+          `const f64Mat = NDArray.fromArray([2, 2], [1, 2, 3, 4]);\n` +
+          `const i32MatArg = NDArray.fromArray([2, 2], [1, 0, 0, 1], { dtype: "int32" });\n` +
+          `f64Mat.matmul(i32MatArg);\n` +
+          `const i32MatRecv = NDArray.fromArray([2, 2], [1, 0, 0, 1], { dtype: "int32" });\n` +
+          `const f64MatArg = NDArray.fromArray([2, 2], [1, 2, 3, 4]);\n` +
+          `i32MatRecv.matmul(f64MatArg);\n`,
       );
       writeFileSync(
         join(mutantDir, "tsconfig.json"),
@@ -1652,7 +1693,7 @@ test("DTypeLockPair (F2 pin): receiver-first ordering is provable at COMPILE TIM
       assert.strictEqual(
         mutantRes.status,
         0,
-        `non-vacuity check: the branch-swapped DTypeLockPair mutant must make BOTH mismatched-dtype add() calls compile CLEAN (proving the real, unmutated DTypeLockPair is what rejects them, not something else):\n${mutantOut}`,
+        `non-vacuity check: the branch-swapped DTypeLockPair mutant must make BOTH mismatched-dtype matmul() calls compile CLEAN (proving the real, unmutated DTypeLockPair is what rejects them, not something else):\n${mutantOut}`,
       );
     } finally {
       rmSync(mutantDir, { recursive: true, force: true });
@@ -1729,5 +1770,296 @@ test("sameKindArray/copySameKindArray: allocate/copy the correct typed-array cla
     /copySameKindArray: unrecognized typed array/,
     "copySameKindArray must throw for an unrecognized backing store, never silently copy as Float64Array",
   );
+});
+
+// =============================================================================
+// Section dt2 (docs/dtype-dt2-spec.md, P5): Promotion + elementwise
+// arithmetic for float64/float32/int32 (add/sub/mul/div); bool permanently
+// locked (covered above, A2 tests). Same no-new-file house convention as
+// W2-W5/dt1 above. Imports needed only by this block are added right here.
+// =============================================================================
+import { promoteDType, promoteDTypeDiv, type NumericDType } from "../src/runtime.ts";
+
+const NUMERIC_DTYPES: readonly NumericDType[] = ["float64", "float32", "int32"];
+
+/** Dispatch any of the four binary ops on two NDArrays — a plain switch over
+ * a runtime-unsafe cast (same pattern `callScalar` above and the dt1 lock
+ * tests already use for `[k: string]`-indexed dispatch), needed here because
+ * the tests below exercise EVERY dtype combination generically. */
+function callBinary(a: AnyNDArray, op: ScalarOp, b: unknown): AnyNDArray {
+  return (a as unknown as { [k: string]: (x: unknown) => AnyNDArray })[op]!(b);
+}
+
+// --- P5: the promotion table, against the ONE source (runtime.ts), by hand -
+
+/** D4: the promotion table from the spec, written out BY HAND as an
+ * independent oracle (never derived from `PROMOTE_NUMERIC` itself) — the
+ * point is to prove the SHIPPED single-source table actually matches the
+ * SPEC's own D4 table, not merely that the implementation is internally
+ * consistent with itself. */
+const EXPECTED_PROMOTE: Record<NumericDType, Record<NumericDType, NumericDType>> = {
+  float64: { float64: "float64", float32: "float64", int32: "float64" },
+  float32: { float64: "float64", float32: "float32", int32: "float64" },
+  int32: { float64: "float64", float32: "float64", int32: "int32" },
+};
+
+test("promoteDType: the full 3x3 numeric promotion table matches the spec's D4 table (hand-written oracle)", () => {
+  for (const a of NUMERIC_DTYPES) {
+    for (const b of NUMERIC_DTYPES) {
+      assert.strictEqual(promoteDType(a, b), EXPECTED_PROMOTE[a]![b], `promoteDType(${a}, ${b})`);
+    }
+  }
+});
+
+test("promoteDTypeDiv: ALWAYS floating-point — float32⊕float32 stays float32, every other numeric combo (incl int32⊕int32) widens to float64 (D5)", () => {
+  for (const a of NUMERIC_DTYPES) {
+    for (const b of NUMERIC_DTYPES) {
+      const expected = a === "float32" && b === "float32" ? "float32" : "float64";
+      assert.strictEqual(promoteDTypeDiv(a, b), expected, `promoteDTypeDiv(${a}, ${b})`);
+    }
+  }
+});
+
+test("promoteDType/promoteDTypeDiv: bool rejects with BOOL_ARITHMETIC_MESSAGE regardless of position or the other operand's dtype", () => {
+  const ALL: readonly DType[] = ["float64", "float32", "int32", "bool"];
+  for (const other of ALL) {
+    assert.throws(() => promoteDType("bool", other), boolMsgRegex, `promoteDType(bool, ${other})`);
+    assert.throws(() => promoteDType(other, "bool"), boolMsgRegex, `promoteDType(${other}, bool)`);
+    assert.throws(() => promoteDTypeDiv("bool", other), boolMsgRegex, `promoteDTypeDiv(bool, ${other})`);
+    assert.throws(() => promoteDTypeDiv(other, "bool"), boolMsgRegex, `promoteDTypeDiv(${other}, bool)`);
+  }
+});
+
+test("add/sub/mul/div through the public NDArray API: every numeric dtype combination's RESULT dtype matches promoteDType/promoteDTypeDiv exactly", () => {
+  for (const a of NUMERIC_DTYPES) {
+    for (const b of NUMERIC_DTYPES) {
+      const x = NDArray.fromArray([2], [4, 8], { dtype: a });
+      const y = NDArray.fromArray([2], [2, 2], { dtype: b });
+      for (const op of ["add", "sub", "mul"] as const) {
+        assert.strictEqual(callBinary(x, op, y).dtype, promoteDType(a, b), `${op}(${a}, ${b})`);
+      }
+      assert.strictEqual(callBinary(x, "div", y).dtype, promoteDTypeDiv(a, b), `div(${a}, ${b})`);
+    }
+  }
+});
+
+// --- P5: float32⊕float32 bit-identity vs an INDEPENDENT reference ----------
+//
+// The reference computes in plain JS `number` (double) space and stores the
+// result into a FRESH `Float32Array` — genuinely different machinery than
+// the implementation's explicit `Math.fround` call (an implicit truncation
+// on typed-array store vs an explicit function call), even though D8's own
+// correctness argument (Figueroa 1995, doubly-rounding-is-harmless) says
+// both must agree bit-for-bit.
+
+test("add/sub/mul/div (float32⊕float32): bit-identical to an independent Float32Array-store reference (D8)", () => {
+  const rng = makeRng(0xf32n);
+  for (let trial = 0; trial < 200; trial++) {
+    const shape = genShape(rng, 1, 3);
+    const size = shape.reduce((acc, d) => acc * d, 1);
+    const aRaw = genDataSpecial(rng, shape);
+    const bRaw = genDataSpecial(rng, shape);
+    const a = NDArray.fromArray(shape, [...aRaw], { dtype: "float32" });
+    const b = NDArray.fromArray(shape, [...bRaw], { dtype: "float32" });
+    for (const op of OPS) {
+      const actual = callBinary(a, op, b);
+      assert.strictEqual(actual.dtype, "float32", `${op} float32⊕float32 trial ${trial}: result dtype`);
+      const aData = a.data as unknown as Float32Array;
+      const bData = b.data as unknown as Float32Array;
+      const expected = new Float32Array(size);
+      for (let i = 0; i < size; i++) {
+        expected[i] = NATIVE_OPS[op](aData[i] ?? 0, bData[i] ?? 0); // implicit fround on store
+      }
+      assertDataBitIdentical(expected as unknown as Float64Array, actual.data as unknown as Float64Array, `${op} float32⊕float32 trial ${trial}`);
+    }
+  }
+});
+
+test("add/sub/mul (float32 SCALAR): same fround-on-store bit-identity check, for the scalar overload (not just array⊕array)", () => {
+  const rng = makeRng(0xf32502n);
+  for (let trial = 0; trial < 100; trial++) {
+    const shape = genShape(rng, 1, 3);
+    const size = shape.reduce((acc, d) => acc * d, 1);
+    const aRaw = genDataSpecial(rng, shape);
+    const a = NDArray.fromArray(shape, [...aRaw], { dtype: "float32" });
+    const sRaw = nextF64Special(rng);
+    for (const op of ["add", "sub", "mul"] as const) {
+      const actual = callBinary(a, op, sRaw);
+      assert.strictEqual(actual.dtype, "float32", `${op} float32 scalar trial ${trial}: result dtype`);
+      const aData = a.data as unknown as Float32Array;
+      const expected = new Float32Array(size);
+      for (let i = 0; i < size; i++) {
+        expected[i] = NATIVE_OPS[op](aData[i] ?? 0, sRaw);
+      }
+      assertDataBitIdentical(expected as unknown as Float64Array, actual.data as unknown as Float64Array, `${op} float32 scalar trial ${trial}`);
+    }
+  }
+});
+
+// --- P5: int32 two's-complement wrap vs BigInt.asIntN(32, …) ---------------
+
+test("add/sub/mul (int32⊕int32): two's-complement wrap matches BigInt.asIntN(32, …) over random pairs across the full int32 range", () => {
+  const rng = makeRng(0x1132n);
+  for (let trial = 0; trial < 500; trial++) {
+    const av = rng.nextInt(-2147483648, 2147483647);
+    const bv = rng.nextInt(-2147483648, 2147483647);
+    const a = NDArray.fromArray([1], [av], { dtype: "int32" });
+    const b = NDArray.fromArray([1], [bv], { dtype: "int32" });
+    const bigA = BigInt(av);
+    const bigB = BigInt(bv);
+    for (const op of ["add", "sub", "mul"] as const) {
+      const actual = callBinary(a, op, b);
+      assert.strictEqual(actual.dtype, "int32", `${op}(${av}, ${bv}) result dtype`);
+      const bigRaw = op === "add" ? bigA + bigB : op === "sub" ? bigA - bigB : bigA * bigB;
+      const expected = Number(BigInt.asIntN(32, bigRaw));
+      assert.strictEqual((actual.data as unknown as Int32Array)[0], expected, `${op}(${av}, ${bv})`);
+    }
+  }
+});
+
+test("mul (int32⊕int32): LARGE products beyond 2^53 wrap correctly — Math.imul, never (a*b)|0 (dt2 spec B1/v1.1)", () => {
+  // Both cases VERIFIED (this session) to make the naive `(a*b)|0` form
+  // actually diverge from the correct wrap — otherwise they would not be
+  // adversarial. The first is the spec's own worked example.
+  const largeCases: readonly (readonly [number, number])[] = [
+    [2147483647, 2147483647],
+    [1234567891, 987654321],
+  ];
+  for (const [av, bv] of largeCases) {
+    const naive = (av * bv) | 0;
+    const expected = Number(BigInt.asIntN(32, BigInt(av) * BigInt(bv)));
+    assert.notStrictEqual(naive, expected, `non-vacuity: (${av}*${bv})|0 must diverge from the correct wrap, else this case proves nothing`);
+
+    const a = NDArray.fromArray([1], [av], { dtype: "int32" });
+    const b = NDArray.fromArray([1], [bv], { dtype: "int32" });
+    const actual = a.mul(b);
+    assert.strictEqual(actual.dtype, "int32");
+    assert.strictEqual(actual.data[0], expected, `mul(${av}, ${bv}) must use Math.imul, not (a*b)|0`);
+
+    // Scalar form too: a.mul(bv) — same wrap requirement, same divergence.
+    const actualScalar = a.mul(bv);
+    assert.strictEqual(actualScalar.data[0], expected, `scalar mul(${av}, ${bv}) must use Math.imul, not (a*b)|0`);
+  }
+});
+
+// --- P5: broadcasting across MIXED dtypes -----------------------------------
+
+test("add/sub/mul/div: broadcasting works across MIXED dtypes — shape AND values correct, result dtype follows Promote/PromoteDiv", () => {
+  const f32 = NDArray.fromArray([2, 1], [1, 2], { dtype: "float32" });
+  const i32 = NDArray.fromArray([1, 3], [10, 20, 30], { dtype: "int32" });
+
+  const added = f32.add(i32);
+  assert.strictEqual(added.dtype, "float64"); // Promote(float32, int32) = float64
+  assert.deepStrictEqual([...added.shape], [2, 3]);
+  assert.deepStrictEqual([...added.data], [11, 21, 31, 12, 22, 32]);
+
+  const divided = i32.div(f32); // receiver int32, argument float32 -> PromoteDiv -> float64
+  assert.strictEqual(divided.dtype, "float64");
+  assert.deepStrictEqual([...divided.shape], [2, 3]);
+  assert.deepStrictEqual([...divided.data], [10, 20, 30, 5, 10, 15]);
+});
+
+// --- P5: D6 scalar-rule edges (2.0, -0, 1e3, 2.5, wide number) --------------
+
+test("add (int32 scalar): D6 edge values — 2.0/-0/1e3 compute correctly (dot-form-but-integral / exponent-form), a wide-number 2.5 throws with the exact D6 message at runtime", () => {
+  const i32 = NDArray.fromArray([2], [10, 20], { dtype: "int32" });
+  assert.deepStrictEqual([...i32.add(2.0).data], [12, 22], "2.0 normalizes to the integer literal 2 (TS drops the trailing .0) -- must compute");
+  assert.deepStrictEqual([...i32.add(-0).data], [10, 20], "-0 is integral (Number.isInteger(-0) === true) -- must compute");
+  assert.deepStrictEqual([...i32.add(1e3).data], [1010, 1020], "1e3 is an exponent-form integer -- must compute (no static claim either way)");
+
+  const wideNonInt: number = 2.5;
+  assert.throws(
+    () => i32.add(wideNonInt),
+    /add: int32 scalar 2\.5 is not a valid integer operand \(must be an integer in \[-2147483648, 2147483647\]\)/,
+    "a wide-number 2.5 must throw at runtime with the exact D6 message",
+  );
+
+  // Out-of-int32-range integer scalar: D6 says "Number.isInteger + Bereich"
+  // (range) -- an integer OUTSIDE [-2^31, 2^31-1] must also throw.
+  assert.throws(
+    () => i32.add(3000000000),
+    /add: int32 scalar 3000000000 is not a valid integer operand/,
+    "an out-of-range integer scalar must throw (D6's range half of the check)",
+  );
+});
+
+test("div (int32 scalar): NO integer restriction at all — a fractional scalar computes, widening to float64 (D5, unlike add/sub/mul's D6 rule)", () => {
+  const i32 = NDArray.fromArray([2], [10, 20], { dtype: "int32" });
+  const r = i32.div(2.5);
+  assert.strictEqual(r.dtype, "float64");
+  assert.deepStrictEqual([...r.data], [4, 8]);
+});
+
+// --- P5: diagnostic CONTENTS (M3 v9 named exception), via real tsc ---------
+//
+// The scalar overload's OWN `ShapeError` message is masked by TS overload
+// resolution (it attributes a total mismatch to the LAST-declared overload,
+// the array form) — a NAMED M3 exception (A3, docs/dtype-dt2-spec.md): the
+// call is still a genuine compile error (M2 holds), but the TEXT shown is
+// the array overload's generic TS2769, not the scalar guard's own message.
+// The ARRAY form's own rejection (bool operand) is NOT masked and shows its
+// own message directly. Positions/text below were MEASURED against real
+// tsc this session (Arbeitsregel 13/CLAUDE.md "GEMESSEN, nicht gelesen"),
+// not guessed.
+
+test("dt2 diagnostic CONTENTS (M3 v9): i32.add(2.5) and boolArr.add(1) show the masked generic TS2769; boolArr.add(f64) shows its OWN BOOL_ARITHMETIC_MESSAGE directly", () => {
+  const dir = mkdtempSync(join(tmpdir(), "numtype-dt2-diag-pin-"));
+  try {
+    const ndarrayPath = fileURLToPath(new URL("../src/ndarray.ts", import.meta.url).href);
+    const ambientPath = fileURLToPath(new URL("../src/ambient.d.ts", import.meta.url).href);
+    const repoRoot = fileURLToPath(new URL("../..", import.meta.url).href);
+    writeFileSync(
+      join(dir, "probe.ts"),
+      `import { NDArray } from ${JSON.stringify(ndarrayPath)};\n` +
+        `const i32 = NDArray.fromArray([2], [1, 2], { dtype: "int32" });\n` +
+        `const boolArr = NDArray.fromArray([2], [1, 0], { dtype: "bool" });\n` +
+        `const f64 = NDArray.fromArray([2], [1, 2]);\n` +
+        `i32.add(2.5);\n` +
+        `boolArr.add(1);\n` +
+        `boolArr.add(f64);\n`,
+    );
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "bundler",
+          noEmit: true,
+          allowImportingTsExtensions: true,
+          skipLibCheck: true,
+          noUncheckedIndexedAccess: true,
+          exactOptionalPropertyTypes: true,
+        },
+        include: ["probe.ts", ambientPath],
+      }),
+    );
+    const res = spawnSync("pnpm", ["exec", "tsc", "--noEmit", "-p", dir], { cwd: repoRoot, encoding: "utf8" });
+    const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
+    assert.notStrictEqual(res.status, 0, `fixture must fail to compile:\n${out}`);
+
+    const probeErrors = out.split("\n").filter((l) => l.includes("probe.ts(") && l.includes("error TS"));
+    assert.strictEqual(probeErrors.length, 3, `expected exactly THREE fixture errors:\n${out}`);
+
+    // i32.add(2.5) at probe.ts line 5, col 9 -- masked generic TS2769.
+    assert.ok(out.includes("probe.ts(5,9): error TS2769"), `i32.add(2.5) must error at (5,9):\n${out}`);
+    // boolArr.add(1) at line 6, col 13 -- masked generic TS2769, SAME text.
+    assert.ok(out.includes("probe.ts(6,13): error TS2769"), `boolArr.add(1) must error at (6,13):\n${out}`);
+    assert.ok(
+      out.includes("Argument of type 'number' is not assignable to parameter of type 'NDArray<Shape, DType>'"),
+      `both masked scalar-form calls must show the generic last-overload message:\n${out}`,
+    );
+    // boolArr.add(f64) at line 7, col 13 -- OWN message surfaces (array form
+    // is the LAST overload, so its own Guard rejection is not masked).
+    assert.ok(out.includes("probe.ts(7,13): error TS2769"), `boolArr.add(f64) must error at (7,13):\n${out}`);
+    const escapedBoolMsg = JSON.stringify(BOOL_ARITHMETIC_MESSAGE).slice(1, -1);
+    assert.ok(
+      out.includes(escapedBoolMsg),
+      `boolArr.add(f64) must surface BOOL_ARITHMETIC_MESSAGE verbatim (own message, not masked):\n${out}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
