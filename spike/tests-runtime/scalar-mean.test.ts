@@ -1608,7 +1608,7 @@ test("DTypeLockPair (F2 pin): receiver-first ordering is provable at COMPILE TIM
     // `DTypeLockPair`. This file is NEVER part of any include/tsconfig glob
     // in the repo (nothing but this throwaway fixture ever imports it), and
     // is removed immediately after the mutant compile runs.
-    const mutantNdarrayPath = fileURLToPath(new URL("../src/__dtypelockpair-mutant-f2-tmp.ts", import.meta.url));
+    const mutantNdarrayPath = fileURLToPath(new URL("../src/__dtypelockpair-mutant-f2-tmp.ts", import.meta.url).href);
     const mutantDir = mkdtempSync(join(tmpdir(), "numtype-dtypelockpair-mutant-"));
     try {
       const originalSource = readFileSync(ndarrayPath, "utf8");
