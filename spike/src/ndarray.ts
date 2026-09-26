@@ -648,14 +648,24 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * `Rows` is effectively float64-only already — `NDArray<any>` (in
    * `RowShapesOf`'s `UnwrapRow` below) fills the omitted `D` with its
    * default `"float64"`, so a non-float64 row is rejected by a NATIVE
-   * structural-mismatch diagnostic (`data: Int32Array` not assignable to
-   * `data: Float64Array`), not this codebase's own `DTypeLock` message — a
-   * DISCLOSED, TIME-BOXED M3 exception until dt5 gives `stack` real
-   * cross-dtype support (every row sharing one dtype; Promotion across rows
-   * stays a non-goal, D5). `assertFloat64Locked` per row is still the
-   * honest RUNTIME backstop, word-identical to every other locked op (M3
-   * message parity holds at the runtime boundary; only the editor
-   * diagnostic is the disclosed exception). */
+   * structural-mismatch diagnostic, not this codebase's own `DTypeLock`
+   * message — a DISCLOSED, TIME-BOXED M3 exception until dt5 gives `stack`
+   * real cross-dtype support (every row sharing one dtype; Promotion across
+   * rows stays a non-goal, D5). Measured against real tsc 7.0.2 (a non-
+   * float64 row passed to `stack`): the diagnostic is TS2322 on the row
+   * argument, reported through the PRIVATE `__varianceD` invariance marker
+   * (`NDArray`'s own deliberate-invariance device, defined above) —
+   * `Types of property '__varianceD' are incompatible ... Type '"float64"'
+   * is not assignable to type '"int32"'` — NOT a `data: Int32Array` vs.
+   * `data: Float64Array` mismatch as an earlier draft of this comment
+   * claimed. The private marker name leaking into the message text is
+   * itself part of the disclosed, time-boxed exception: an internal
+   * implementation detail surfacing in a user-facing diagnostic, accepted
+   * only until dt5 replaces this path with a real `DTypeLock`-shaped
+   * message. `assertFloat64Locked` per row is still the honest RUNTIME
+   * backstop, word-identical to every other locked op (M3 message parity
+   * holds at the runtime boundary; only the editor diagnostic is the
+   * disclosed exception). */
   static stack<const Rows extends readonly NDArray<any>[]>(
     rows: Guard<StackCheck<RowShapesOf<Rows>>, Rows>,
   ): NDArray<OkShape<StackShape<RowShapesOf<Rows>>>> {
