@@ -1377,3 +1377,18 @@ gewöhnliche Ops eingegrenzt (Owner, 2026-09-25) — ihr Ursprung ist ein Rust-B
 es in TS nicht gibt. **Lehren:** (1) Überladungen sind an heißen Aufrufstellen fast kostenlos, eine
 bedingte Ein-Signatur-Form dagegen nicht — Diagnose-Qualität kostet dort Budget pro Aufrufstelle;
 (2) die Prototyp-Obergrenze hätte vorab sagen müssen, ob Tests mitzählen.
+
+## dt1 — dtype-Kern auf `NDArray` (2026-09-26, Stufe 3b)
+
+Erste echte Umsetzungs-Scheibe des dtype-Designs (docs/dtype-dt1-spec.md v2.1 / -ergebnisse.md),
+zusammen mit COVENANT v8. Owner-Abnahmen vorab: Methodenliste nach Hausregel (b), zwei benannte
+Test-Artefakt-Änderungen, v8-Wortlaut; Baustein 0 fand, dass das Feld `data` in der Liste fehlte
+(Owner nachentschieden) und dass zwei v8-Sätze dt2-Inhalt vorwegnahmen (nach dt2 verschoben). Die
+Umsetzung passierte beide Stopp-Punkte; der Budget-Stopp war aber wirkungslos, weil alles in einem
+Commit entstand (Arbeitsregel 21). Verify: der erste Baustein-A-Agent (standard) lehnte die
+Aufgabe als zu anspruchsvoll ab und wurde auf deep neu gestartet; A, B und C fanden zusammen einen
+echten Fehler (ungültiger dtype-String → still `undefined`), eine ungeschützte Sperr-Reihenfolge und
+fehlende Typ-Pins. Der Gegencheck der Fix-Runde fand, dass der neue Mutanten-Nachweis eine Datei in
+`spike/src` schreibt — per Ausschlussmuster und eindeutigem Namen abgesichert und mit einer
+absichtlich fehlerhaften liegengebliebenen Datei belegt (Arbeitsregel 20). check:diag 237,098
+(Δ+9,693 ≤ +12,000). Unveröffentlicht bis dt5.

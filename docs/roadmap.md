@@ -412,3 +412,6 @@ korrekt; drei TS-Grenzen offengelegt (Skalar-Maskierung → benannte M3-Ausnahme
 Lösungsversuchs; niladische Ops nur zur Laufzeit gesperrt bis zum vollständigen Rollout;
 dtype-generische Funktionen als bekannte Grenze). Nächste Scheiben: dt1 (Kern + M3 v8 + Fix
 `AnyNDArray`) … dt5, dann `WNDArray`/Kernel pro dtype.
+
+**dt1 ERLEDIGT (2026-09-26)** — docs/dtype-dt1-spec.md v2.1 / -ergebnisse.md; COVENANT v8. check:diag
+237,098 (Δ+9,693 ≤ +12,000 inkl. Tests). Unveröffentlicht bis dt5.

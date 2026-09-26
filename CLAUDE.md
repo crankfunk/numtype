@@ -32,8 +32,8 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 
 - **npm:** `numtype@0.3.0` (2026-09-24, „parity and polish"; davor 0.2.0 am 2026-07-21). Registry-Tarball nach dem Publish verifiziert (Integrität, Inhalt), Beispiel läuft unverändert auf 0.3.0. Tags `v0.1.0`/`v0.1.1`/`v0.2.0`/`v0.3.0`, Apache-2.0, Repo public, Rulesets `protect-main` + `protect-release-tags`.
 - **Aktive Roadmap (Owner-entschieden 2026-09-23, docs/roadmap.md „Roadmap ab 2026-09-23"):**
-  0a Release 0.3.0 (ERLEDIGT 2026-09-24) → 0b typisiertes `toNestedArray` (ERLEDIGT 2026-09-24, unveröffentlicht → 0.4.0) → dtype-Design (ERLEDIGT 2026-09-25: Entscheidungen + Prototyp-Messung, docs/dtype-design-ergebnisse.md; Prototyp auf lokalem Branch `proto/dtype`) → **als Nächstes:** dtype-Umsetzung dt1–dt5
-  auf `NDArray` → 2 Op-Umfang „die ersten zehn Minuten" → 3 API-Flächen-Skala +
+  0a Release 0.3.0 (ERLEDIGT 2026-09-24) → 0b typisiertes `toNestedArray` (ERLEDIGT 2026-09-24, unveröffentlicht → 0.4.0) → dtype-Design (ERLEDIGT 2026-09-25: Entscheidungen + Prototyp-Messung, docs/dtype-design-ergebnisse.md; Prototyp auf lokalem Branch `proto/dtype`) → dtype-Umsetzung: **dt1 ERLEDIGT 2026-09-26** (Kern auf `NDArray`, unveröffentlicht), **als Nächstes: dt2** (Promotion,
+  gemischte Arithmetik, Skalar-Regel) … dt5 → 2 Op-Umfang „die ersten zehn Minuten" → 3 API-Flächen-Skala +
   Strukturumbau → 1 Verbreitung (bewusst ans Ende gestellt).
 - **Geparkt:** Klassifikation der View-Test-Restmenge (Spec v2.1 + Skripte als WIP committet;
   Selbsttest 12 rot — FOLLOWUPS). Wird erst nach Phase 0/2 wieder aufgenommen, falls überhaupt.
@@ -41,9 +41,9 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 ## Aktuelle Pins & Gates (IST; Historie im Archiv/Log)
 
 - **Freeze-Hash** (Clean-Rebuild, SHA256 `spike/src/wasm/numtype_core.wasm`): `2a54d9fdba55e4e88a9d54cb3b01e111c2717abf13017f778b90accd5cff87e4` (seit S5/topk). Threads-Artefakt bewusst ohne Pin — test:threaded beweist Bit-Identität. CI-Gate `check:freeze`; die Byte-Identität ist cross-host (macOS-arm64 = linux-x64).
-- **check:diag** Root **227,405 @ 140** · **stress 116,279 @ 82** · **browser 2,142 @ 75** (seit 0b/typisiertes `toNestedArray` 2026-09-24: Root Δ+1,185, stress Δ+59) (stress/browser ungated, `pnpm check` compoundet alle drei).
-- **bench:editor** W1–W8 exact-match: `{w1 37.800, w2 39.633, w3 70.775, w4 37.955, w5 43.254, w6 44.448, w7 37.004, w8 44.693}` (0b uniform +60 bei stress-Δ +59 — erste Abweichung, eingegrenzt, nicht isoliert; „editor-Δ = stress-Δ" ist Faustregel, kein Gesetz); Latenz am 2x-Ceiling.
-- **Tests:** test:core 1591 · test:resident 6155+2 · test:threaded 139 · test:browser 4 · test:package 3 + zwei Konsumenten-Typ-Smokes (`consumer` skipLibCheck:true, `consumer-strict` skipLibCheck:false ohne @types/node) · cargo 222+1 · test:example (Registry-Install + 8 asserted Queries).
+- **check:diag** Root **237,098 @ 140** · **stress 118,562 @ 82** · **browser 2,142 @ 75** (seit dt1/dtype-Kern 2026-09-26: Root Δ+9,693, stress Δ+2,283) (stress/browser ungated, `pnpm check` compoundet alle drei).
+- **bench:editor** W1–W8 exact-match: `{w1 40,219, w2 42,160, w3 73,097, w4 40,374, w5 45,785, w6 46,736, w7 39,300, w8 47,184}` (seit dt1; Hover-Erwartungen tragen jetzt den dtype; „editor-Δ = stress-Δ" ist Faustregel, kein Gesetz); Latenz am 2x-Ceiling.
+- **Tests:** test:core 1618 · test:resident 6155+2 · test:threaded 139 · test:browser 4 · test:package 3 + zwei Konsumenten-Typ-Smokes (`consumer` skipLibCheck:true, `consumer-strict` skipLibCheck:false ohne @types/node) · cargo 222+1 · test:example (Registry-Install + 8 asserted Queries).
 - Alle Werte am 2026-09-23 im frischen Worktree reproduziert (Toolchain: node 24.16, pnpm 11.6, tsc 7.0.2, rustc 1.95.0, nightly-2026-07-09).
 
 ## Mess-Regeln (tragend)
@@ -72,6 +72,8 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 16. Laufzeittests bauen Views mit `wideSpecs(...)` (`spike/tests-runtime/assert-helpers.ts`), wenn der Empfänger statisch bekannten Rang hat; Ausnahme `slice.test.ts`.
 17. `node --test` druckt Fehlschläge doppelt — über eindeutige Testnamen zählen, nie `grep -c` auf Rohoutput.
 18. README gehört zur Doc-Platzierung, sobald eine Scheibe ändert, WO eine Op läuft; Behauptungen empirisch gegen `spike/src/index.ts` prüfen (`grep -n "TypeScript-runtime only\|no WASM kernel" README.md`).
+20. **Tests, die zur Laufzeit Dateien in `spike/src` schreiben** (Mutanten-Nachweise), brauchen ein Namensmuster, das alle tsconfig-Globs über `spike/src` ausschließen (heute `__*-mutant-*-tmp*.ts`), und einen eindeutigen Namen je Lauf — sonst bricht eine bei hartem Abbruch liegengebliebene Kopie `check:diag` und landet im npm-Paket (dt1, 2026-09-26).
+21. **Budget-Stopp-Punkte** in Specs sind nur wirksam als eigener Commit VOR dem nächsten Baustein — misst ein Agent erst nach allem, ist der Stopp wirkungslos (dt1).
 19. **README auf `main` darf nichts als verfügbar bewerben, was nicht auf npm ist** (Review-Befund 2026-09-23: die S0–S5-Parität stand in der README, npm 0.2.0 hatte sie nicht). Neue Features in der README als „on main, unreleased" markieren oder erst mit dem Release eintragen.
 
 ## Commands
@@ -117,7 +119,7 @@ Substantielle Scheiben enden mit: Ergebnisse im Projekt (Ergebnis-Doc bzw. Log-A
 - **Strukturfragen zuerst über den Graph** (`graph-a-lama` outline/def/usages/callers).
 - **Abweichung von einer Hausregel → VOR der Implementierung dem Owner vorlegen** („disclosed + confirmed").
 - **Hintergrund-Agenten fassen den Haupt-Working-Tree nie an**; jeder MUTIERENDE Verifier bekommt einen eigenen Worktree (KB `parallele-mutierende-verifier-worktree-patch`: `git diff > slice.patch` außerhalb des Repos, `git apply` je Worktree, node_modules symlinken). Vor jedem Mutanten `git diff -- <quellpfad>` prüfen; unerklärte Diskrepanzen zwischen identischen Läufen = Kontaminationsverdacht.
-- **Covenant:** COVENANT.md (v7) ist der stehende Produktvertrag. `graph-a-lama query lint` läuft im Gate-Block mit. Spec-Änderungen nur mit Owner-Bestätigung + Version-Bump + Changelog.
+- **Covenant:** COVENANT.md (v8) ist der stehende Produktvertrag. `graph-a-lama query lint` läuft im Gate-Block mit. Spec-Änderungen nur mit Owner-Bestätigung + Version-Bump + Changelog.
 
 ### Eskalationsleiter — nie vorsichtshalber den vollen Katalog fahren
 
