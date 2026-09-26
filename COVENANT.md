@@ -1,5 +1,5 @@
 # Covenant — NumType
-<!-- covenant:version 8 -->
+<!-- covenant:version 9 -->
 
 ## Invarianten
 
@@ -56,7 +56,11 @@
   Übergangsweise nur zur Laufzeit gesperrte Ops ohne Argumentposition gelten als „unvollständig,
   nicht falsch", solange die Laufzeit-Meldung wortgleich zur Sperrmeldung ist und die Sperre in
   FOLLOWUPS getrackt wird.
-  Anker: `spike/src/dim.ts`, `spike/src/literal-arithmetic.ts`, `sym:Guard`, `sym:OkShape`, `sym:DTypeLock`
+  · **Präzisierung v9 — Promotion (Owner-entschieden 2026-09-26):** die dtype-Promotion
+  (`Promote`) ist Teil der dtype-Maschinerie nach v8: eine Union als dtype eines Operanden degradiert
+  das Ergebnis zu `DType` (kein Anspruch), bevor die Tabelle greift; Typ- und Laufzeit-Tabelle
+  stammen aus einer Quelle.
+  Anker: `spike/src/dim.ts`, `spike/src/literal-arithmetic.ts`, `sym:Guard`, `sym:OkShape`, `sym:DTypeLock`, `sym:Promote`
   · GESCHLOSSEN in Item 11 / S1 (2026-07-17): der `Literal|undefined`-Verstoß durch OPTIONALE
   Parameter (`sum`s `axis`/`keepdims`) ist behoben. Der `sum`-Overload-Umbau (Overloads nach
   Argument-Anzahl 0/1/2 — keine optionalen Parameter mehr in der Mehr-Argument-Form — plus
@@ -111,6 +115,12 @@
   `stack` eine Zeile wegen ihres dtypes ab, zeigt der Editor bis zur Scheibe dt5 die native
   TS-Strukturmeldung statt einer eigenen; die Laufzeit wirft die eigene Sperrmeldung. Entfällt mit
   dt5 (dann trägt `stack` jeden dtype). Im Quelltext an `stack` dokumentiert.
+  · **Präzisierung v9 — benannte Ausnahme dtype-Skalar (Owner-entschieden 2026-09-26):**
+  scheitert ein SKALAR-Argument an einer dtype-Regel (Arithmetik auf bool, nicht-ganzzahliges Literal
+  auf int32), zeigt der Editor die generische TS2769 der letzten Überladung statt der eigenen
+  Meldung; die Laufzeit wirft die eigene. Begründung gemessen: die einzige korrekte Alternative (eine
+  Signatur mit `IsUnion`-Gate) kostete +8,495 Instantiations (docs/dtype-design-ergebnisse.md). Im
+  Quelltext an den Überladungen dokumentiert (Präzedenz W4/W5).
   Anker: `sym:Guard`, `sym:ShowShape`
 - **M4** · Frozen Baseline: v1-Kerne/-Einstiegspunkte bleiben byte-unberührt; der bindende
   Freeze-Beweis ist der Artefakt-Hash aus einem Clean-Rebuild; abi.rs/matmul_blocked.rs/shape.rs
@@ -169,6 +179,12 @@
 - Keine transzendenten Ops ohne eigene Determinismus-Entscheidung (brechen Bit-Parität).
 
 ## Änderungslog
+- v9 (2026-09-26) · **Promotion und elementweise Arithmetik (Scheibe dt2, docs/dtype-dt2-spec.md
+  v1.1).** M3: benannte Ausnahme für die generische TS2769 bei Skalar-Fehlbenutzung einer dtype-Regel
+  (gemessene Begründung: +8,495 für die einzige korrekte Alternative). M2: `Promote` unter der
+  dtype-Maschinerie, Union-Gate vor der Tabelle, eine Quelle für Typ und Laufzeit; Anker
+  `sym:Promote`. Beide Sätze stammen aus dem dt1-Entwurf und wurden vom Owner nach dt2 verschoben;
+  Wortlaut vom Owner abgenommen 2026-09-26, unverändert übernommen.
 - v8 (2026-09-26) · **Einführung der dtypes (Scheibe dt1, docs/dtype-dt1-spec.md v2).** M3:
   Klassen-Hover zeigen den dtype mit (TS blendet Default-Typargumente nicht aus — zwei Varianten
   per LSP gemessen); befristete Ausnahme für die native Meldung von `stack` bis dt5. M2: die
