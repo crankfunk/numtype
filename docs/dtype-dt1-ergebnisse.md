@@ -1,7 +1,7 @@
 # dt1 — dtype-Kern auf `NDArray` — Ergebnisse
 
-**Spec:** docs/dtype-dt1-spec.md v2.1 (Stufe 3b) · **Datum:** 2026-09-26 · **Commits:** bc84945 …
-5ebc062 auf `main` (unveröffentlicht; Release nach dt5) · **Covenant:** v8 (92f85a7).
+**Spec:** docs/dtype-dt1-spec.md v2.1 (Stufe 3b) · **Datum:** 2026-09-26 · **Commits:** c4cf84d …
+6de528f auf `main` (unveröffentlicht; Release nach dt5) · **Covenant:** v8 (7746a4d).
 
 ## Ergebnis
 

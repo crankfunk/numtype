@@ -76,6 +76,8 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 20. **Tests, die zur Laufzeit Dateien in `spike/src` schreiben** (Mutanten-Nachweise), brauchen ein Namensmuster, das alle tsconfig-Globs über `spike/src` ausschließen (heute `__*-mutant-*-tmp*.ts`), und einen eindeutigen Namen je Lauf — sonst bricht eine bei hartem Abbruch liegengebliebene Kopie `check:diag` und landet im npm-Paket (dt1, 2026-09-26).
 21. **Budget-Stopp-Punkte** in Specs sind nur wirksam als eigener Commit VOR dem nächsten Baustein — misst ein Agent erst nach allem, ist der Stopp wirkungslos (dt1).
 
+22. **Agenten setzen NIE `git config`** (auch nicht „nur im Worktree": ohne `--worktree` schreibt es in die gemeinsame `.git/config` und gilt für ALLE Worktrees und `main`). **Vor jedem Push:** `git log --format='%an <%ae>' origin/main..main | sort -u` darf nur `crankfunk <45401993+crankfunk@users.noreply.github.com>` zeigen. (Vorfall 2026-09-26: ein Agent setzte `scratch <scratch@local>` repo-weit, 16 Commits gingen so auf GitHub; per Owner-Entscheidung umgeschrieben.)
+
 ## Commands
 
 `pnpm check` (Typ-Verbund Root + stress + browser) · `pnpm check:diag` / `:stress` / `:browser` ·

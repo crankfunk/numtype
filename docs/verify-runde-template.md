@@ -29,6 +29,9 @@ steckte in einem frei formulierten Auftrag.
 5. **Scope**: nur die benannte Scheibe. Vorbestehende Probleme kurz als
    „out of scope, pre-existing" notieren, nicht als Blocker behandeln.
 6. **Alle Kommandos vom Repo-Root** (cargo-Config-Discovery ist CWD-basiert).
+7. **Nie `git config` setzen und nie committen** (Verifier ändern nichts; ein `git config user.*`
+   ohne `--worktree` schreibt in die gemeinsame Repo-Konfiguration und verfälscht die Autorenschaft
+   aller künftigen Commits — Vorfall 2026-09-26, CLAUDE.md Arbeitsregel 22).
 
 ## Baustein 0 — adversarialer Spec-Verifier (VOR der Implementierung)
 

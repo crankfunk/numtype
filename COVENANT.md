@@ -57,10 +57,10 @@
   nicht falsch", solange die Laufzeit-Meldung wortgleich zur Sperrmeldung ist und die Sperre in
   FOLLOWUPS getrackt wird.
   · **Präzisierung v9 — Promotion (Owner-entschieden 2026-09-26):** die dtype-Promotion
-  (`Promote`) ist Teil der dtype-Maschinerie nach v8: eine Union als dtype eines Operanden degradiert
+  (`Promote`, für die Division `PromoteDiv`) ist Teil der dtype-Maschinerie nach v8: eine Union als dtype eines Operanden degradiert
   das Ergebnis zu `DType` (kein Anspruch), bevor die Tabelle greift; Typ- und Laufzeit-Tabelle
   stammen aus einer Quelle.
-  Anker: `spike/src/dim.ts`, `spike/src/literal-arithmetic.ts`, `sym:Guard`, `sym:OkShape`, `sym:DTypeLock`, `sym:Promote`
+  Anker: `spike/src/dim.ts`, `spike/src/literal-arithmetic.ts`, `sym:Guard`, `sym:OkShape`, `sym:DTypeLock`, `sym:Promote`, `sym:PromoteDiv`
   · GESCHLOSSEN in Item 11 / S1 (2026-07-17): der `Literal|undefined`-Verstoß durch OPTIONALE
   Parameter (`sum`s `axis`/`keepdims`) ist behoben. Der `sum`-Overload-Umbau (Overloads nach
   Argument-Anzahl 0/1/2 — keine optionalen Parameter mehr in der Mehr-Argument-Form — plus
@@ -184,7 +184,10 @@
   (gemessene Begründung: +8,495 für die einzige korrekte Alternative). M2: `Promote` unter der
   dtype-Maschinerie, Union-Gate vor der Tabelle, eine Quelle für Typ und Laufzeit; Anker
   `sym:Promote`. Beide Sätze stammen aus dem dt1-Entwurf und wurden vom Owner nach dt2 verschoben;
-  Wortlaut vom Owner abgenommen 2026-09-26, unverändert übernommen.
+  Wortlaut vom Owner abgenommen 2026-09-26. **Ergänzt nach der Verify-Runde (Owner-freigegeben
+  2026-09-26):** die Division trägt eine zweite Promotionstabelle (`PromoteDiv`, Gleitkomma immer);
+  Baustein C fand, dass der Wortlaut nur `Promote` nannte — jetzt beide genannt und geankert, beide
+  aus einer Quelle (`PROMOTE_NUMERIC`, `PROMOTE_DIV`). Norm unverändert.
 - v8 (2026-09-26) · **Einführung der dtypes (Scheibe dt1, docs/dtype-dt1-spec.md v2).** M3:
   Klassen-Hover zeigen den dtype mit (TS blendet Default-Typargumente nicht aus — zwei Varianten
   per LSP gemessen); befristete Ausnahme für die native Meldung von `stack` bis dt5. M2: die
