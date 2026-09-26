@@ -72,9 +72,9 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 16. Laufzeittests bauen Views mit `wideSpecs(...)` (`spike/tests-runtime/assert-helpers.ts`), wenn der Empfänger statisch bekannten Rang hat; Ausnahme `slice.test.ts`.
 17. `node --test` druckt Fehlschläge doppelt — über eindeutige Testnamen zählen, nie `grep -c` auf Rohoutput.
 18. README gehört zur Doc-Platzierung, sobald eine Scheibe ändert, WO eine Op läuft; Behauptungen empirisch gegen `spike/src/index.ts` prüfen (`grep -n "TypeScript-runtime only\|no WASM kernel" README.md`).
+19. **README auf `main` darf nichts als verfügbar bewerben, was nicht auf npm ist** (Review-Befund 2026-09-23: die S0–S5-Parität stand in der README, npm 0.2.0 hatte sie nicht). Neue Features in der README als „on main, unreleased" markieren oder erst mit dem Release eintragen.
 20. **Tests, die zur Laufzeit Dateien in `spike/src` schreiben** (Mutanten-Nachweise), brauchen ein Namensmuster, das alle tsconfig-Globs über `spike/src` ausschließen (heute `__*-mutant-*-tmp*.ts`), und einen eindeutigen Namen je Lauf — sonst bricht eine bei hartem Abbruch liegengebliebene Kopie `check:diag` und landet im npm-Paket (dt1, 2026-09-26).
 21. **Budget-Stopp-Punkte** in Specs sind nur wirksam als eigener Commit VOR dem nächsten Baustein — misst ein Agent erst nach allem, ist der Stopp wirkungslos (dt1).
-19. **README auf `main` darf nichts als verfügbar bewerben, was nicht auf npm ist** (Review-Befund 2026-09-23: die S0–S5-Parität stand in der README, npm 0.2.0 hatte sie nicht). Neue Features in der README als „on main, unreleased" markieren oder erst mit dem Release eintragen.
 
 ## Commands
 
