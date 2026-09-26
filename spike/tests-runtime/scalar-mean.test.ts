@@ -2063,3 +2063,105 @@ test("dt2 diagnostic CONTENTS (M3 v9): i32.add(2.5) and boolArr.add(1) show the 
   }
 });
 
+// --- G4 fix (post-3b-verify M3 finding): the int32 non-integer scalar
+// message must be WORD-IDENTICAL between the type level (`ArithScalarOperand`'s
+// own `ShapeError` text, ndarray.ts) and the runtime (`scalarArithTyped`'s
+// thrown message) — they had DRIFTED (the type-level text omitted the int32
+// range this function's message states), an M3 violation invisible in the
+// "dt2 diagnostic CONTENTS" test above only because that call-site form is
+// MASKED by the M3 v9 named exception (it shows the array overload's
+// generic TS2769, never this type's own text). This test bypasses the
+// masking entirely: `ArithScalarOperand` is checked DIRECTLY (not through
+// overload resolution), via the same real-tsc-on-an-out-of-repo-fixture
+// pattern the pins above use, and neither side's message is hand-typed —
+// the runtime side comes from an ACTUAL thrown error, the type-level side
+// from ACTUAL tsc output — so this can never silently pass by both sides
+// independently drifting to the same wrong (hand-copied) string.
+
+test("G4 parity pin: int32 non-integer scalar message is word-identical between ArithScalarOperand's ShapeError (type level) and scalarArithTyped's thrown message (runtime)", () => {
+  const i32 = NDArray.fromArray([1], [1], { dtype: "int32" });
+  // Widened to `number` (same technique the D6 edge-values test above uses
+  // for its own `wideNonInt`): `2.5` as a literal is a PROVEN non-integer
+  // dot-form scalar (D6), which `ArithScalarOperand` rejects AT COMPILE
+  // TIME -- exactly the mechanism this test is about, but not what THIS
+  // particular call needs to exercise (this call is deliberately triggering
+  // the RUNTIME throw to read its message; the type-level side is checked
+  // separately, directly, below via the exported `ArithScalarOperand`).
+  const nonIntegerScalar: number = 2.5;
+  // Captured via `assert.throws`'s predicate-function form (this project's
+  // `node:assert` shim, ambient.d.ts, is a minimal scoped surface — no
+  // `.fail`/`.match` — so the message is captured as a side effect of the
+  // predicate instead, same `throws(fn, predicate, message)` shape every
+  // other assertion in this file already uses).
+  let runtimeMessage = "";
+  assert.throws(
+    () => i32.add(nonIntegerScalar),
+    (err: unknown) => {
+      runtimeMessage = (err as Error).message;
+      return true;
+    },
+    "i32.add(2.5) must throw",
+  );
+  // Sanity: didn't accidentally catch the wrong error / an empty message.
+  assert.ok(
+    /^add: int32 scalar 2\.5 is not a valid integer operand \(must be an integer in \[-2147483648, 2147483647\]\)$/.test(runtimeMessage),
+    `sanity: the actual runtime message must have the expected shape before comparing the type level against it, got: ${runtimeMessage}`,
+  );
+
+  const dir = mkdtempSync(join(tmpdir(), "numtype-g4-parity-pin-"));
+  try {
+    const ndarrayPath = fileURLToPath(new URL("../src/ndarray.ts", import.meta.url).href);
+    const ambientPath = fileURLToPath(new URL("../src/ambient.d.ts", import.meta.url).href);
+    const repoRoot = fileURLToPath(new URL("../..", import.meta.url).href);
+    writeFileSync(
+      join(dir, "probe.ts"),
+      `import type { ArithScalarOperand } from ${JSON.stringify(ndarrayPath)};\n` +
+        // A DIRECT type-level check (never through a method call, so the M3
+        // v9 overload-resolution masking never applies here) — the deliberate
+        // property-mismatch below forces tsc to print `Probe`'s FULLY
+        // resolved shape, including the literal `__shapeError` message text,
+        // in its own diagnostic.
+        `type Probe = ArithScalarOperand<"int32", 2.5, "add">;\n` +
+        `declare const p: Probe;\n` +
+        `const marker: { __wontMatch: true } = p; // deliberate mismatch: reveals Probe's exact resolved type\n` +
+        `void marker;\n`,
+    );
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "bundler",
+          noEmit: true,
+          allowImportingTsExtensions: true,
+          skipLibCheck: true,
+          noUncheckedIndexedAccess: true,
+          exactOptionalPropertyTypes: true,
+        },
+        include: ["probe.ts", ambientPath],
+      }),
+    );
+    const res = spawnSync("pnpm", ["exec", "tsc", "--noEmit", "-p", dir], { cwd: repoRoot, encoding: "utf8" });
+    const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
+    assert.notStrictEqual(res.status, 0, `fixture must fail to compile (deliberate mismatch):\n${out}`);
+
+    const probeErrors = out.split("\n").filter((l) => l.includes("probe.ts(") && l.includes("error TS"));
+    assert.strictEqual(probeErrors.length, 1, `expected exactly ONE fixture error (the deliberate mismatch):\n${out}`);
+
+    // tsc prints the message as the content of a quoted string-literal type
+    // (its own `"`/`[`/`]` chars come out escaped) — `JSON.stringify(...).
+    // slice(1, -1)` reproduces that escaping exactly, same technique the
+    // DTypeLockPair/F1 pins above use, so neither side of this comparison is
+    // ever hand-typed.
+    const escapedRuntimeMessage = JSON.stringify(runtimeMessage).slice(1, -1);
+    assert.ok(
+      out.includes(escapedRuntimeMessage),
+      `ArithScalarOperand<"int32", 2.5, "add">'s ShapeError text must be WORD-IDENTICAL (M3) to scalarArithTyped's actual thrown message:\n${out}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
