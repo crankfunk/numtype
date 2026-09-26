@@ -20,7 +20,7 @@
  */
 
 import type { Broadcast } from "./broadcast.ts";
-import { type Dim, type Mutable, type RankUnknowable, type Shape, type ShapeError } from "./dim.ts";
+import { type Dim, type IsUnion, type Mutable, type RankUnknowable, type Shape, type ShapeError } from "./dim.ts";
 import type { MatMul } from "./matmul.ts";
 import type { ReduceAxis, Transpose } from "./reduce.ts";
 import type { ReshapeCheck } from "./reshape.ts";
@@ -30,6 +30,7 @@ import {
   assertReshapeArgs,
   assertVectorPair,
   astypeConvert,
+  BOOL_ARITHMETIC_MESSAGE,
   computeStrides,
   convertToDType,
   type DataOf,
@@ -37,6 +38,8 @@ import {
   dotRuntime,
   type DType,
   elementwiseBinary,
+  elementwiseBinaryTyped,
+  elementwiseDivTyped,
   formatNDArrayDisplay,
   itemRuntime,
   keepDimsShape,
@@ -44,8 +47,10 @@ import {
   meanRuntime,
   normalizeSliceSpecs,
   normSqRuntime,
+  type NumericDType,
   onesData,
   product,
+  PROMOTE_NUMERIC,
   scalarElementwiseRuntime,
   sliceDtyped,
   type SliceSpec,
@@ -96,6 +101,74 @@ export type OkShape<S> = S extends ShapeError<string> ? never : S extends Shape 
  *
  * Exported (type-only, Kern 02): see `OkShape` above. */
 export type Guard<Result, Actual> = [Result] extends [ShapeError<infer Message>] ? { readonly __shapeError: Message } : Actual;
+
+/**
+ * dt2 P1 (D4, docs/dtype-dt2-spec.md; design docs/dtype-design-spec.md):
+ * dtype promotion at the TYPE level for `add`/`sub`/`mul`'s array⊕array
+ * overload, reading the SAME runtime table (`PROMOTE_NUMERIC`, runtime.ts)
+ * via `typeof` — one object literal, this type is a computed VIEW of it,
+ * never a hand-duplicated mirror that could drift (spec: "Typebene und
+ * identische Laufzeit-Tabelle aus EINER Quelle").
+ *
+ * **Union-Gate FIRST** (Arbeitsregel 3; reproduces the design-spec's
+ * Baustein-0 Blocker F4): `IsUnion<A>`/`IsUnion<B>` run BEFORE any `extends`
+ * branch on the dtype value itself. Without it, `Promote<"bool" | "int32",
+ * "int32">` — the type a caller gets calling `.add` with an `NDArray<S,
+ * DType>` (an "unknown dtype") receiver against a known int32 argument —
+ * would distribute the naked union through `A extends "bool" ? reject :
+ * ...`, and a union of "reject" with a real result silently WIDENS to just
+ * the accepted member: the bool rejection vanishes with no diagnostic. The
+ * gate instead degrades the WHOLE result to the wide `DType` union — no
+ * claim, never a false accept (M2); the runtime (`promoteDType`) still
+ * throws on an ACTUAL bool value at that point. Every dtype-checking
+ * consumer below reuses the SAME gate ("Dasselbe Gate gilt für jede
+ * dtype-Funktion", D4).
+ *
+ * Bool rejection (D4/D7) resolves to a `ShapeError` — the SAME `Guard`
+ * mechanism a shape mismatch uses, so the diagnostic has the identical
+ * "missing property" shape, word-identical (M3) to the runtime throw
+ * (`BOOL_ARITHMETIC_MESSAGE`, imported, never re-typed here).
+ */
+export type Promote<A extends DType, B extends DType> = IsUnion<A> extends true
+  ? DType
+  : IsUnion<B> extends true
+    ? DType
+    : A extends "bool"
+      ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
+      : B extends "bool"
+        ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
+        : (typeof PROMOTE_NUMERIC)[A & NumericDType][B & NumericDType];
+
+/** dt2 P2 (D5): `div`'s own promotion rule — ALWAYS floating-point, never
+ * int32 (unlike `Promote` above, which lets int32⊕int32 stay int32):
+ * float32⊕float32 → float32, every other combination (including
+ * int32⊕int32, which `Promote` keeps int32) → float64. Same Union-Gate-
+ * first, bool-rejects-unconditionally shape as `Promote` — a genuinely
+ * INDEPENDENT table over the same two operands, not derived by
+ * post-processing `Promote<A,B>`'s own result: once `B` is a generic
+ * parameter, `Promote<A,B>`'s result alone can't distinguish "both operands
+ * were float32" from "the result happens to be float32" (e.g.
+ * `Promote<int32,int32>` and a mixed pair that also happens to yield
+ * `int32` aren't distinguishable after the fact). */
+export type PromoteDiv<A extends DType, B extends DType> = IsUnion<A> extends true
+  ? DType
+  : IsUnion<B> extends true
+    ? DType
+    : A extends "bool"
+      ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
+      : B extends "bool"
+        ? ShapeError<typeof BOOL_ARITHMETIC_MESSAGE>
+        : A extends "float32"
+          ? B extends "float32"
+            ? "float32"
+            : "float64"
+          : "float64";
+
+/** Mirrors `OkShape` above, for a `Promote`/`PromoteDiv` result: strips the
+ * `ShapeError` branch down to a real `DType` (never `never` for the
+ * union-degraded ACCEPT case — `DType` itself already satisfies `extends
+ * DType`). */
+export type OkDType<P> = P extends ShapeError<string> ? never : P extends DType ? P : never;
 
 /**
  * Op-Scheibe W4 (docs/op-w4-stack-spec.md, D2/F1/F2): the `NDArray` ->
@@ -747,35 +820,49 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * test in scalar-mean.test.ts (asserts the broadcast stem in real tsc
    * output — an `@ts-expect-error` alone cannot see message content).
    *
-   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt2 gives
-   * `add` real Promotion + the D6 scalar rule) — both overloads' arguments
-   * carry `DTypeLock`/`DTypeLockPair`, plus a runtime `assertFloat64Locked`
-   * backstop (word-identical message, M3). `<DD extends DType = D>` on the
-   * scalar overload (measured TS 7.0.2 quirk, prototype stage 7): an
-   * overload signature with NO local type parameter of its own, whose
-   * argument type directly references the ENCLOSING class's `D` inside a
-   * `Guard`-wrapped conditional, fails TS2394 ("not compatible with its
-   * implementation signature") — even though the implementation accepts a
-   * strict superset. Adding a local generic that merely DEFAULTS to `D`
-   * (never otherwise used) resolves it; the array overload already has a
-   * local generic (`B`) for another reason and needs no such workaround
-   * (mirrored on `Dd` below, one more for the argument's own dtype). */
+   * dt2 Commit A (P1/P2, docs/dtype-dt2-spec.md): the ARRAY overload's dtype
+   * check is now `Promote<D, Dd>` (D4/D5) instead of dt1's blanket
+   * `DTypeLockPair` — float64/float32/int32 combine per the promotion table
+   * (int32⊕int32 wraps two's-complement, a float32⊕float32 result is
+   * correctly rounded, D8), bool still rejects unconditionally (D4/D7,
+   * `Promote`'s own `ShapeError` branch). The SCALAR overload is UNCHANGED
+   * in this commit — still locked to `D = "float64"` via `DTypeLock`
+   * (dt2 Commit B adds the D6 scalar rule for float32/int32; the runtime
+   * `assertFloat64Locked` guard accordingly moved from a blanket top-of-body
+   * call to the scalar branch ONLY, since the array branch now legitimately
+   * accepts non-float64 receivers). `<DD extends DType = D>` on the scalar
+   * overload (measured TS 7.0.2 quirk, prototype stage 7, dt1): an overload
+   * signature with NO local type parameter of its own, whose argument type
+   * directly references the ENCLOSING class's `D` inside a `Guard`-wrapped
+   * conditional, fails TS2394 ("not compatible with its implementation
+   * signature") — even though the implementation accepts a strict superset.
+   * Adding a local generic that merely DEFAULTS to `D` (never otherwise
+   * used) resolves it; the array overload already has a local generic (`B`)
+   * for another reason and needs no such workaround (mirrored on `Dd`
+   * below, one more for the argument's own dtype). */
   add<DD extends DType = D>(s: Guard<DTypeLock<DD, "add">, number>): NDArray<S>;
   add<B extends Shape, Dd extends DType>(
-    other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "add">, NDArray<B, Dd>>,
-  ): NDArray<OkShape<Broadcast<S, B>>>;
+    other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>, OkDType<Promote<D, Dd>>>;
   add<B extends Shape, Dd extends DType>(
-    other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "add">, NDArray<B, Dd>>,
-  ): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
-    assertFloat64Locked("add", this.dtype);
+    other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<any, any> {
     if (typeof other === "number") {
+      assertFloat64Locked("add", this.dtype);
       const data = scalarElementwiseRuntime("add", this.data as unknown as Float64Array, other);
-      return new NDArray<S>(this.shape as unknown as S, "float64", data);
+      return new NDArray<any, any>(this.shape, "float64", data);
     }
     const o = other as unknown as NDArray<B, Dd>;
-    assertFloat64Locked("add", o.dtype);
-    const { shape, data } = elementwiseBinary(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array, (x, y) => x + y);
-    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, "float64", data);
+    const { shape, data, resultDtype } = elementwiseBinaryTyped(
+      "add",
+      this.shape,
+      this.data as unknown as DataOfRuntime,
+      this.dtype,
+      o.shape,
+      o.data as unknown as DataOfRuntime,
+      o.dtype,
+    );
+    return new NDArray<any, any>(shape, resultDtype, data);
   }
 
   /** Broadcasting elementwise subtract (Kern 07). Structural mirror of
@@ -790,24 +877,32 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * order (scalar first, generic Guard-carrier last — Verify-B F1), and
    * `NDArray.backend(kind)` precedent as `add` above — see its doc comment.
    *
-   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice — same
-   * mechanism, and the same `<DD = D>` TS2394 workaround, as `add` above. */
+   * dt2 Commit A: same mechanism as `add` above — array overload uses
+   * `Promote<D, Dd>`, scalar overload unchanged (still `DTypeLock`-locked to
+   * float64 in this commit). */
   sub<DD extends DType = D>(s: Guard<DTypeLock<DD, "sub">, number>): NDArray<S>;
   sub<B extends Shape, Dd extends DType>(
-    other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "sub">, NDArray<B, Dd>>,
-  ): NDArray<OkShape<Broadcast<S, B>>>;
+    other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>, OkDType<Promote<D, Dd>>>;
   sub<B extends Shape, Dd extends DType>(
-    other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "sub">, NDArray<B, Dd>>,
-  ): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
-    assertFloat64Locked("sub", this.dtype);
+    other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<any, any> {
     if (typeof other === "number") {
+      assertFloat64Locked("sub", this.dtype);
       const data = scalarElementwiseRuntime("sub", this.data as unknown as Float64Array, other);
-      return new NDArray<S>(this.shape as unknown as S, "float64", data);
+      return new NDArray<any, any>(this.shape, "float64", data);
     }
     const o = other as unknown as NDArray<B, Dd>;
-    assertFloat64Locked("sub", o.dtype);
-    const { shape, data } = elementwiseBinary(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array, (x, y) => x - y);
-    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, "float64", data);
+    const { shape, data, resultDtype } = elementwiseBinaryTyped(
+      "sub",
+      this.shape,
+      this.data as unknown as DataOfRuntime,
+      this.dtype,
+      o.shape,
+      o.data as unknown as DataOfRuntime,
+      o.dtype,
+    );
+    return new NDArray<any, any>(shape, resultDtype, data);
   }
 
   /** Broadcasting elementwise multiply (Kern 07). Structural mirror of
@@ -821,24 +916,35 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * order (scalar first, generic Guard-carrier last — Verify-B F1), and
    * `NDArray.backend(kind)` precedent as `add` above — see its doc comment.
    *
-   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice — same
-   * mechanism, and the same `<DD = D>` TS2394 workaround, as `add` above. */
+   * dt2 Commit A: same mechanism as `add` above — array overload uses
+   * `Promote<D, Dd>`; int32⊕int32 wraps EXCLUSIVELY via `Math.imul` (dt2
+   * spec B1/v1.1), never `(a*b)|0` — see `elementwiseBinaryTyped`'s own doc
+   * comment (runtime.ts) for why the naive form silently loses precision
+   * once the product exceeds 2^53. Scalar overload unchanged (still
+   * `DTypeLock`-locked to float64 in this commit). */
   mul<DD extends DType = D>(s: Guard<DTypeLock<DD, "mul">, number>): NDArray<S>;
   mul<B extends Shape, Dd extends DType>(
-    other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "mul">, NDArray<B, Dd>>,
-  ): NDArray<OkShape<Broadcast<S, B>>>;
+    other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>, OkDType<Promote<D, Dd>>>;
   mul<B extends Shape, Dd extends DType>(
-    other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "mul">, NDArray<B, Dd>>,
-  ): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
-    assertFloat64Locked("mul", this.dtype);
+    other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : Promote<D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<any, any> {
     if (typeof other === "number") {
+      assertFloat64Locked("mul", this.dtype);
       const data = scalarElementwiseRuntime("mul", this.data as unknown as Float64Array, other);
-      return new NDArray<S>(this.shape as unknown as S, "float64", data);
+      return new NDArray<any, any>(this.shape, "float64", data);
     }
     const o = other as unknown as NDArray<B, Dd>;
-    assertFloat64Locked("mul", o.dtype);
-    const { shape, data } = elementwiseBinary(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array, (x, y) => x * y);
-    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, "float64", data);
+    const { shape, data, resultDtype } = elementwiseBinaryTyped(
+      "mul",
+      this.shape,
+      this.data as unknown as DataOfRuntime,
+      this.dtype,
+      o.shape,
+      o.data as unknown as DataOfRuntime,
+      o.dtype,
+    );
+    return new NDArray<any, any>(shape, resultDtype, data);
   }
 
   /** Broadcasting elementwise divide (Kern 07). Structural mirror of `add`
@@ -859,24 +965,36 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * still works (byte-identical to this overload for rank >= 1, D3), just
    * no longer necessary.
    *
-   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice — same
-   * mechanism, and the same `<DD = D>` TS2394 workaround, as `add` above. */
+   * dt2 Commit A (P2, D5): the ARRAY overload's dtype check is
+   * `PromoteDiv<D, Dd>` — its OWN table, not `Promote` (div is ALWAYS
+   * floating-point: float32⊕float32 → float32, everything else, INCLUDING
+   * int32⊕int32, → float64 — `Promote` would keep int32⊕int32 as int32).
+   * Scalar overload unchanged in this commit (still `DTypeLock`-locked to
+   * float64; dt2 Commit B gives it `PromoteDiv`'s degenerate self-pairing
+   * rule instead of D6's int32-integer restriction, since div never needs
+   * an integer scalar). */
   div<DD extends DType = D>(s: Guard<DTypeLock<DD, "div">, number>): NDArray<S>;
   div<B extends Shape, Dd extends DType>(
-    other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "div">, NDArray<B, Dd>>,
-  ): NDArray<OkShape<Broadcast<S, B>>>;
+    other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : PromoteDiv<D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>, OkDType<PromoteDiv<D, Dd>>>;
   div<B extends Shape, Dd extends DType>(
-    other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "div">, NDArray<B, Dd>>,
-  ): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
-    assertFloat64Locked("div", this.dtype);
+    other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : PromoteDiv<D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<any, any> {
     if (typeof other === "number") {
+      assertFloat64Locked("div", this.dtype);
       const data = scalarElementwiseRuntime("div", this.data as unknown as Float64Array, other);
-      return new NDArray<S>(this.shape as unknown as S, "float64", data);
+      return new NDArray<any, any>(this.shape, "float64", data);
     }
     const o = other as unknown as NDArray<B, Dd>;
-    assertFloat64Locked("div", o.dtype);
-    const { shape, data } = elementwiseBinary(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array, (x, y) => x / y);
-    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, "float64", data);
+    const { shape, data, resultDtype } = elementwiseDivTyped(
+      this.shape,
+      this.data as unknown as DataOfRuntime,
+      this.dtype,
+      o.shape,
+      o.data as unknown as DataOfRuntime,
+      o.dtype,
+    );
+    return new NDArray<any, any>(shape, resultDtype, data);
   }
 
   /** Full NumPy `matmul`: 2-D product, 1-D promotion, batch broadcasting.

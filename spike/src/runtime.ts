@@ -1474,3 +1474,183 @@ export function assertFloat64Locked(op: string, dtype: DType): void {
     throw new Error(lockedOpMessage(op, dtype));
   }
 }
+
+// ---------------------------------------------------------------------------
+// dt2 (docs/dtype-dt2-spec.md), Commit A — P1 (Promote) + P2 (array⊕array for
+// add/sub/mul/div). Prototype precedent: proto/dtype 90e7aae (stage 3,
+// Promote + add's array overload). The bool-arithmetic message below is the
+// SAME string the compile-time `Promote<A,B>`/`PromoteDiv<A,B>` (ndarray.ts)
+// embed in their `ShapeError` branch via `typeof` (M3, single source, never
+// re-typed by hand) — a `const` string declaration's inferred TYPE is
+// already the literal (verified empirically against real tsc 7.0.2, no
+// `as const` needed for a bare top-level string constant).
+// ---------------------------------------------------------------------------
+
+/** D4/D7 (dt2 P1/P4): bool has no arithmetic at all — every `Promote`/
+ * `PromoteDiv` rejection involving bool, and the permanent scalar rejection
+ * (P4, replacing dt1's transitional `lockedOpMessage` for this case), uses
+ * this EXACT stem, compile-time and runtime alike (M3). */
+export const BOOL_ARITHMETIC_MESSAGE = "dtype 'bool' has no arithmetic — use astype() to convert first";
+
+/** D4: the three dtypes `Promote`/`PromoteDiv`'s tables cover directly —
+ * `bool` is handled separately (it always rejects, D4/D7), never a
+ * `PROMOTE_NUMERIC` key. */
+export type NumericDType = Exclude<DType, "bool">;
+
+/** D4 (dt2 P1): the single source of truth for NUMERIC dtype promotion
+ * (`add`/`sub`/`mul`'s array⊕array rule — `bool` excluded, handled
+ * separately by `promoteDType` below). The compile-time `Promote<A,B>`
+ * (ndarray.ts) reads this SAME object via `typeof` for its non-bool branch,
+ * so type and runtime tables cannot drift (spec P1: "Typebene und
+ * identische Laufzeit-Tabelle aus EINER Quelle"). */
+export const PROMOTE_NUMERIC = {
+  float64: { float64: "float64", float32: "float64", int32: "float64" },
+  float32: { float64: "float64", float32: "float32", int32: "float64" },
+  int32: { float64: "float64", float32: "float64", int32: "int32" },
+} as const;
+
+/**
+ * D4 (dt2 P1): runtime dtype promotion for `add`/`sub`/`mul`. Throws
+ * `BOOL_ARITHMETIC_MESSAGE` (word-for-word matching the compile-time
+ * `Promote<A,B>` rejection, M3) when EITHER operand is `bool` — bool has no
+ * arithmetic, only `astype` converts it (D7). Otherwise looks up
+ * `PROMOTE_NUMERIC` directly — the single source the compile-time type
+ * reads too.
+ */
+export function promoteDType(a: DType, b: DType): NumericDType {
+  if (a === "bool" || b === "bool") {
+    throw new Error(BOOL_ARITHMETIC_MESSAGE);
+  }
+  return PROMOTE_NUMERIC[a as NumericDType][b as NumericDType];
+}
+
+/**
+ * D5 (dt2 P2): runtime dtype promotion for `div` — ALWAYS floating-point,
+ * never int32 (unlike `promoteDType` above, which lets int32⊕int32 stay
+ * int32): float32⊕float32 → float32, every other combination (including
+ * int32⊕int32) → float64. Throws `BOOL_ARITHMETIC_MESSAGE` when either
+ * operand is bool, same as `promoteDType`.
+ */
+export function promoteDTypeDiv(a: DType, b: DType): "float32" | "float64" {
+  if (a === "bool" || b === "bool") {
+    throw new Error(BOOL_ARITHMETIC_MESSAGE);
+  }
+  return a === "float32" && b === "float32" ? "float32" : "float64";
+}
+
+/**
+ * D4/D5/D8 (dt2 P2): dtype-aware, broadcasting elementwise `add`/`sub`/`mul`
+ * — the SAME broadcast/index algorithm `elementwiseBinary` above already
+ * implements (duplicated here rather than generalizing that frozen
+ * function's own signature, frozen-baseline discipline: `elementwiseBinary`
+ * stays byte-unchanged, still the exact float64 oracle the existing
+ * differential suite pins, and now doubles as dt2's own float64⊕float64
+ * test oracle, v1.1 Baustein 0), generalized over `DataOfRuntime` and the
+ * promoted result dtype (`promoteDType`).
+ *
+ * Two's-complement wrap for an int32 result: `(a+b)|0`/`(a-b)|0` for
+ * add/sub, but `Math.imul(a,b)` EXCLUSIVELY for mul (dt2 spec B1/v1.1):
+ * `(a*b)|0` first computes the product in float64, which silently loses
+ * precision once it exceeds 2^53 — e.g. `2147483647 * 2147483647 | 0`
+ * evaluates to `0`, not the correct wrapped `1` — while `Math.imul`
+ * computes the wrapped 32-bit product directly, never through a float64
+ * intermediate. A float32 result (only reachable when BOTH operands are
+ * float32, the sole `PROMOTE_NUMERIC` cell yielding it) is computed in f64
+ * and `Math.fround`ed per element (D8's correctly-rounded contract for
+ * `+ − ×`, doubly-rounded-is-harmless per Figueroa 1995). Throws
+ * `BOOL_ARITHMETIC_MESSAGE` (via `promoteDType`) if either operand is bool.
+ */
+export function elementwiseBinaryTyped(
+  op: "add" | "sub" | "mul",
+  aShape: readonly number[],
+  aData: DataOfRuntime,
+  aDtype: DType,
+  bShape: readonly number[],
+  bData: DataOfRuntime,
+  bDtype: DType,
+): { shape: number[]; data: DataOfRuntime; resultDtype: NumericDType } {
+  const resultDtype = promoteDType(aDtype, bDtype);
+  const outShape = runtimeBroadcastShape(aShape, bShape);
+  const rank = outShape.length;
+
+  const aAligned = alignToRank(aShape, computeStrides(aShape), rank);
+  const bAligned = alignToRank(bShape, computeStrides(bShape), rank);
+  const aEff = effectiveStrides(aAligned.shape, aAligned.strides);
+  const bEff = effectiveStrides(bAligned.shape, bAligned.strides);
+
+  const outStrides = computeStrides(outShape);
+  const size = product(outShape);
+  const out: DataOfRuntime = resultDtype === "int32" ? new Int32Array(size) : resultDtype === "float32" ? new Float32Array(size) : new Float64Array(size);
+
+  for (let flat = 0; flat < size; flat++) {
+    const idx = unravel(flat, outShape, outStrides);
+    let aOff = 0;
+    let bOff = 0;
+    for (let i = 0; i < rank; i++) {
+      const ix = idx[i] ?? 0;
+      aOff += ix * (aEff[i] ?? 0);
+      bOff += ix * (bEff[i] ?? 0);
+    }
+    const x = aData[aOff] ?? 0;
+    const y = bData[bOff] ?? 0;
+    if (resultDtype === "int32") {
+      (out as Int32Array)[flat] = op === "mul" ? Math.imul(x, y) : op === "add" ? (x + y) | 0 : (x - y) | 0;
+    } else if (resultDtype === "float32") {
+      const raw = op === "add" ? x + y : op === "sub" ? x - y : x * y;
+      (out as Float32Array)[flat] = Math.fround(raw);
+    } else {
+      (out as Float64Array)[flat] = op === "add" ? x + y : op === "sub" ? x - y : x * y;
+    }
+  }
+  return { shape: outShape, data: out, resultDtype };
+}
+
+/**
+ * D5/D8 (dt2 P2): dtype-aware, broadcasting elementwise `div` — same
+ * broadcast/index algorithm as `elementwiseBinaryTyped` above, but its own
+ * function (not a third `op` branch there): `div`'s result dtype follows
+ * `promoteDTypeDiv`, a DIFFERENT table (always floating-point, int32⊕int32
+ * → float64 rather than staying int32), so there is no int32 output branch
+ * to wrap here at all — only a possible float32 `Math.fround` per element
+ * (D8), reachable exactly when both operands are float32. Pure IEEE 754
+ * division throughout (`x/0 → ±Infinity`, `0/0 → NaN`), same as the
+ * existing float64-only `elementwiseBinary` path. Throws
+ * `BOOL_ARITHMETIC_MESSAGE` (via `promoteDTypeDiv`) if either operand is
+ * bool.
+ */
+export function elementwiseDivTyped(
+  aShape: readonly number[],
+  aData: DataOfRuntime,
+  aDtype: DType,
+  bShape: readonly number[],
+  bData: DataOfRuntime,
+  bDtype: DType,
+): { shape: number[]; data: DataOfRuntime; resultDtype: "float32" | "float64" } {
+  const resultDtype = promoteDTypeDiv(aDtype, bDtype);
+  const outShape = runtimeBroadcastShape(aShape, bShape);
+  const rank = outShape.length;
+
+  const aAligned = alignToRank(aShape, computeStrides(aShape), rank);
+  const bAligned = alignToRank(bShape, computeStrides(bShape), rank);
+  const aEff = effectiveStrides(aAligned.shape, aAligned.strides);
+  const bEff = effectiveStrides(bAligned.shape, bAligned.strides);
+
+  const outStrides = computeStrides(outShape);
+  const size = product(outShape);
+  const out: DataOfRuntime = resultDtype === "float32" ? new Float32Array(size) : new Float64Array(size);
+
+  for (let flat = 0; flat < size; flat++) {
+    const idx = unravel(flat, outShape, outStrides);
+    let aOff = 0;
+    let bOff = 0;
+    for (let i = 0; i < rank; i++) {
+      const ix = idx[i] ?? 0;
+      aOff += ix * (aEff[i] ?? 0);
+      bOff += ix * (bEff[i] ?? 0);
+    }
+    const raw = (aData[aOff] ?? 0) / (bData[bOff] ?? 0);
+    if (resultDtype === "float32") (out as Float32Array)[flat] = Math.fround(raw);
+    else (out as Float64Array)[flat] = raw;
+  }
+  return { shape: outShape, data: out, resultDtype };
+}
