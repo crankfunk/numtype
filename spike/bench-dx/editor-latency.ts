@@ -943,15 +943,29 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // rollout did). Measured TWICE (fresh `gen-workloads.ts` run each time),
 // byte-identical both times. Correctness gate and latency medians unaffected
 // (still PASS, still under the 2x ceiling).
+// Re-pinned 2026-09-26 (dt2 3b-verify fix-up slice, G1/G3): every workload
+// calls `add` (same note as the pin directly above), so both dt2-review
+// fixes that touch `Promote`/`PromoteDiv` ripple into every workload's own
+// `add` overload resolution. G1 adds the `IsAnyDType<T>` any-gate (laundered
+// through `T extends infer U ? ... : never`, two extra nested conditionals
+// per operand) to BOTH `Promote` and `PromoteDiv`; G3 rewrites `PromoteDiv`'s
+// leaf from a hand-written nested ternary onto the same indexed-access shape
+// `Promote` already uses (`(typeof PROMOTE_DIV)[...][...]`), which is
+// marginally pricier per instantiation than a plain ternary chain. Uniform-
+// ish shift (+291..+337, spread 46 — similar spread class to the dt2 pin
+// directly above, for the same reason: only `add`'s own overload set is
+// touched, not every op). Measured TWICE (fresh `gen-workloads.ts` run each
+// time), byte-identical both times. Correctness gate and latency medians
+// unaffected (still PASS, still under the 2x ceiling).
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 40840,
-  w2: 42834,
-  w3: 73637,
-  w4: 40915,
-  w5: 46422,
-  w6: 47276,
-  w7: 39840,
-  w8: 47800,
+  w1: 41165,
+  w2: 43171,
+  w3: 73928,
+  w4: 41206,
+  w5: 46751,
+  w6: 47567,
+  w7: 40131,
+  w8: 48125,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {
