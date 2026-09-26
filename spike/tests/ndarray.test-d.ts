@@ -1,6 +1,6 @@
 import type { Broadcast } from "../src/broadcast.ts";
 import type { Shape } from "../src/dim.ts";
-import { type AnyNDArray, type Guard, NDArray, type NDArrayView, type NestedArray, type NestedValue } from "../src/ndarray.ts";
+import { type AnyNDArray, type Guard, NDArray, type NDArrayView, type NestedArray, type NestedBoolValue, type NestedValue } from "../src/ndarray.ts";
 import type { ReduceAxis } from "../src/reduce.ts";
 import type { ItemGuard, StackCheck, TopkCheck } from "../src/vector.ts";
 import type { CoreExports } from "../src/wasm/loader.ts";
@@ -226,7 +226,13 @@ type NDMixedRankUnion = Expect<Equal<ReturnType<NDArray<[2] | [2, 3]>["toNestedA
 type NDSameRankUnion = Expect<Equal<ReturnType<NDArray<[2, 3] | [4, 5]>["toNestedArray"]>, number[][]>>;
 type NDNever = Expect<Equal<ReturnType<NDArray<never>["toNestedArray"]>, NestedValue>>;
 type NDRestTuple = Expect<Equal<ReturnType<NDArray<[2, ...number[]]>["toNestedArray"]>, NestedValue>>;
-type NDAnyTop = Expect<Equal<ReturnType<AnyNDArray["toNestedArray"]>, NestedValue>>;
+// dt1 (K5, docs/dtype-dt1-spec.md; A2 point 1): `AnyNDArray` widened from
+// `NDArray<any>` to `NDArray<any, any>` (the fix for the confident-WRONG
+// "any shape, only float64" top type, prototype finding F1) — its
+// `toNestedArray()` now spans EVERY dtype's leaf type, `NestedValue |
+// NestedBoolValue`, not just `NestedValue`. A mandatory, disclosed
+// consequence of K5, not a behavior change to any float64 code path.
+type NDAnyTop = Expect<Equal<ReturnType<AnyNDArray["toNestedArray"]>, NestedValue | NestedBoolValue>>;
 
 // WNDArray: same expectation catalog, plus its own top type (`AnyWNDArray`).
 type WNDRank0 = Expect<Equal<ReturnType<WNDArray<[]>["toNestedArray"]>, number>>;

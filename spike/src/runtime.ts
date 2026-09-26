@@ -1154,3 +1154,293 @@ export function formatNDArrayDisplay(className: string, shape: readonly number[]
   };
   return `${className}<[${shape.join(", ")}]> ${formatValue(nested)}`;
 }
+
+// ---------------------------------------------------------------------------
+// dt1 (docs/dtype-dt1-spec.md): dtype core on `NDArray` — storage, creation,
+// conversion, and the dtype-neutral movement ops for float64/float32/int32/
+// bool. Appended strictly after all pre-existing content in this file
+// (freeze discipline — nothing above this comment is touched; every
+// pre-existing exported function, including `transposeRuntime`/
+// `sliceRuntime` above, keeps its exact byte-for-byte behavior and stays the
+// float64-only oracle the new functions below are tested against). Reuses
+// the design from docs/dtype-design-spec.md v2.1 (D1-D10) and the prototype
+// on branch `proto/dtype` (059d852) where its scope matches dt1's K1/K2;
+// the prototype LOCKED transpose/slice/reshape/flatten to float64-only,
+// which dt1's K3 must instead implement for every dtype — the twins below
+// are new, with no prototype precedent (dt1 spec, "Vorprüfung").
+// ---------------------------------------------------------------------------
+
+/** K1 (D1): the four dtypes this rollout supports (float16/int64/uint8/
+ * complex are explicit non-goals, docs/dtype-design-spec.md "Nicht-Ziele").
+ * `NDArray<S, D extends DType = "float64">`'s default keeps every existing
+ * 1-type-argument use (`NDArray<[2, 3]>`) valid and meaning float64,
+ * unchanged. */
+export type DType = "float64" | "float32" | "int32" | "bool";
+
+/** K1 (D2): `NDArray.data`'s storage per dtype — all four are ECMAScript-
+ * standard typed arrays (M5/Z1 unaffected: no new dependency); bool stores
+ * 0/1 in a `Uint8Array`. */
+export type DataOf<D extends DType> = D extends "float32" ? Float32Array : D extends "int32" ? Int32Array : D extends "bool" ? Uint8Array : Float64Array;
+
+/** The shape-erased union of every concrete `DataOf<D>` — this file's own
+ * value-layer need for a dtype-generic buffer (mirrors `SliceSpec`'s role: a
+ * plain value-layer type, independent of the type-level `DataOf<D>` above,
+ * that this module's runtime functions pass around before the caller's own
+ * generic `D` narrows it back down). */
+export type DataOfRuntime = Float64Array | Float32Array | Int32Array | Uint8Array;
+
+/** K2 (D3): allocate a fresh all-zeros buffer for `dtype` (the runtime
+ * backing for `NDArray.zeros`). */
+export function zerosData(dtype: DType, size: number): DataOfRuntime {
+  switch (dtype) {
+    case "float64":
+      return new Float64Array(size);
+    case "float32":
+      return new Float32Array(size);
+    case "int32":
+      return new Int32Array(size);
+    case "bool":
+      return new Uint8Array(size);
+  }
+}
+
+/** K2 (D3): allocate a fresh all-ones buffer for `dtype` (the runtime
+ * backing for `NDArray.ones`) — `1` is exactly representable in every one of
+ * the four storage kinds (including bool's 0/1 convention). */
+export function onesData(dtype: DType, size: number): DataOfRuntime {
+  switch (dtype) {
+    case "float64":
+      return new Float64Array(size).fill(1);
+    case "float32":
+      return new Float32Array(size).fill(1);
+    case "int32":
+      return new Int32Array(size).fill(1);
+    case "bool":
+      return new Uint8Array(size).fill(1);
+  }
+}
+
+/**
+ * K2 (D3): convert + validate a plain numeric source (`number[]` or any
+ * existing typed array, read element-by-element via `ArrayLike<number>`)
+ * into `dtype`'s storage, for the explicit-`dtype` path of `fromArray`.
+ * Runtime backstop for exactly the cases the type layer leaves gradual (a
+ * wide `number[]`, or a literal array whose per-element values the checker
+ * can't/doesn't prove) — mirrors `astypeConvert`'s per-dtype rules below,
+ * except int32/bool here THROW on a bad value rather than truncating/
+ * coercing (D3: "Werte werden geprüft und konvertiert ... sonst Throw" — a
+ * *constructor* input is validated strictly; `astype` is the *converting*
+ * op, D3's own separate rule set below).
+ *  - float64/float32: no validation beyond the numeric conversion itself
+ *    (float32 via `Math.fround`, same correctly-rounded contract D8 relies
+ *    on elsewhere).
+ *  - int32: every value must already be an integer within [-2^31, 2^31-1],
+ *    else throw (this is `fromArray`, not `astype` — no truncation here).
+ *  - bool: every value must be exactly `0` or `1`, else throw.
+ */
+export function convertToDType(dtype: DType, values: ArrayLike<number>): DataOfRuntime {
+  const n = values.length;
+  switch (dtype) {
+    case "float64": {
+      const out = new Float64Array(n);
+      for (let i = 0; i < n; i++) out[i] = values[i] ?? 0;
+      return out;
+    }
+    case "float32": {
+      const out = new Float32Array(n);
+      for (let i = 0; i < n; i++) out[i] = Math.fround(values[i] ?? 0);
+      return out;
+    }
+    case "int32": {
+      const out = new Int32Array(n);
+      for (let i = 0; i < n; i++) {
+        const v = values[i] ?? 0;
+        if (!Number.isInteger(v) || v < -2147483648 || v > 2147483647) {
+          throw new Error(`fromArray: value ${v} at index ${i} is not a valid int32 (must be an integer in [-2147483648, 2147483647])`);
+        }
+        out[i] = v;
+      }
+      return out;
+    }
+    case "bool": {
+      const out = new Uint8Array(n);
+      for (let i = 0; i < n; i++) {
+        const v = values[i] ?? 0;
+        if (v !== 0 && v !== 1) {
+          throw new Error(`fromArray: value ${v} at index ${i} is not a valid bool (must be 0 or 1)`);
+        }
+        out[i] = v;
+      }
+      return out;
+    }
+  }
+}
+
+/**
+ * K2 (D3): `astype` conversion rules, keyed ONLY by the TARGET dtype (the
+ * source value is always already a plain JS `number` once read out of any
+ * typed array, so the conversion rule never needs to branch on the source's
+ * own dtype — D2's "bool -> numerisch 0/1" is exactly the float64/float32/
+ * int32 branches applied to values that happen to already be 0/1).
+ *  - -> float64: passthrough numeric copy.
+ *  - -> float32: `Math.fround` (D8's correctly-rounded contract).
+ *  - -> int32: truncate TOWARD ZERO (`Math.trunc`, NumPy's own truncation
+ *    direction) but THROW for NaN/±Infinity/out-of-[-2^31,2^31-1] (D3:
+ *    "strenger als NumPy, das dort undefiniert ist") — deliberately NOT the
+ *    same rule as `convertToDType`'s int32 branch (which rejects ANY
+ *    non-integer; this one only rejects the un-truncatable/out-of-range
+ *    cases and otherwise truncates).
+ *  - -> bool: `x !== 0` (NaN -> `true`, same as NumPy — `NaN !== 0` is
+ *    `true` under plain IEEE comparison already, no special case needed).
+ */
+export function astypeConvert(target: DType, data: DataOfRuntime): DataOfRuntime {
+  const n = data.length;
+  switch (target) {
+    case "float64": {
+      const out = new Float64Array(n);
+      for (let i = 0; i < n; i++) out[i] = data[i] ?? 0;
+      return out;
+    }
+    case "float32": {
+      const out = new Float32Array(n);
+      for (let i = 0; i < n; i++) out[i] = Math.fround(data[i] ?? 0);
+      return out;
+    }
+    case "int32": {
+      const out = new Int32Array(n);
+      for (let i = 0; i < n; i++) {
+        const v = data[i] ?? 0;
+        if (!Number.isFinite(v)) {
+          throw new Error(`astype("int32"): value ${v} at index ${i} is not finite (NaN/Infinity cannot convert to int32)`);
+        }
+        const t = Math.trunc(v);
+        if (t < -2147483648 || t > 2147483647) {
+          throw new Error(`astype("int32"): value ${v} at index ${i} (truncated to ${t}) is out of int32 range [-2147483648, 2147483647]`);
+        }
+        out[i] = t;
+      }
+      return out;
+    }
+    case "bool": {
+      const out = new Uint8Array(n);
+      for (let i = 0; i < n; i++) out[i] = (data[i] ?? 0) !== 0 ? 1 : 0;
+      return out;
+    }
+  }
+}
+
+/** K3 Vorprüfung (dt1 spec "Reihenfolge der Umsetzung" step 1): allocate a
+ * fresh typed array of the SAME concrete class as `data`, with `size`
+ * elements (zero-initialized) — `transposeDtyped`/`sliceDtyped` below need
+ * their OUTPUT allocated in the same typed-array class as their INPUT,
+ * unlike `transposeRuntime`/`sliceRuntime` above (which allocate
+ * unconditionally `Float64Array` and stay byte-identical, untouched). */
+function sameKindArray(data: DataOfRuntime, size: number): DataOfRuntime {
+  if (data instanceof Float32Array) return new Float32Array(size);
+  if (data instanceof Int32Array) return new Int32Array(size);
+  if (data instanceof Uint8Array) return new Uint8Array(size);
+  return new Float64Array(size);
+}
+
+/**
+ * K3 (D5, "D unverändert"): dtype-generic twin of `transposeRuntime` above —
+ * the IDENTICAL algorithm (same per-element offset walk), allocating its
+ * output via `sameKindArray` instead of unconditionally `Float64Array`.
+ * `transposeRuntime` itself is untouched (freeze discipline) and remains
+ * the float64-only oracle this function is tested against (dt1 spec
+ * "Vorprüfung": tested for all four dtypes against the float64 result,
+ * converted, plus an assertion on the output's own constructor/dtype).
+ */
+export function transposeDtyped(shape: readonly number[], data: DataOfRuntime): { shape: number[]; data: DataOfRuntime } {
+  const rank = shape.length;
+  const outShape = [...shape].reverse();
+  const inStrides = computeStrides(shape);
+  const outStrides = computeStrides(outShape);
+  const size = product(shape);
+  const out = sameKindArray(data, size);
+
+  for (let flat = 0; flat < size; flat++) {
+    const outIdx = unravel(flat, outShape, outStrides);
+    let inOffset = 0;
+    for (let i = 0; i < rank; i++) {
+      const originalAxis = rank - 1 - i;
+      inOffset += (outIdx[i] ?? 0) * (inStrides[originalAxis] ?? 0);
+    }
+    out[flat] = data[inOffset] ?? 0;
+  }
+  return { shape: outShape, data: out };
+}
+
+/**
+ * K3 (D5, "D unverändert"): dtype-generic twin of `sliceRuntime` above —
+ * the IDENTICAL per-axis offset/stride algebra and gather loop, allocating
+ * its output via `sameKindArray` instead of unconditionally `Float64Array`.
+ * `sliceRuntime` itself is untouched (freeze discipline) and remains the
+ * float64-only oracle this function is tested against (same "Vorprüfung"
+ * discipline as `transposeDtyped` above).
+ */
+export function sliceDtyped(
+  shape: readonly number[],
+  data: DataOfRuntime,
+  specs: readonly NormalizedAxisSpec[],
+): { shape: number[]; data: DataOfRuntime } {
+  const originalStrides = computeStrides(shape);
+  const outShape: number[] = [];
+  const viewStrides: number[] = [];
+  let offset = 0;
+
+  for (let axis = 0; axis < shape.length; axis++) {
+    const stride = originalStrides[axis] ?? 0;
+    const spec = specs[axis];
+    if (spec === undefined) {
+      // Trailing axis, beyond the given specs: taken in full.
+      outShape.push(shape[axis] ?? 0);
+      viewStrides.push(stride);
+      continue;
+    }
+    if (spec.kind === "index") {
+      offset += spec.i * stride;
+    } else {
+      offset += spec.start * stride;
+      outShape.push(spec.dim);
+      viewStrides.push(stride * spec.step);
+    }
+  }
+
+  const size = product(outShape);
+  const out = sameKindArray(data, size);
+  const outStrides = computeStrides(outShape);
+  for (let flat = 0; flat < size; flat++) {
+    const idx = unravel(flat, outShape, outStrides);
+    let srcOffset = offset;
+    for (let i = 0; i < viewStrides.length; i++) {
+      srcOffset += (idx[i] ?? 0) * (viewStrides[i] ?? 0);
+    }
+    out[flat] = data[srcOffset] ?? 0;
+  }
+  return { shape: outShape, data: out };
+}
+
+/**
+ * K4 (O2(a)): word-identical (M3 message parity) runtime half of the lock
+ * for every computing op dt1 does not yet implement for `D != "float64"`
+ * (add/sub/mul/div/matmul/dot/cosineSimilarity/sum/mean/argmax/topk/stack/
+ * sqrt/norm — dt2-dt5 unlock these progressively, docs/dtype-dt1-spec.md
+ * K4). Every locked op calls this FIRST, defense-in-depth for the
+ * argument-less (niladic) forms the compile-time `DTypeLock` (ndarray.ts)
+ * cannot reach at all (no argument position to hang a conditional type on —
+ * the exact reason a `this`-parameter alternative was tempting and O2
+ * rejected it for opaque TS2684 diagnostics) — so a bypass (e.g. via `any`)
+ * or a niladic call on a non-float64 receiver still throws instead of
+ * silently computing a wrong answer (M2's runtime backstop holds even where
+ * the compile-time claim can't reach).
+ */
+export function lockedOpMessage(op: string, dtype: DType): string {
+  return `${op}: dtype '${dtype}' is not implemented for non-float64 arrays yet (use astype("float64") first)`;
+}
+
+export function assertFloat64Locked(op: string, dtype: DType): void {
+  if (dtype !== "float64") {
+    throw new Error(lockedOpMessage(op, dtype));
+  }
+}

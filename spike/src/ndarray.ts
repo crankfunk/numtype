@@ -26,10 +26,16 @@ import type { ReduceAxis, Transpose } from "./reduce.ts";
 import type { ReshapeCheck } from "./reshape.ts";
 import {
   argmaxRuntime,
+  assertFloat64Locked,
   assertReshapeArgs,
   assertVectorPair,
+  astypeConvert,
   computeStrides,
+  convertToDType,
+  type DataOf,
+  type DataOfRuntime,
   dotRuntime,
+  type DType,
   elementwiseBinary,
   formatNDArrayDisplay,
   itemRuntime,
@@ -38,15 +44,17 @@ import {
   meanRuntime,
   normalizeSliceSpecs,
   normSqRuntime,
+  onesData,
   product,
   scalarElementwiseRuntime,
-  sliceRuntime,
+  sliceDtyped,
   type SliceSpec,
   sqrtRuntime,
   stackRuntime,
   sumRuntime,
   topkRuntime,
-  transposeRuntime,
+  transposeDtyped,
+  zerosData,
 } from "./runtime.ts";
 import type { LiteralShapeProduct } from "./literal-arithmetic.ts";
 import type { SliceShape, SliceSpecInput, SliceSpecsGuard } from "./slice.ts";
@@ -150,6 +158,52 @@ export type Guard<Result, Actual> = [Result] extends [ShapeError<infer Message>]
  */
 type UnwrapRow<R> = R extends NDArray<infer S> ? S : never;
 type RowShapesOf<Rows extends readonly NDArray<any>[]> = { [I in keyof Rows]: UnwrapRow<Rows[I]> };
+
+/**
+ * dt1 (K4, O2(a), docs/dtype-dt1-spec.md): the compile-time half of the lock
+ * for every op not yet implemented for `D != "float64"` in this slice
+ * (add/sub/mul/div/matmul/dot/cosineSimilarity/sum/mean/argmax/topk/sqrt/
+ * norm — dt2-dt5 unlock these progressively; `stack` has its own disclosed
+ * M3 exception, see its doc comment above). `D extends DType` is an
+ * ordinary in-scope generic reference — the SAME mechanism `Broadcast<S,B>`
+ * already is, never a `this`-parameter (Owner decision O2(a): a
+ * `this`-parameter's TS2684 diagnostic is opaque and not in the M3
+ * exception list). Resolves to `true` for `D = "float64"`; otherwise a
+ * `ShapeError` naming the op and the offending dtype, WORD-IDENTICAL to
+ * `lockedOpMessage` (runtime.ts, M3 message parity) — attached to WHATEVER
+ * argument the op already has (message-table order: independent of, and
+ * combined with, any shape check the same argument might also carry, the
+ * same pattern `add`'s own inline conditionals below already use for shape
+ * errors).
+ *
+ * Known gap, disclosed (M2 v8 "übergangsweise nur zur Laufzeit gesperrte
+ * Ops", never a false accept): a genuinely NILADIC op (`sqrt()`, `norm()`,
+ * the 0-argument overloads of `mean()`/`argmax()`) has no argument position
+ * to attach this to at all — those forms keep their pre-dtype signature and
+ * rely solely on `assertFloat64Locked` (runtime.ts) as their ONLY backstop.
+ */
+type DTypeLock<D extends DType, Op extends string> = D extends "float64"
+  ? true
+  : ShapeError<`${Op}: dtype '${D}' is not implemented for non-float64 arrays yet (use astype("float64") first)`>;
+
+/** `DTypeLock`'s two-operand form, for a locked op whose argument is itself
+ * an `NDArray<B, Dd>` (`matmul`/`dot`/`cosineSimilarity`) — the receiver's
+ * own `D` is checked FIRST (message-table order), then the argument's `Dd`,
+ * so a call is rejected if EITHER side isn't float64. */
+type DTypeLockPair<D extends DType, Dd extends DType, Op extends string> = D extends "float64" ? DTypeLock<Dd, Op> : DTypeLock<D, Op>;
+
+/** dt1 (K3(b), docs/dtype-dt1-spec.md): a same-typed-array-class copy of
+ * `data` — the dtype-generic successor of the plain `new
+ * Float64Array(this.data)` inline copy `reshape`/`flatten` used before dt1.
+ * Deliberately kept INLINE in this file (not appended to `runtime.ts`,
+ * spec K3(b)): it needs no `Guard`/type-level machinery, only an
+ * `instanceof` dispatch over the four typed-array kinds. */
+function copySameKindArray(data: DataOfRuntime): DataOfRuntime {
+  if (data instanceof Float32Array) return new Float32Array(data);
+  if (data instanceof Int32Array) return new Int32Array(data);
+  if (data instanceof Uint8Array) return new Uint8Array(data);
+  return new Float64Array(data);
+}
 
 /**
  * A minimal, checker-ENFORCED covariant read view (Spike 05,
@@ -259,6 +313,19 @@ type RowShapesOf<Rows extends readonly NDArray<any>[]> = { [I in keyof Rows]: Un
  * D1/D5, Covenant M2). */
 export type NestedValue = number | NestedValue[];
 
+/** dt1 (K3, D5 "bool -> boolean-Blätter"): the `bool`-leaf twin of
+ * `NestedValue` above, for the SAME dynamic-rank/rank-mixed-union fallback
+ * but on a bool-dtyped array — using plain `NestedValue` (number leaves)
+ * there would be a confident-WRONG claim for a bool array, not merely
+ * incomplete (M2). Exported like `NestedValue` (docs/dtype-dt1-spec.md K3:
+ * "NestedBoolValue rekursiv exportiert wie NestedValue"). */
+export type NestedBoolValue = boolean | NestedBoolValue[];
+
+/** dt1 (D5): the leaf type for one dtype's `NestedArray` — `bool` renders as
+ * `boolean`, every other dtype (float64/float32/int32, all read out of their
+ * typed array as a plain JS `number`) renders as `number`. */
+type NestedLeafOf<D extends DType> = D extends "bool" ? boolean : number;
+
 /** `toNestedArray()`'s return type, computed from the RANK of `S` alone —
  * never from its dim VALUES (a per-dim-value tuple would be the forbidden
  * tuple-length arithmetic over large dimensions, CLAUDE.md's TS limits).
@@ -266,23 +333,32 @@ export type NestedValue = number | NestedValue[];
  * The `[S] extends [never]` branch must run before anything else, or
  * `NestedOfRank` recurses forever trying to compute `never["length"]`.
  * `RankUnknowable` (dim.ts) degrades dynamic rank AND rank-mixed unions to
- * `NestedValue` before any destructuring happens (Arbeitsregel 3); a union
- * of shapes with the SAME rank still resolves through `S["length"]` to one
- * concrete type (docs/typed-nested-array-spec.md D1 v2 — the v1 recursive-
- * decomposition design produced one instantiation per union branch instead,
- * `number[][] | number[][]`, which TS does not dedupe). */
-export type NestedArray<S extends Shape> = [S] extends [never]
-  ? NestedValue
+ * `NestedValue`/`NestedBoolValue` (by `D`) before any destructuring happens
+ * (Arbeitsregel 3); a union of shapes with the SAME rank still resolves
+ * through `S["length"]` to one concrete type (docs/typed-nested-array-spec.md
+ * D1 v2 — the v1 recursive-decomposition design produced one instantiation
+ * per union branch instead, `number[][] | number[][]`, which TS does not
+ * dedupe). dt1: `D`'s default keeps every pre-dtype 1-type-argument call
+ * (`NestedArray<S>`) meaning exactly what it meant before (float64, `number`
+ * leaves). */
+export type NestedArray<S extends Shape, D extends DType = "float64"> = [S] extends [never]
+  ? D extends "bool"
+    ? NestedBoolValue
+    : NestedValue
   : RankUnknowable<S> extends true
-    ? NestedValue
-    : NestedOfRank<S["length"]>;
+    ? D extends "bool"
+      ? NestedBoolValue
+      : NestedValue
+    : NestedOfRank<S["length"], [], NestedLeafOf<D>>;
 
 /** Private, tail-recursive rank-to-nesting builder (accumulator pattern,
  * CLAUDE.md TS limits: tail-recursive types tolerate ~1000 instantiation
  * depth vs. ~100 non-tail-recursive) — `NestedOfRank<0> = number`,
  * `NestedOfRank<2> = number[][]`. Rank ceiling measured at 999 (TS2589 from
  * 999 on, one below the pre-existing shape machinery's ceiling of 1024 —
- * docs/typed-nested-array-spec.md D1), practically irrelevant. */
+ * docs/typed-nested-array-spec.md D1), practically irrelevant. dt1: the leaf
+ * type `T` defaults to `number` (float64/float32/int32) but is passed
+ * `NestedLeafOf<D>` (`boolean` for bool) by `NestedArray` above. */
 type NestedOfRank<N extends number, Acc extends readonly unknown[] = [], T = number> = Acc["length"] extends N
   ? T
   : NestedOfRank<N, [...Acc, unknown], T[]>;
@@ -356,10 +432,21 @@ export interface NDArrayView<out S extends Shape> {
  * instead — it is the safe, checker-enforced top type: covariant by a proven
  * annotation, not by erasure, so it cannot silently unerase in the write
  * direction the way `any` can.
- */
-export type AnyNDArray = NDArray<any>;
+ *
+ * dt1 (K5, docs/dtype-dt1-spec.md): fixed to `NDArray<any, any>` — D1
+ * requires this top type to erase EVERY type parameter, dtype included; the
+ * prototype (docs/dtype-design-ergebnisse.md, "Defekte") left this at
+ * `NDArray<any>`, which left `D` at its default `"float64"` (the same
+ * 1-arg-omitted-default mechanism `RowShapesOf`'s `UnwrapRow` below relies
+ * on for `stack`), silently narrowing "any dtype" down to "any shape, only
+ * float64" — a confident-WRONG top type this fix removes (Baustein 0,
+ * finding F1). */
+export type AnyNDArray = NDArray<any, any>;
 
-export class NDArray<S extends Shape> implements NDArrayView<S> {
+/** dt1 (K1, D1): `D extends DType = "float64"` — the default keeps every
+ * existing 1-type-argument use (`NDArray<[2, 3]>`) valid and meaning
+ * float64, unchanged. */
+export class NDArray<S extends Shape, D extends DType = "float64"> implements NDArrayView<S> {
   /** Deliberate invariance marker (re-invariantization owner-decision,
    * 2026-07-13 — full history in the `AnyNDArray` doc comment above). `S`
    * occurs in both a contravariant (parameter) and a covariant (return)
@@ -381,44 +468,134 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * own to display). */
   private declare readonly __variance: (s: S) => S;
 
+  /** dt1 D-variance probe (docs/dtype-design-spec.md D11 "Varianz-Probe",
+   * prototype commit 244ce04): measured (own probe, real tsc 7.0.2) that
+   * `NDArray<S, D>` is ALREADY invariant in `D` once `data: DataOf<D>`
+   * exists — but EMERGENTLY (a structural accident of the typed arrays'
+   * per-kind `Symbol.toStringTag`, unrelated to dtype semantics), the exact
+   * failure mode `AnyNDArray`'s own doc comment warns about for `S`
+   * (accidental, unowned variance, liable to drift the next time an
+   * unrelated member's type changes — e.g. a future dt-slice's own scalar
+   * rule). This marker makes the invariance DELIBERATE and
+   * declaration-site enforced instead: `D` in both a contravariant
+   * (parameter) and covariant (return) position of one property-typed
+   * function — same mechanism, same property-vs-method-shorthand bivariance
+   * caveat as `__variance` above. */
+  private declare readonly __varianceD: (d: D) => D;
+
   /** D-V2.3: deep-readonly (see `NDArrayView` doc comment above) — element
    * writes like `nd.shape[0] = 99` are now a compile error, not a silent
    * no-op. The stored value is unchanged; only the static type tightened. */
   readonly shape: Readonly<S>;
-  readonly data: Float64Array;
+  /** dt1 (K1, D2): the RUNTIME dtype tag, needed alongside the compile-time
+   * `D` because every op decides its OWN behavior (which typed array to
+   * allocate, whether to wrap/truncate/fround) from a real value, not from
+   * an erased type parameter. `readonly` — an `NDArray` never changes dtype
+   * in place, `astype` always returns a fresh instance. */
+  readonly dtype: D;
+  readonly data: DataOf<D>;
 
-  private constructor(shape: S, data: Float64Array) {
+  private constructor(shape: S, dtype: D, data: DataOf<D>) {
     this.shape = shape;
+    this.dtype = dtype;
     this.data = data;
   }
 
-  /** An all-zeros array of the given shape. `const S` means callers never
-   * need `as const` — `NDArray.zeros([2, 3])` infers `S` from the literal
-   * `[2, 3]`. `Mutable<S>` strips the `readonly` a `const` type param would
-   * otherwise attach, so the hover matches every other op's plain-tuple
-   * display: `NDArray<[2, 3]>`, not `NDArray<readonly [2, 3]>`. */
-  static zeros<const S extends Shape>(shape: S): NDArray<Mutable<S>> {
-    return new NDArray<Mutable<S>>([...shape] as Mutable<S>, new Float64Array(product(shape)));
+  /** An all-zeros array of the given shape and dtype (dt1 K2, D3; default
+   * `"float64"` keeps every existing 1-argument call unchanged). `const S`
+   * means callers never need `as const` — `NDArray.zeros([2, 3])` infers `S`
+   * from the literal `[2, 3]`. `Mutable<S>` strips the `readonly` a `const`
+   * type param would otherwise attach, so the hover matches every other
+   * op's plain-tuple display: `NDArray<[2, 3], "float64">`, not
+   * `NDArray<readonly [2, 3], "float64">`. */
+  static zeros<const S extends Shape, D extends DType = "float64">(shape: S, dtype?: D): NDArray<Mutable<S>, D> {
+    const dt = (dtype ?? "float64") as D;
+    return new NDArray<Mutable<S>, D>([...shape] as Mutable<S>, dt, zerosData(dt, product(shape)) as DataOf<D>);
   }
 
-  /** An all-ones array of the given shape. */
-  static ones<const S extends Shape>(shape: S): NDArray<Mutable<S>> {
-    return new NDArray<Mutable<S>>([...shape] as Mutable<S>, new Float64Array(product(shape)).fill(1));
+  /** An all-ones array of the given shape and dtype (dt1 K2, D3). */
+  static ones<const S extends Shape, D extends DType = "float64">(shape: S, dtype?: D): NDArray<Mutable<S>, D> {
+    const dt = (dtype ?? "float64") as D;
+    return new NDArray<Mutable<S>, D>([...shape] as Mutable<S>, dt, onesData(dt, product(shape)) as DataOf<D>);
   }
 
-  /** Build an array from flat row-major values. Accepts a plain list or a
-   * `Float64Array` — the typed-array path copies via the copy constructor
+  /** Build an array from flat row-major values (dt1 K2, D3). Four overloads:
+   *  - no `dtype` option, a plain list or `Float64Array` source: float64,
+   *    the pre-dtype default, unchanged.
+   *  - no `dtype` option, a `Float32Array`/`Int32Array` source: the dtype is
+   *    INFERRED from the source array's own kind.
+   *  - an EXPLICIT `{ dtype }` option, any numeric source including
+   *    `Uint8Array`: validated + converted (`convertToDType` — int32 must be
+   *    an in-range integer, bool must be 0/1, else throw).
+   * `Uint8Array` is deliberately ABSENT from the first two overloads' input
+   * union — passing one without an explicit `dtype` is a COMPILE ERROR (D3:
+   * a bare `Uint8Array` is ambiguous, since it could mean bool 0/1 or raw
+   * byte data). The typed-array paths copy via the copy constructor
    * (memcpy-fast); forcing typed-array callers through `number[]` would
    * cost ~100x at the boundary (docs/kern-02-ergebnisse.md, chain-bench
    * finding). The input is always copied, never aliased. Throws at runtime
    * if `values.length` doesn't match the shape's element count. */
-  static fromArray<const S extends Shape>(shape: S, values: readonly number[] | Float64Array): NDArray<Mutable<S>> {
+  static fromArray<const S extends Shape>(shape: S, values: readonly number[] | Float64Array): NDArray<Mutable<S>, "float64">;
+  static fromArray<const S extends Shape>(shape: S, values: Float32Array): NDArray<Mutable<S>, "float32">;
+  static fromArray<const S extends Shape>(shape: S, values: Int32Array): NDArray<Mutable<S>, "int32">;
+  static fromArray<const S extends Shape, D extends DType>(
+    shape: S,
+    values: readonly number[] | Float64Array | Float32Array | Int32Array | Uint8Array,
+    opts: { dtype: D },
+  ): NDArray<Mutable<S>, D>;
+  static fromArray<const S extends Shape, D extends DType>(
+    shape: S,
+    values: readonly number[] | Float64Array | Float32Array | Int32Array | Uint8Array,
+    opts?: { dtype?: D },
+  ): NDArray<Mutable<S>, D> {
     const size = product(shape);
     if (values.length !== size) {
       throw new Error(`fromArray: expected ${size} values for shape [${shape.join(",")}], got ${values.length}`);
     }
-    const data = values instanceof Float64Array ? new Float64Array(values) : Float64Array.from(values);
-    return new NDArray<Mutable<S>>([...shape] as Mutable<S>, data);
+    let dtype: DType;
+    let data: DataOfRuntime;
+    if (opts?.dtype !== undefined) {
+      dtype = opts.dtype;
+      data = convertToDType(dtype, values as ArrayLike<number>);
+    } else if (values instanceof Float32Array) {
+      dtype = "float32";
+      data = new Float32Array(values);
+    } else if (values instanceof Int32Array) {
+      dtype = "int32";
+      data = new Int32Array(values);
+    } else if (values instanceof Uint8Array) {
+      // Unreachable through the typed overloads above (a bare `Uint8Array`
+      // requires an explicit `{ dtype }` there) — runtime backstop for a
+      // caller that bypasses the type layer, same "never silently wrong"
+      // discipline the rest of this file follows (M2).
+      throw new Error(`fromArray: a Uint8Array source requires an explicit { dtype } option (ambiguous — could mean bool 0/1 or raw byte data)`);
+    } else if (values instanceof Float64Array) {
+      dtype = "float64";
+      data = new Float64Array(values);
+    } else {
+      dtype = "float64";
+      data = Float64Array.from(values as readonly number[]);
+    }
+    return new NDArray<Mutable<S>, D>([...shape] as Mutable<S>, dtype as D, data as DataOf<D>);
+  }
+
+  /** dt1 (K2, D3): dtype-cast to `DataOf<T>`, same conversion rules
+   * `astypeConvert` documents (float32 via `Math.fround`; float->int32
+   * truncates toward zero and throws on NaN/±Infinity/out-of-range; ->bool
+   * is `x !== 0`, NaN -> `true`; bool->numeric is plain 0/1). Always a fresh
+   * copy (house invariant: `NDArray` never aliases), even when `T` equals
+   * `D`. */
+  astype<T extends DType>(dtype: T): NDArray<S, T> {
+    const data = astypeConvert(dtype, this.data as unknown as DataOfRuntime);
+    return new NDArray<S, T>(this.shape as unknown as S, dtype, data as DataOf<T>);
+  }
+
+  /** dt1 (K1, D2): the dtype-typed read-out `NDArray` never had a dedicated
+   * method for (unlike `WNDArray.toArray()`, resident.ts) — `.data` is
+   * already public, this is a same-shape alias for parity with the wider
+   * design and for symmetry with `item`/`toNestedArray` below. */
+  toArray(): DataOf<D> {
+    return this.data;
   }
 
   /** Stack N independently-built rank-1 rows into a rank-2 `[N, D]` matrix
@@ -460,13 +637,27 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * Surface asymmetry (D1, disclosed, same shape as `argmax`/`topk`/the W2
    * scalar overloads/`mean`/`sqrt`): `stack` exists ONLY on this naive
    * `NDArray` — no WASM kernel, no `WNDArray` parity yet (FOLLOWUPS.md
-   * tracks the follow-up). */
+   * tracks the follow-up).
+   *
+   * dt1 (K4, docs/dtype-dt1-spec.md; M3 v8 "befristete Ausnahme stack"):
+   * `Rows` is effectively float64-only already — `NDArray<any>` (in
+   * `RowShapesOf`'s `UnwrapRow` below) fills the omitted `D` with its
+   * default `"float64"`, so a non-float64 row is rejected by a NATIVE
+   * structural-mismatch diagnostic (`data: Int32Array` not assignable to
+   * `data: Float64Array`), not this codebase's own `DTypeLock` message — a
+   * DISCLOSED, TIME-BOXED M3 exception until dt5 gives `stack` real
+   * cross-dtype support (every row sharing one dtype; Promotion across rows
+   * stays a non-goal, D5). `assertFloat64Locked` per row is still the
+   * honest RUNTIME backstop, word-identical to every other locked op (M3
+   * message parity holds at the runtime boundary; only the editor
+   * diagnostic is the disclosed exception). */
   static stack<const Rows extends readonly NDArray<any>[]>(
     rows: Guard<StackCheck<RowShapesOf<Rows>>, Rows>,
   ): NDArray<OkShape<StackShape<RowShapesOf<Rows>>>> {
     const rs = rows as unknown as readonly NDArray<any>[];
+    for (const r of rs) assertFloat64Locked("stack", r.dtype);
     const { shape, data } = stackRuntime(rs.map((r) => ({ shape: r.shape as readonly number[], data: r.data })));
-    return new NDArray<OkShape<StackShape<RowShapesOf<Rows>>>>(shape as unknown as OkShape<StackShape<RowShapesOf<Rows>>>, data);
+    return new NDArray<OkShape<StackShape<RowShapesOf<Rows>>>>(shape as unknown as OkShape<StackShape<RowShapesOf<Rows>>>, "float64", data);
   }
 
   /** Explicit, opt-in performance backends (Item 10 — Backend-Wahl-API,
@@ -539,17 +730,37 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * `__shapeError` (M3). Resolution is unaffected: a `number` argument
    * matches the scalar overload FIRST. Pinned by the diagnostic-quality
    * test in scalar-mean.test.ts (asserts the broadcast stem in real tsc
-   * output — an `@ts-expect-error` alone cannot see message content). */
-  add(s: number): NDArray<S>;
-  add<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>>;
-  add<B extends Shape>(other: number | Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
+   * output — an `@ts-expect-error` alone cannot see message content).
+   *
+   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt2 gives
+   * `add` real Promotion + the D6 scalar rule) — both overloads' arguments
+   * carry `DTypeLock`/`DTypeLockPair`, plus a runtime `assertFloat64Locked`
+   * backstop (word-identical message, M3). `<DD extends DType = D>` on the
+   * scalar overload (measured TS 7.0.2 quirk, prototype stage 7): an
+   * overload signature with NO local type parameter of its own, whose
+   * argument type directly references the ENCLOSING class's `D` inside a
+   * `Guard`-wrapped conditional, fails TS2394 ("not compatible with its
+   * implementation signature") — even though the implementation accepts a
+   * strict superset. Adding a local generic that merely DEFAULTS to `D`
+   * (never otherwise used) resolves it; the array overload already has a
+   * local generic (`B`) for another reason and needs no such workaround
+   * (mirrored on `Dd` below, one more for the argument's own dtype). */
+  add<DD extends DType = D>(s: Guard<DTypeLock<DD, "add">, number>): NDArray<S>;
+  add<B extends Shape, Dd extends DType>(
+    other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "add">, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>>;
+  add<B extends Shape, Dd extends DType>(
+    other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "add">, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
+    assertFloat64Locked("add", this.dtype);
     if (typeof other === "number") {
-      const data = scalarElementwiseRuntime("add", this.data, other);
-      return new NDArray<S>(this.shape as unknown as S, data);
+      const data = scalarElementwiseRuntime("add", this.data as unknown as Float64Array, other);
+      return new NDArray<S>(this.shape as unknown as S, "float64", data);
     }
-    const o = other as unknown as NDArray<B>;
-    const { shape, data } = elementwiseBinary(this.shape, this.data, o.shape, o.data, (x, y) => x + y);
-    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, data);
+    const o = other as unknown as NDArray<B, Dd>;
+    assertFloat64Locked("add", o.dtype);
+    const { shape, data } = elementwiseBinary(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array, (x, y) => x + y);
+    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, "float64", data);
   }
 
   /** Broadcasting elementwise subtract (Kern 07). Structural mirror of
@@ -562,17 +773,26 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * (IEEE propagation only), pinned closure `x - s`. Same documented
    * union-over-boundary rejection (TS2769), the same LOAD-BEARING overload
    * order (scalar first, generic Guard-carrier last — Verify-B F1), and
-   * `NDArray.backend(kind)` precedent as `add` above — see its doc comment. */
-  sub(s: number): NDArray<S>;
-  sub<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>>;
-  sub<B extends Shape>(other: number | Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
+   * `NDArray.backend(kind)` precedent as `add` above — see its doc comment.
+   *
+   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice — same
+   * mechanism, and the same `<DD = D>` TS2394 workaround, as `add` above. */
+  sub<DD extends DType = D>(s: Guard<DTypeLock<DD, "sub">, number>): NDArray<S>;
+  sub<B extends Shape, Dd extends DType>(
+    other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "sub">, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>>;
+  sub<B extends Shape, Dd extends DType>(
+    other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "sub">, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
+    assertFloat64Locked("sub", this.dtype);
     if (typeof other === "number") {
-      const data = scalarElementwiseRuntime("sub", this.data, other);
-      return new NDArray<S>(this.shape as unknown as S, data);
+      const data = scalarElementwiseRuntime("sub", this.data as unknown as Float64Array, other);
+      return new NDArray<S>(this.shape as unknown as S, "float64", data);
     }
-    const o = other as unknown as NDArray<B>;
-    const { shape, data } = elementwiseBinary(this.shape, this.data, o.shape, o.data, (x, y) => x - y);
-    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, data);
+    const o = other as unknown as NDArray<B, Dd>;
+    assertFloat64Locked("sub", o.dtype);
+    const { shape, data } = elementwiseBinary(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array, (x, y) => x - y);
+    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, "float64", data);
   }
 
   /** Broadcasting elementwise multiply (Kern 07). Structural mirror of
@@ -584,17 +804,26 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * (IEEE propagation only), pinned closure `x * s`. Same documented
    * union-over-boundary rejection (TS2769), the same LOAD-BEARING overload
    * order (scalar first, generic Guard-carrier last — Verify-B F1), and
-   * `NDArray.backend(kind)` precedent as `add` above — see its doc comment. */
-  mul(s: number): NDArray<S>;
-  mul<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>>;
-  mul<B extends Shape>(other: number | Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
+   * `NDArray.backend(kind)` precedent as `add` above — see its doc comment.
+   *
+   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice — same
+   * mechanism, and the same `<DD = D>` TS2394 workaround, as `add` above. */
+  mul<DD extends DType = D>(s: Guard<DTypeLock<DD, "mul">, number>): NDArray<S>;
+  mul<B extends Shape, Dd extends DType>(
+    other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "mul">, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>>;
+  mul<B extends Shape, Dd extends DType>(
+    other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "mul">, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
+    assertFloat64Locked("mul", this.dtype);
     if (typeof other === "number") {
-      const data = scalarElementwiseRuntime("mul", this.data, other);
-      return new NDArray<S>(this.shape as unknown as S, data);
+      const data = scalarElementwiseRuntime("mul", this.data as unknown as Float64Array, other);
+      return new NDArray<S>(this.shape as unknown as S, "float64", data);
     }
-    const o = other as unknown as NDArray<B>;
-    const { shape, data } = elementwiseBinary(this.shape, this.data, o.shape, o.data, (x, y) => x * y);
-    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, data);
+    const o = other as unknown as NDArray<B, Dd>;
+    assertFloat64Locked("mul", o.dtype);
+    const { shape, data } = elementwiseBinary(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array, (x, y) => x * y);
+    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, "float64", data);
   }
 
   /** Broadcasting elementwise divide (Kern 07). Structural mirror of `add`
@@ -613,24 +842,40 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * precedent as `add` above — see its doc comment. The old
    * `x.div(fromArray([1], [s]))` `[1]`-wrap workaround still compiles and
    * still works (byte-identical to this overload for rank >= 1, D3), just
-   * no longer necessary. */
-  div(s: number): NDArray<S>;
-  div<B extends Shape>(other: Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>>;
-  div<B extends Shape>(other: number | Guard<Broadcast<S, B>, NDArray<B>>): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
+   * no longer necessary.
+   *
+   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice — same
+   * mechanism, and the same `<DD = D>` TS2394 workaround, as `add` above. */
+  div<DD extends DType = D>(s: Guard<DTypeLock<DD, "div">, number>): NDArray<S>;
+  div<B extends Shape, Dd extends DType>(
+    other: Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "div">, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>>;
+  div<B extends Shape, Dd extends DType>(
+    other: number | Guard<Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : DTypeLockPair<D, Dd, "div">, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>> | NDArray<S> {
+    assertFloat64Locked("div", this.dtype);
     if (typeof other === "number") {
-      const data = scalarElementwiseRuntime("div", this.data, other);
-      return new NDArray<S>(this.shape as unknown as S, data);
+      const data = scalarElementwiseRuntime("div", this.data as unknown as Float64Array, other);
+      return new NDArray<S>(this.shape as unknown as S, "float64", data);
     }
-    const o = other as unknown as NDArray<B>;
-    const { shape, data } = elementwiseBinary(this.shape, this.data, o.shape, o.data, (x, y) => x / y);
-    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, data);
+    const o = other as unknown as NDArray<B, Dd>;
+    assertFloat64Locked("div", o.dtype);
+    const { shape, data } = elementwiseBinary(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array, (x, y) => x / y);
+    return new NDArray<OkShape<Broadcast<S, B>>>(shape as OkShape<Broadcast<S, B>>, "float64", data);
   }
 
-  /** Full NumPy `matmul`: 2-D product, 1-D promotion, batch broadcasting. */
-  matmul<B extends Shape>(other: Guard<MatMul<S, B>, NDArray<B>>): NDArray<OkShape<MatMul<S, B>>> {
-    const o = other as unknown as NDArray<B>;
-    const { shape, data } = matmulRuntime(this.shape, this.data, o.shape, o.data);
-    return new NDArray<OkShape<MatMul<S, B>>>(shape as OkShape<MatMul<S, B>>, data);
+  /** Full NumPy `matmul`: 2-D product, 1-D promotion, batch broadcasting.
+   *
+   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt3 gives
+   * `matmul` real dtype support, including O1's int32-widening decision). */
+  matmul<B extends Shape, Dd extends DType>(
+    other: Guard<MatMul<S, B> extends ShapeError<string> ? MatMul<S, B> : DTypeLockPair<D, Dd, "matmul">, NDArray<B, Dd>>,
+  ): NDArray<OkShape<MatMul<S, B>>> {
+    assertFloat64Locked("matmul", this.dtype);
+    const o = other as unknown as NDArray<B, Dd>;
+    assertFloat64Locked("matmul", o.dtype);
+    const { shape, data } = matmulRuntime(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array);
+    return new NDArray<OkShape<MatMul<S, B>>>(shape as OkShape<MatMul<S, B>>, "float64", data);
   }
 
   /** Sum-reduce along `axis` (negative counts from the end); omit `axis` to
@@ -638,24 +883,32 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * `keepdims`) to keep the reduced axis as size-1 instead of removing it
    * (rank preserved) — `undefined` axis + keepdims reduces every axis to an
    * all-ones shape. keepdims is pure shape metadata: the summed DATA is
-   * byte-identical to the non-keepdims result (Kern 09). */
+   * byte-identical to the non-keepdims result (Kern 09).
+   *
+   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt3 gives
+   * `sum` real dtype support, E3: int32/bool widen to float64). The 0-arg
+   * overload is NILADIC (same disclosed gap as `norm()` below — no argument
+   * position to hang a compile-time `DTypeLock` on); the axis-bearing
+   * overloads combine `DTypeLock` into their existing `ReduceAxis` `Guard`. */
   sum(): NDArray<OkShape<ReduceAxis<S, undefined, false>>>;
   sum<const Axis extends number | undefined>(
-    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    axis: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "sum">, Axis>,
   ): NDArray<OkShape<ReduceAxis<S, Axis, false>>>;
   sum<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
-    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    axis: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "sum">, Axis>,
     keepdims: KeepDims,
   ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>;
   sum<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
-    axis?: Guard<ReduceAxis<S, Axis>, Axis>,
+    axis?: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "sum">, Axis>,
     keepdims?: KeepDims,
   ): NDArray<any> {
+    assertFloat64Locked("sum", this.dtype);
     const axisNum = axis as unknown as Axis | undefined;
-    const { shape, data } = sumRuntime(this.shape, this.data, axisNum);
+    const { shape, data } = sumRuntime(this.shape, this.data as unknown as Float64Array, axisNum);
     const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : shape;
     return new NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>(
       outShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
+      "float64",
       data,
     );
   }
@@ -667,11 +920,17 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * consumer ops that terminate a chain). Rank != 1 (either operand) or a
    * length mismatch is a compile error at the argument (`DotCheck`) and a
    * runtime throw (`assertVectorPair`) for the gradual/dynamic cases the
-   * type layer couldn't check statically. */
-  dot<B extends Shape>(other: Guard<DotCheck<S, B, "dot">, NDArray<B>>): number {
-    const o = other as unknown as NDArray<B>;
+   * type layer couldn't check statically.
+   *
+   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt3). */
+  dot<B extends Shape, Dd extends DType>(
+    other: Guard<DotCheck<S, B, "dot"> extends ShapeError<string> ? DotCheck<S, B, "dot"> : DTypeLockPair<D, Dd, "dot">, NDArray<B, Dd>>,
+  ): number {
+    assertFloat64Locked("dot", this.dtype);
+    const o = other as unknown as NDArray<B, Dd>;
+    assertFloat64Locked("dot", o.dtype);
     assertVectorPair("dot", this.shape, o.shape);
-    return dotRuntime(this.shape, this.data, o.shape, o.data);
+    return dotRuntime(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array);
   }
 
   /** L2/Frobenius norm over ALL elements (Kern 07), any rank (mirrors
@@ -679,9 +938,15 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * niladic method has no argument to hang one on and every rank is valid
    * by this op's own semantics. `Math.sqrt` is IEEE-correctly-rounded, so
    * this is bit-identical to `WNDArray.norm` iff the underlying sum of
-   * squares is (which the differential suite asserts). */
+   * squares is (which the differential suite asserts).
+   *
+   * dt1 (K4, O2(a)): locked for `D != "float64"` — NILADIC, the disclosed
+   * gap `DTypeLock`'s own doc comment names: no argument position to hang a
+   * compile-time `Guard` on, `assertFloat64Locked` is the ONLY backstop
+   * (M2: an honest no-claim, never a false accept). */
   norm(): number {
-    return Math.sqrt(normSqRuntime(this.data));
+    assertFloat64Locked("norm", this.dtype);
+    return Math.sqrt(normSqRuntime(this.data as unknown as Float64Array));
   }
 
   /** Cosine similarity (Kern 07): same rank-1/equal-length operand contract
@@ -690,19 +955,35 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * sqrt(normSq(a)) * sqrt(normSq(b))`, `return num / den`. Pure IEEE, no
    * epsilon guards: a zero vector on either side makes `den` (or both
    * `num` and `den`) `0`, yielding `NaN`; an adversarial magnitude split
-   * can underflow `den` to `0` with `num != 0`, yielding `+/-Infinity`. */
-  cosineSimilarity<B extends Shape>(other: Guard<DotCheck<S, B, "cosineSimilarity">, NDArray<B>>): number {
-    const o = other as unknown as NDArray<B>;
+   * can underflow `den` to `0` with `num != 0`, yielding `+/-Infinity`.
+   *
+   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice — same
+   * mechanism as `dot` above. */
+  cosineSimilarity<B extends Shape, Dd extends DType>(
+    other: Guard<
+      DotCheck<S, B, "cosineSimilarity"> extends ShapeError<string> ? DotCheck<S, B, "cosineSimilarity"> : DTypeLockPair<D, Dd, "cosineSimilarity">,
+      NDArray<B, Dd>
+    >,
+  ): number {
+    assertFloat64Locked("cosineSimilarity", this.dtype);
+    const o = other as unknown as NDArray<B, Dd>;
+    assertFloat64Locked("cosineSimilarity", o.dtype);
     assertVectorPair("cosineSimilarity", this.shape, o.shape);
-    const num = dotRuntime(this.shape, this.data, o.shape, o.data);
-    const den = Math.sqrt(normSqRuntime(this.data)) * Math.sqrt(normSqRuntime(o.data));
+    const num = dotRuntime(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array);
+    const den = Math.sqrt(normSqRuntime(this.data as unknown as Float64Array)) * Math.sqrt(normSqRuntime(o.data as unknown as Float64Array));
     return num / den;
   }
 
-  /** Reverse every axis (NumPy's `.T` generalized to N-D). */
-  transpose(): NDArray<Transpose<S>> {
-    const { shape, data } = transposeRuntime(this.shape, this.data);
-    return new NDArray<Transpose<S>>(shape as Transpose<S>, data);
+  /** Reverse every axis (NumPy's `.T` generalized to N-D).
+   *
+   * dt1 (K3, D5 "D unverändert"): dtype-neutral — works for every dtype,
+   * unlike the prototype (which locked this op to float64-only). Every
+   * dtype's data moves through `transposeDtyped` (runtime.ts), which
+   * allocates its output in the SAME typed-array class as the input; no
+   * dtype lock, since this is pure data movement, no arithmetic. */
+  transpose(): NDArray<Transpose<S>, D> {
+    const { shape, data } = transposeDtyped(this.shape, this.data as unknown as DataOfRuntime);
+    return new NDArray<Transpose<S>, D>(shape as Transpose<S>, this.dtype, data as DataOf<D>);
   }
 
   /** Basic (NumPy-style) slicing: one spec per leading axis, trailing axes
@@ -715,14 +996,18 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * deliberate, documented differential blind spot). Too many specs is a
    * compile error at the offending argument (`SliceSpecsGuard`, see
    * slice.ts) and a runtime throw (`normalizeSliceSpecs`) for gradual/
-   * dynamic-rank callers the type layer couldn't check statically. */
+   * dynamic-rank callers the type layer couldn't check statically.
+   *
+   * dt1 (K3, D5 "D unverändert"): dtype-neutral, same rationale as
+   * `transpose` above — `sliceDtyped` (runtime.ts) allocates its output in
+   * the SAME typed-array class as the input. */
   slice<const Specs extends readonly SliceSpecInput[]>(
     ...specs: SliceSpecsGuard<S, Specs>
-  ): NDArray<OkShape<SliceShape<S, Specs>>> {
+  ): NDArray<OkShape<SliceShape<S, Specs>>, D> {
     const rawSpecs = specs as unknown as readonly SliceSpec[];
     const norm = normalizeSliceSpecs(this.shape, rawSpecs);
-    const { shape, data } = sliceRuntime(this.shape, this.data, norm);
-    return new NDArray<OkShape<SliceShape<S, Specs>>>(shape as OkShape<SliceShape<S, Specs>>, data);
+    const { shape, data } = sliceDtyped(this.shape, this.data as unknown as DataOfRuntime, norm);
+    return new NDArray<OkShape<SliceShape<S, Specs>>, D>(shape as OkShape<SliceShape<S, Specs>>, this.dtype, data as DataOf<D>);
   }
 
   /** Same elements, new shape (Kern 08, docs/kern-08-reshape-flatten-spec.md):
@@ -734,11 +1019,19 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * (`ReshapeCheck`); a provably-invalid literal dim of the new shape is
    * ALSO a compile error (the Kern-08 stretch, `LiteralReshapeDimInvalid`)
    * — both mirror `assertReshapeArgs`'s own runtime throw verbatim.
-   * Gradual/dynamic callers fall through to that same runtime backstop. */
-  reshape<const NS extends Shape>(shape: Guard<ReshapeCheck<S, NS>, NS>): NDArray<Mutable<NS>> {
+   * Gradual/dynamic callers fall through to that same runtime backstop.
+   *
+   * dt1 (K3, D5 "D unverändert"): dtype-neutral — the inline copy this
+   * method already did (`new Float64Array(this.data)`) becomes
+   * `copySameKindArray`, a same-typed-array-class copy (dt1 spec K3(b):
+   * "reshape/flatten kopieren inline in ndarray.ts" — still inline here,
+   * not a `runtime.ts` addition, since it needs no `Guard`/type machinery,
+   * only an `instanceof` dispatch). */
+  reshape<const NS extends Shape>(shape: Guard<ReshapeCheck<S, NS>, NS>): NDArray<Mutable<NS>, D> {
     const ns = shape as unknown as NS;
     assertReshapeArgs(this.shape, ns);
-    return new NDArray<Mutable<NS>>([...ns] as Mutable<NS>, new Float64Array(this.data));
+    const copy = copySameKindArray(this.data as unknown as DataOfRuntime);
+    return new NDArray<Mutable<NS>, D>([...ns] as Mutable<NS>, this.dtype, copy as DataOf<D>);
   }
 
   /** Rank-1 copy of every element (Kern 08): `a.flatten()` behaves exactly
@@ -747,10 +1040,14 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * Spike-04 payoff: a statically computed literal rank-1 shape (hover
    * `NDArray<[1048576]>` for `[1024, 1024]`) whenever every dim of `S` is a
    * supported literal, degrading to the honest `NDArray<[number]>`
-   * whenever the product itself degrades. */
-  flatten(): NDArray<[LiteralShapeProduct<S>]> {
+   * whenever the product itself degrades.
+   *
+   * dt1 (K3, D5 "D unverändert"): dtype-neutral, same `copySameKindArray`
+   * inline copy as `reshape` above. */
+  flatten(): NDArray<[LiteralShapeProduct<S>], D> {
     const size = product(this.shape);
-    return new NDArray<[LiteralShapeProduct<S>]>([size] as unknown as [LiteralShapeProduct<S>], new Float64Array(this.data));
+    const copy = copySameKindArray(this.data as unknown as DataOfRuntime);
+    return new NDArray<[LiteralShapeProduct<S>], D>([size] as unknown as [LiteralShapeProduct<S>], this.dtype, copy as DataOf<D>);
   }
 
   /** Row-major strides for the current shape (introspection helper,
@@ -763,20 +1060,26 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
     return computeStrides(this.shape);
   }
 
-  /** Read back as a plain nested JS array, rank-typed via `NestedArray<S>`
-   * (docs/typed-nested-array-spec.md D2) — runtime body unchanged, only the
-   * signature narrows from `unknown` and the return is cast. */
-  toNestedArray(): NestedArray<S> {
+  /** Read back as a plain nested JS array, rank- AND dtype-typed via
+   * `NestedArray<S, D>` (docs/typed-nested-array-spec.md D2; dtype-korrekt
+   * per dt1 K3, D5) — bool leaves read as `boolean` (`v !== 0`), every
+   * other dtype as a plain `number` (already what a typed-array numeric
+   * read produces). */
+  toNestedArray(): NestedArray<S, D> {
     const strides = computeStrides(this.shape);
+    const isBool = this.dtype === "bool";
     const build = (axis: number, offset: number): unknown => {
-      if (axis === this.shape.length) return this.data[offset] ?? 0;
+      if (axis === this.shape.length) {
+        const v = this.data[offset] ?? 0;
+        return isBool ? v !== 0 : v;
+      }
       const dim: Dim = this.shape[axis] ?? 0;
       const stride = strides[axis] ?? 0;
       const out: unknown[] = [];
       for (let i = 0; i < dim; i++) out.push(build(axis + 1, offset + i * stride));
       return out;
     };
-    return build(0, 0) as NestedArray<S>;
+    return build(0, 0) as NestedArray<S, D>;
   }
 
   /** Index of the maximum element (Op-Scheibe W1,
@@ -803,19 +1106,25 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    *
    * Surface asymmetry (D1, disclosed): `argmax`/`topk` exist ONLY on this
    * naive `NDArray` — no WASM kernel, no `WNDArray`/threaded parity yet
-   * (FOLLOWUPS.md tracks the follow-up). */
+   * (FOLLOWUPS.md tracks the follow-up).
+   *
+   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt5). The
+   * 0-arg overload is NILADIC (same disclosed gap as `norm()`); the
+   * axis-bearing overloads combine `DTypeLock` into their existing
+   * `ReduceAxis` `Guard`. */
   argmax(): number;
   argmax<const Axis extends number | undefined>(
-    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    axis: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "argmax">, Axis>,
   ): NDArray<OkShape<ReduceAxis<S, Axis, false>>>;
   argmax<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
-    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    axis: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "argmax">, Axis>,
     keepdims: KeepDims,
   ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>;
   argmax<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
-    axis?: Guard<ReduceAxis<S, Axis>, Axis>,
+    axis?: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "argmax">, Axis>,
     keepdims?: KeepDims,
   ): NDArray<any> | number {
+    assertFloat64Locked("argmax", this.dtype);
     // `arguments.length`, not `axis === undefined`: the TRULY niladic
     // overload (`argmax()`, zero arguments -> `number`) is a DIFFERENT
     // overload from the 1-/2-arg forms with an axis value that happens to
@@ -826,14 +1135,15 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
     // must too, or a 2-arg `argmax(undefined, true)` call would silently
     // fall through to the bare-`number` branch and drop `keepdims`.
     if (arguments.length === 0) {
-      const flat = argmaxRuntime(this.shape, this.data, undefined);
+      const flat = argmaxRuntime(this.shape, this.data as unknown as Float64Array, undefined);
       return flat.data[0] ?? 0;
     }
     const axisNum = axis as unknown as Axis | undefined;
-    const { shape, data } = argmaxRuntime(this.shape, this.data, axisNum);
+    const { shape, data } = argmaxRuntime(this.shape, this.data as unknown as Float64Array, axisNum);
     const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : shape;
     return new NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>(
       outShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
+      "float64",
       data,
     );
   }
@@ -853,15 +1163,20 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * `Float64Array` copy, so a NaN's exact bit payload survives).
    *
    * Same f64-index and surface-asymmetry notes as `argmax` above apply to
-   * `indices`. */
+   * `indices`.
+   *
+   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt5) —
+   * combined into the SAME `Guard` as `TopkCheck` (rank check first,
+   * message-table order). */
   topk<const K extends number>(
-    k: Guard<TopkCheck<S, K>, K>,
+    k: Guard<TopkCheck<S, K> extends ShapeError<string> ? TopkCheck<S, K> : DTypeLock<D, "topk">, K>,
   ): { values: NDArray<OkShape<TopkShape<S, K>>>; indices: NDArray<OkShape<TopkShape<S, K>>> } {
+    assertFloat64Locked("topk", this.dtype);
     const kNum = k as unknown as K;
-    const { values, indices } = topkRuntime(this.shape, this.data, kNum);
+    const { values, indices } = topkRuntime(this.shape, this.data as unknown as Float64Array, kNum);
     return {
-      values: new NDArray<OkShape<TopkShape<S, K>>>([kNum] as unknown as OkShape<TopkShape<S, K>>, values),
-      indices: new NDArray<OkShape<TopkShape<S, K>>>([kNum] as unknown as OkShape<TopkShape<S, K>>, indices),
+      values: new NDArray<OkShape<TopkShape<S, K>>>([kNum] as unknown as OkShape<TopkShape<S, K>>, "float64", values),
+      indices: new NDArray<OkShape<TopkShape<S, K>>>([kNum] as unknown as OkShape<TopkShape<S, K>>, "float64", indices),
     };
   }
 
@@ -888,24 +1203,31 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * `argmax()`, which throws on the same input. A caller relying on `mean`
    * to reject an empty input the way `argmax` does will be surprised;
    * this is a deliberate, disclosed divergence between the two reductions,
-   * not an oversight. */
+   * not an oversight.
+   *
+   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt3, E3:
+   * int32/bool widen to float64). The 0-arg overload is NILADIC (same
+   * disclosed gap as `norm()`); the axis-bearing overloads combine
+   * `DTypeLock` into their existing `ReduceAxis` `Guard`. */
   mean(): NDArray<OkShape<ReduceAxis<S, undefined, false>>>;
   mean<const Axis extends number | undefined>(
-    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    axis: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "mean">, Axis>,
   ): NDArray<OkShape<ReduceAxis<S, Axis, false>>>;
   mean<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
-    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    axis: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "mean">, Axis>,
     keepdims: KeepDims,
   ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>;
   mean<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
-    axis?: Guard<ReduceAxis<S, Axis>, Axis>,
+    axis?: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "mean">, Axis>,
     keepdims?: KeepDims,
   ): NDArray<any> {
+    assertFloat64Locked("mean", this.dtype);
     const axisNum = axis as unknown as Axis | undefined;
-    const { shape, data } = meanRuntime(this.shape, this.data, axisNum);
+    const { shape, data } = meanRuntime(this.shape, this.data as unknown as Float64Array, axisNum);
     const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : shape;
     return new NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>(
       outShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
+      "float64",
       data,
     );
   }
@@ -938,10 +1260,16 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * Surface asymmetry (D1, disclosed, same shape as `argmax`/`topk`/the W2
    * scalar overloads and `mean`): `sqrt` exists ONLY on this naive `NDArray`
    * — no WASM kernel, no `WNDArray` parity yet (FOLLOWUPS.md tracks the
-   * follow-up). */
+   * follow-up).
+   *
+   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt5's
+   * int32/float32 rule for `sqrt` is a LATER dt-slice) — NILADIC, same
+   * disclosed gap as `norm()` above (no argument position for a
+   * compile-time `Guard`). */
   sqrt(): NDArray<S> {
-    const data = sqrtRuntime(this.data);
-    return new NDArray<S>(this.shape as unknown as S, data);
+    assertFloat64Locked("sqrt", this.dtype);
+    const data = sqrtRuntime(this.data as unknown as Float64Array);
+    return new NDArray<S>(this.shape as unknown as S, "float64", data);
   }
 
   /** Op-Scheibe W5 (docs/op-w5-item-spec.md): the direct scalar read, NumPy's
@@ -985,9 +1313,13 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * kernel-less by design, a plain strided read; FOLLOWUPS.md tracks the
    * parity follow-up). Reuses Spike 03's own negative-index-normalization +
    * bounds-check semantics (`docs/spike-03-index-bounds-ergebnisse.md`),
-   * `computeStrides` for the flat offset — no new arithmetic invented. */
-  item<const Idx extends readonly number[]>(...indices: ItemGuard<S, Idx>): number {
-    return itemRuntime(this.shape, this.data, indices as unknown as readonly number[]);
+   * `computeStrides` for the flat offset — no new arithmetic invented.
+   *
+   * dt1 (K3, D5 "item liefert boolean bei bool, sonst number"): dtype-
+   * neutral, like `transpose`/`slice` above — no lock, pure strided read. */
+  item<const Idx extends readonly number[]>(...indices: ItemGuard<S, Idx>): NestedLeafOf<D> {
+    const v = itemRuntime(this.shape, this.data as unknown as Float64Array, indices as unknown as readonly number[]);
+    return (this.dtype === "bool" ? v !== 0 : v) as NestedLeafOf<D>;
   }
 
   /** D3 (docs/release-0.3.0-spec.md): lossless round-trip via
@@ -995,9 +1327,15 @@ export class NDArray<S extends Shape> implements NDArrayView<S> {
    * logical row-major (the class invariant — see the constructor above),
    * so no strided read is needed here, unlike `WNDArray`'s version.
    * Disclosed, undodged limitation: `JSON.stringify` itself serializes
-   * `NaN`/`±Infinity` as `null` (standard behavior, not worked around). */
-  toJSON(): { shape: number[]; data: number[] } {
-    return { shape: [...this.shape], data: Array.from(this.data) };
+   * `NaN`/`±Infinity` as `null` (standard behavior, not worked around).
+   *
+   * dt1 (K3, D5 "toJSON `data` als number[] bzw. boolean[]"): a bool array's
+   * 0/1 bytes read as `boolean` (`v !== 0`) — otherwise the type would say
+   * `boolean[]` while the runtime handed back `0`/`1` numbers (M2). */
+  toJSON(): { shape: number[]; data: D extends "bool" ? boolean[] : number[] } {
+    const raw = Array.from(this.data as unknown as ArrayLike<number>);
+    const data = (this.dtype === "bool" ? raw.map((v) => v !== 0) : raw) as D extends "bool" ? boolean[] : number[];
+    return { shape: [...this.shape], data };
   }
 
   /** D3: Node's console/`util.inspect` custom hook, e.g.
