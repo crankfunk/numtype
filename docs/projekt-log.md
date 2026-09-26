@@ -1392,3 +1392,19 @@ fehlende Typ-Pins. Der Gegencheck der Fix-Runde fand, dass der neue Mutanten-Nac
 `spike/src` schreibt — per Ausschlussmuster und eindeutigem Namen abgesichert und mit einer
 absichtlich fehlerhaften liegengebliebenen Datei belegt (Arbeitsregel 20). check:diag 237,098
 (Δ+9,693 ≤ +12,000). Unveröffentlicht bis dt5.
+
+## dt2 — Promotion und elementweise Arithmetik (2026-09-26, Stufe 3b)
+
+`add`/`sub`/`mul`/`div` für float64/float32/int32 mit `Promote`/`PromoteDiv` (docs/dtype-dt2-spec.md
+v1.1 / -ergebnisse.md), Covenant v9. Diesmal griff der Budget-Stopp als eigener Commit wie geplant
+(Commit A +1,395). Die Verify-Runde fand eine echte Regression (`AnyNDArray` im Array-Overload von
+add/sub/mul — gültiger Code abgelehnt), deren Ursache eine TS-7-Eigenheit ist: das übliche
+`0 extends 1 & T` erkennt `any` bei einem EINGESCHRÄNKTEN Typparameter nicht. Der Fix kostete +698
+und führte zur Budget-Überschreitung um 720 (Owner: akzeptiert). **Vorfall:** eine falsche
+Git-Identität (`scratch <scratch@local>`) stand seit dt1 in der gemeinsamen `.git/config` — von einem
+Agenten per `git config` in einem Worktree gesetzt, der die Konfiguration mit allen anderen teilt;
+31 Commits betroffen, 16 schon öffentlich. Bemerkt nur, weil ein Agent es nebenbei erwähnte.
+Owner-Entscheidung: umschreiben und Force-Push; dazu Arbeitsregel 22. **Lehren:** (1) Autorenschaft
+ist ein Gate, kein Detail — vor jedem Push prüfen; (2) Worktrees teilen `.git/config`, ein
+„lokales" `git config` in einem Agenten-Worktree ist repo-weit; (3) ein Hinweis in einem
+Agentenbericht („the worktree's own config") war die einzige Spur — Berichte ganz lesen.

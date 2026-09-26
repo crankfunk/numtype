@@ -415,3 +415,6 @@ dtype-generische Funktionen als bekannte Grenze). Nächste Scheiben: dt1 (Kern +
 
 **dt1 ERLEDIGT (2026-09-26)** — docs/dtype-dt1-spec.md v2.1 / -ergebnisse.md; COVENANT v8. check:diag
 237,098 (Δ+9,693 ≤ +12,000 inkl. Tests). Unveröffentlicht bis dt5.
+
+**dt2 ERLEDIGT (2026-09-26)** — docs/dtype-dt2-spec.md v1.1 / -ergebnisse.md; COVENANT v9 (inkl.
+`PromoteDiv`). check:diag 243,818 (Δ+6,720; Überschreitung um 720 Owner-akzeptiert). Unveröffentlicht bis dt5.
