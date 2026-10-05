@@ -2028,3 +2028,80 @@ d3v32.cosineSimilarity(d3vb);
 // per diagnostic content in scalar-mean.test.ts, "dt3 diagnostic CONTENTS").
 // @ts-expect-error - inner dimensions 3 and 5 do not match (and the argument is bool)
 d3f32.matmul(d3mb as unknown as NDArray<[5, 4], "bool">);
+
+// --- dt3 fix round (G2): pins restored after the gate-driven trim, plus targeted pins for the 18 type mutants
+// that survived the first verify (each pin below names the mutant class it kills) ---------------------------
+// Restored (the eight pins C2 had dropped to fit the +5,000 gate; the owner accepted the overshoot instead).
+const d3x6 = d3b32.matmul(d3m32);
+const d3x8 = d3v32.matmul(d3m32);
+const d3xd = d3uni3.matmul(d3m32);
+const d3s10 = d3i32.sum(-1, true);
+const d3s11 = d3bl.sum(0, false);
+const d3me7 = d3bl.mean(0);
+const d3d3 = d3vi.dot(d3vi);
+const d3d4 = d3v64.dot(d3v32);
+type DT3_MM_BATCH_F32 = Expect<Equal<typeof d3x6, NDArray<[5, 2, 4], "float32">>>; // rank-3 receiver keeps float32
+type DT3_MM_VEC_LEFT = Expect<Equal<typeof d3x8, NDArray<[4], "float32">>>; // left 1-D receiver keeps float32
+type DT3_MM_UNION_BOOL_RECV = Expect<Equal<(typeof d3xd)["dtype"], DType>>;
+type DT3_SUM_I32_NEGKEEP = Expect<Equal<typeof d3s10, NDArray<[2, 1], "float64">>>; // int32 -> float64 with keepdims
+type DT3_SUM_BOOL_NOKEEP = Expect<Equal<typeof d3s11, NDArray<[3], "float64">>>;
+type DT3_MEAN_BOOL_AXIS = Expect<Equal<typeof d3me7, NDArray<[3], "float64">>>; // bool -> float64 (axis overload of mean)
+type DT3_DOT_I32 = Expect<Equal<typeof d3d3, number>>; // int32 receiver accepted
+type DT3_DOT_F64_F32 = Expect<Equal<typeof d3d4, number>>;
+
+// dot / cosineSimilarity: every dtype pair that must be ACCEPTED (guard must not over-reject) ...
+const d3g1 = d3v64.dot(d3vi); // float64 receiver, int32 argument
+const d3g2 = d3vi.dot(d3v64); // int32 receiver, float64 argument
+const d3g3 = d3v64.cosineSimilarity(d3vi); // float64 receiver, int32 argument
+const d3g4 = d3vi.cosineSimilarity(d3vi);
+type DT3_DOT_F64_I32 = Expect<Equal<typeof d3g1, number>>;
+type DT3_DOT_I32_F64 = Expect<Equal<typeof d3g2, number>>;
+type DT3_COS_F64_I32 = Expect<Equal<typeof d3g3, number>>;
+type DT3_COS_I32_I32 = Expect<Equal<typeof d3g4, number>>;
+// ... and every bool position that must be REJECTED (guard must not under-reject), for non-float64 partners too.
+// @ts-expect-error - int32 receiver, bool argument (matmul)
+d3i32.matmul(d3mb);
+// @ts-expect-error - bool receiver, int32 argument (dot)
+d3vb.dot(d3vi);
+// @ts-expect-error - float64 receiver, bool argument (dot)
+d3v64.dot(d3vb);
+// @ts-expect-error - int32 receiver, bool argument (dot)
+d3vi.dot(d3vb);
+// @ts-expect-error - bool receiver, bool argument (dot)
+d3vb.dot(d3vb);
+// @ts-expect-error - int32 receiver, bool argument (cosineSimilarity)
+d3vi.cosineSimilarity(d3vb);
+// @ts-expect-error - float64 receiver, bool argument (cosineSimilarity)
+d3v64.cosineSimilarity(d3vb);
+// @ts-expect-error - bool receiver, int32 argument (cosineSimilarity)
+d3vb.cosineSimilarity(d3vi);
+// @ts-expect-error - bool receiver, bool argument (cosineSimilarity)
+d3vb.cosineSimilarity(d3vb);
+
+// sum/mean with a NON-literal axis / keepdims: the result dtype must stay the table's answer, never a claim of
+// float64 for a float32 receiver, never widened to DType for a concrete receiver.
+declare const d3WideAxis: number;
+declare const d3WideKeep: boolean;
+declare const d3OptAxis: 0 | undefined;
+const d3w1 = d3f32.sum(d3WideAxis);
+const d3w2 = d3f64.sum(d3WideAxis);
+const d3w3 = d3f32.mean(d3WideAxis);
+const d3w4 = d3f64.mean(d3WideAxis);
+const d3w5 = d3f32.sum(0, d3WideKeep);
+const d3w6 = d3f32.mean(0, d3WideKeep);
+const d3w7 = d3i32.sum(0, d3WideKeep);
+const d3w8 = d3f32.sum(d3OptAxis);
+const d3w9 = d3f32.mean(d3OptAxis);
+const d3w10 = d3uni2.sum(0, true);
+const d3w11 = d3uni2.mean(0, d3WideKeep);
+type DT3_SUM_WIDE_AXIS_F32 = Expect<Equal<(typeof d3w1)["dtype"], "float32">>;
+type DT3_SUM_WIDE_AXIS_F64 = Expect<Equal<(typeof d3w2)["dtype"], "float64">>;
+type DT3_MEAN_WIDE_AXIS_F32 = Expect<Equal<(typeof d3w3)["dtype"], "float32">>;
+type DT3_MEAN_WIDE_AXIS_F64 = Expect<Equal<(typeof d3w4)["dtype"], "float64">>;
+type DT3_SUM_WIDE_KEEP_F32 = Expect<Equal<(typeof d3w5)["dtype"], "float32">>;
+type DT3_MEAN_WIDE_KEEP_F32 = Expect<Equal<(typeof d3w6)["dtype"], "float32">>;
+type DT3_SUM_WIDE_KEEP_I32 = Expect<Equal<(typeof d3w7)["dtype"], "float64">>;
+type DT3_SUM_OPT_AXIS_F32 = Expect<Equal<(typeof d3w8)["dtype"], "float32">>;
+type DT3_MEAN_OPT_AXIS_F32 = Expect<Equal<(typeof d3w9)["dtype"], "float32">>;
+type DT3_SUM_UNION_KEEP = Expect<Equal<(typeof d3w10)["dtype"], DType>>; // union receiver on the (axis, keepdims) overload
+type DT3_MEAN_UNION_WIDE_KEEP = Expect<Equal<(typeof d3w11)["dtype"], DType>>;
