@@ -138,7 +138,9 @@ Ergebnis-dtype — statischer Typ und Laufzeit stimmen immer überein (M2).
 
 **D7 — bool (E5).** Entsteht nur aus Vergleichen, `astype("bool")` und `fromArray` mit
 `dtype: "bool"`. Wird verbraucht von `where`, `any`, `all`, `sum`/`mean` (→ float64, zählt bzw.
-Anteil) sowie den dtype-neutralen Ops aus D5. Alles andere → Compile-Fehler „use astype".
+Anteil) sowie den dtype-neutralen Ops aus D5. Alles andere → Compile-Fehler „use astype". **Nachtrag dt4 (2026-10-06,
+docs/dtype-dt4-spec.md A3 i/ii):** `any`/`all` lesen auch numerische dtypes als Wahrheitswert (siehe
+D5-Nachtrag); ein bool-Operand eines Vergleichs wird mit eigener Meldung abgelehnt („cannot be compared").
 
 **D7a — M2-Anker (Entwurf, Baustein-0-Befund F7).** M2 ist seit v6 auf die
 Shape-Guard-Maschinerie gescopt (Anker `dim.ts`, `literal-arithmetic.ts`, `Guard`, `OkShape`); die

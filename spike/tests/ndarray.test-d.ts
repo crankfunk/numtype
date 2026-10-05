@@ -2105,3 +2105,298 @@ type DT3_SUM_OPT_AXIS_F32 = Expect<Equal<(typeof d3w8)["dtype"], "float32">>;
 type DT3_MEAN_OPT_AXIS_F32 = Expect<Equal<(typeof d3w9)["dtype"], "float32">>;
 type DT3_SUM_UNION_KEEP = Expect<Equal<(typeof d3w10)["dtype"], DType>>; // union receiver on the (axis, keepdims) overload
 type DT3_MEAN_UNION_WIDE_KEEP = Expect<Equal<(typeof d3w11)["dtype"], DType>>;
+
+// =============================================================================
+// dt4 (docs/dtype-dt4-spec.md): comparisons `gt/ge/lt/le/eq/ne`, `NDArray.where`,
+// `any`/`all`. Pin strategy (A4, measured in Baustein 0): the CHECK ALIASES are
+// pinned DIRECTLY — `CompareCheck`, `WhereCheck`, `CompareScalarOperand` — because
+// the `IsAnyDType`/`IsUnion` gates inside them are behaviour-redundant at call
+// level (a call-level pin cannot kill a mutant that only removes such a gate).
+// The wiring (each op's own overloads, the guards' attribution to the right
+// ARGUMENT, the result types) is pinned by a few calls per op; the order shape ->
+// mask -> a/b and the diagnostic CONTENTS are additionally pinned at runtime by
+// real tsc fixtures (scalar-mean.test.ts, "dt4 diagnostic CONTENTS").
+// =============================================================================
+import type { IsShapeError } from "../src/dim.ts";
+import type { CompareCheck, CompareScalarOperand, WhereCheck } from "../src/ndarray.ts";
+import type { COMPARE_BOOL_MESSAGE, WHERE_BOOL_MIX_MESSAGE, WHERE_MASK_MESSAGE } from "../src/runtime.ts";
+
+type Dt4CmpErr = ShapeError<typeof COMPARE_BOOL_MESSAGE>;
+type Dt4MaskErr = ShapeError<typeof WHERE_MASK_MESSAGE>;
+type Dt4MixErr = ShapeError<typeof WHERE_BOOL_MIX_MESSAGE>;
+
+// --- CompareCheck: all 16 dtype pairs (bool, as receiver OR argument, is the ONLY rejection) ---------------------
+type DT4_CT_00 = Expect<Equal<CompareCheck<[3], [3], "float64", "float64">, true>>;
+type DT4_CT_01 = Expect<Equal<CompareCheck<[3], [3], "float64", "float32">, true>>;
+type DT4_CT_02 = Expect<Equal<CompareCheck<[3], [3], "float64", "int32">, true>>;
+type DT4_CT_03 = Expect<Equal<CompareCheck<[3], [3], "float64", "bool">, Dt4CmpErr>>;
+type DT4_CT_04 = Expect<Equal<CompareCheck<[3], [3], "float32", "float64">, true>>;
+type DT4_CT_05 = Expect<Equal<CompareCheck<[3], [3], "float32", "float32">, true>>;
+type DT4_CT_06 = Expect<Equal<CompareCheck<[3], [3], "float32", "int32">, true>>;
+type DT4_CT_07 = Expect<Equal<CompareCheck<[3], [3], "float32", "bool">, Dt4CmpErr>>;
+type DT4_CT_08 = Expect<Equal<CompareCheck<[3], [3], "int32", "float64">, true>>;
+type DT4_CT_09 = Expect<Equal<CompareCheck<[3], [3], "int32", "float32">, true>>;
+type DT4_CT_10 = Expect<Equal<CompareCheck<[3], [3], "int32", "int32">, true>>;
+type DT4_CT_11 = Expect<Equal<CompareCheck<[3], [3], "int32", "bool">, Dt4CmpErr>>;
+type DT4_CT_12 = Expect<Equal<CompareCheck<[3], [3], "bool", "float64">, Dt4CmpErr>>;
+type DT4_CT_13 = Expect<Equal<CompareCheck<[3], [3], "bool", "float32">, Dt4CmpErr>>;
+type DT4_CT_14 = Expect<Equal<CompareCheck<[3], [3], "bool", "int32">, Dt4CmpErr>>;
+type DT4_CT_15 = Expect<Equal<CompareCheck<[3], [3], "bool", "bool">, Dt4CmpErr>>;
+// shape FIRST: a shape error with a bool operand is the shape error, never the bool message
+type DT4_CT_SHAPE_FIRST = Expect<Equal<IsShapeError<CompareCheck<[3], [4], "bool", "bool">>, true>>;
+type DT4_CT_SHAPE_NOT_BOOL_MSG = Expect<Equal<CompareCheck<[3], [4], "bool", "bool"> extends Dt4CmpErr ? true : false, false>>;
+// `any` and unions give NO claim (accept), even when a union MEMBER is bool — both sides, and the wide DType
+type DT4_CT_ANY_L = Expect<Equal<CompareCheck<[3], [3], any, "bool">, true>>;
+type DT4_CT_ANY_R = Expect<Equal<CompareCheck<[3], [3], "bool", any>, true>>;
+type DT4_CT_UNION_L = Expect<Equal<CompareCheck<[3], [3], "bool" | "int32", "float64">, true>>;
+type DT4_CT_UNION_R = Expect<Equal<CompareCheck<[3], [3], "float64", "bool" | "int32">, true>>;
+type DT4_CT_UNION_BOTH = Expect<Equal<CompareCheck<[3], [3], "bool" | "int32", "bool" | "int32">, true>>;
+type DT4_CT_WIDE = Expect<Equal<CompareCheck<[3], [3], DType, DType>, true>>;
+// broadcasting is the add/sub/mul one: a broadcastable pair passes, rank may differ
+type DT4_CT_BROADCAST_OK = Expect<Equal<CompareCheck<[2, 3], [3], "float32", "int32">, true>>;
+type DT4_CT_BROADCAST_ERR = Expect<Equal<IsShapeError<CompareCheck<[2, 3], [4], "float32", "int32">>, true>>;
+
+// --- CompareScalarOperand: only a bool RECEIVER rejects; any scalar value otherwise (int32 compares 2.5 exactly) ---
+type DT4_CS_BOOL = Expect<Equal<CompareScalarOperand<"bool", 1>, { readonly __shapeError: typeof COMPARE_BOOL_MESSAGE }>>;
+type DT4_CS_F64 = Expect<Equal<CompareScalarOperand<"float64", 2.5>, 2.5>>;
+type DT4_CS_F32 = Expect<Equal<CompareScalarOperand<"float32", 2.5>, 2.5>>;
+type DT4_CS_I32 = Expect<Equal<CompareScalarOperand<"int32", 2.5>, 2.5>>; // no D6-style integer rule: nothing is stored in int32
+type DT4_CS_I32_WIDE = Expect<Equal<CompareScalarOperand<"int32", number>, number>>;
+type DT4_CS_UNION = Expect<Equal<CompareScalarOperand<"bool" | "int32", 1>, 1>>; // union receiver: no claim
+type DT4_CS_UNION_DTYPE = Expect<Equal<CompareScalarOperand<DType, number>, number>>;
+
+// --- WhereCheck: the whole verdict (shape -> mask -> a/b pair), result dtype on success --------------------------
+// a non-bool mask rejects, whatever the value operands are (the mask outranks a mix error)
+type DT4_WT_MASK_F64 = Expect<Equal<WhereCheck<[3], "float64", [3], "float64", [3], "float64">, Dt4MaskErr>>;
+type DT4_WT_MASK_F64_MIX = Expect<Equal<WhereCheck<[3], "float64", [3], "bool", [3], "int32">, Dt4MaskErr>>;
+type DT4_WT_MASK_F32 = Expect<Equal<WhereCheck<[3], "float32", [3], "float64", [3], "float64">, Dt4MaskErr>>;
+type DT4_WT_MASK_F32_MIX = Expect<Equal<WhereCheck<[3], "float32", [3], "bool", [3], "int32">, Dt4MaskErr>>;
+type DT4_WT_MASK_I32 = Expect<Equal<WhereCheck<[3], "int32", [3], "float64", [3], "float64">, Dt4MaskErr>>;
+type DT4_WT_MASK_I32_MIX = Expect<Equal<WhereCheck<[3], "int32", [3], "bool", [3], "int32">, Dt4MaskErr>>;
+// numeric x numeric: Promote's table, both operand orders (float32 only for float32 x float32, int32 stays int32)
+type DT4_WT_NUM_F64_F64 = Expect<Equal<WhereCheck<[3], "bool", [3], "float64", [3], "float64">, "float64">>;
+type DT4_WT_NUM_F64_F32 = Expect<Equal<WhereCheck<[3], "bool", [3], "float64", [3], "float32">, "float64">>;
+type DT4_WT_NUM_F64_I32 = Expect<Equal<WhereCheck<[3], "bool", [3], "float64", [3], "int32">, "float64">>;
+type DT4_WT_NUM_F32_F64 = Expect<Equal<WhereCheck<[3], "bool", [3], "float32", [3], "float64">, "float64">>;
+type DT4_WT_NUM_F32_F32 = Expect<Equal<WhereCheck<[3], "bool", [3], "float32", [3], "float32">, "float32">>;
+type DT4_WT_NUM_F32_I32 = Expect<Equal<WhereCheck<[3], "bool", [3], "float32", [3], "int32">, "float64">>;
+type DT4_WT_NUM_I32_F64 = Expect<Equal<WhereCheck<[3], "bool", [3], "int32", [3], "float64">, "float64">>;
+type DT4_WT_NUM_I32_F32 = Expect<Equal<WhereCheck<[3], "bool", [3], "int32", [3], "float32">, "float64">>;
+type DT4_WT_NUM_I32_I32 = Expect<Equal<WhereCheck<[3], "bool", [3], "int32", [3], "int32">, "int32">>;
+// A5: bool x bool stays bool (pure selection); a bool/numeric mix has its OWN message, both orders
+type DT4_WT_BOOL_BOOL = Expect<Equal<WhereCheck<[3], "bool", [3], "bool", [3], "bool">, "bool">>;
+type DT4_WT_MIX_BOOL_F64 = Expect<Equal<WhereCheck<[3], "bool", [3], "bool", [3], "float64">, Dt4MixErr>>;
+type DT4_WT_MIX_BOOL_F32 = Expect<Equal<WhereCheck<[3], "bool", [3], "bool", [3], "float32">, Dt4MixErr>>;
+type DT4_WT_MIX_BOOL_I32 = Expect<Equal<WhereCheck<[3], "bool", [3], "bool", [3], "int32">, Dt4MixErr>>;
+type DT4_WT_MIX_F64_BOOL = Expect<Equal<WhereCheck<[3], "bool", [3], "float64", [3], "bool">, Dt4MixErr>>;
+type DT4_WT_MIX_F32_BOOL = Expect<Equal<WhereCheck<[3], "bool", [3], "float32", [3], "bool">, Dt4MixErr>>;
+type DT4_WT_MIX_I32_BOOL = Expect<Equal<WhereCheck<[3], "bool", [3], "int32", [3], "bool">, Dt4MixErr>>;
+// order: shape outranks the mask error and the mix error
+type DT4_WT_SHAPE_FIRST = Expect<Equal<IsShapeError<WhereCheck<[3], "float64", [4], "float64", [3], "float64">>, true>>;
+type DT4_WT_SHAPE_NOT_MASK_MSG = Expect<Equal<WhereCheck<[3], "float64", [4], "float64", [3], "float64"> extends Dt4MaskErr ? true : false, false>>;
+type DT4_WT_SHAPE_NOT_MIX_MSG = Expect<Equal<WhereCheck<[3], "bool", [3], "bool", [4], "float64"> extends Dt4MixErr ? true : false, false>>;
+type DT4_WT_SHAPE_BEATS_MIX = Expect<Equal<IsShapeError<WhereCheck<[3], "bool", [3], "bool", [4], "float64">>, true>>;
+// three-way broadcast: pairwise folding (mask, a) then (., b); a conflict that only the triple produces is found
+type DT4_WT_3WAY_OK = Expect<Equal<WhereCheck<[2, 1], "bool", [1, 3], "float64", [2, 3], "float64">, "float64">>;
+type DT4_WT_3WAY_ERR = Expect<Equal<IsShapeError<WhereCheck<[2, 1], "bool", [1, 3], "float64", [4, 3], "float64">>, true>>;
+type DT4_WT_PERM_1 = Expect<Equal<IsShapeError<WhereCheck<[2], "bool", [1], "float64", [3], "float64">>, true>>;
+type DT4_WT_PERM_2 = Expect<Equal<IsShapeError<WhereCheck<[1], "bool", [2], "float64", [3], "float64">>, true>>;
+type DT4_WT_PERM_3 = Expect<Equal<IsShapeError<WhereCheck<[3], "bool", [1], "float64", [2], "float64">>, true>>;
+type DT4_WT_PERM_4 = Expect<Equal<IsShapeError<WhereCheck<[1], "bool", [3], "float64", [2], "float64">>, true>>;
+type DT4_WT_PERM_5 = Expect<Equal<IsShapeError<WhereCheck<[2], "bool", [3], "float64", [1], "float64">>, true>>;
+type DT4_WT_PERM_6 = Expect<Equal<IsShapeError<WhereCheck<[3], "bool", [2], "float64", [1], "float64">>, true>>;
+type DT4_WT_PERM_OK_1 = Expect<Equal<WhereCheck<[2], "bool", [1], "float64", [2], "float64">, "float64">>;
+type DT4_WT_PERM_OK_2 = Expect<Equal<WhereCheck<[1], "bool", [2], "float64", [2], "float64">, "float64">>;
+type DT4_WT_PERM_OK_3 = Expect<Equal<WhereCheck<[2], "bool", [2], "float64", [1], "float64">, "float64">>;
+// `number` dims: never a false rejection. A triple that is guaranteed to fail at runtime (2 vs 3) is still ACCEPTED when
+// `number` hides it from the pairwise fold — documented incompleteness, not a claim
+type DT4_WT_DYNAMIC_ACCEPTED = Expect<Equal<WhereCheck<[number], "bool", [2], "float64", [3], "float64">, "float64">>;
+// `any` and unions give no claim: a mask gate passes through to the a/b verdict, an a/b gate degrades the RESULT to DType
+type DT4_WT_ANY_MASK = Expect<Equal<WhereCheck<[3], any, [3], "float64", [3], "float64">, "float64">>;
+type DT4_WT_ANY_MASK_MIX = Expect<Equal<WhereCheck<[3], any, [3], "bool", [3], "int32">, Dt4MixErr>>;
+type DT4_WT_UNION_MASK = Expect<Equal<WhereCheck<[3], "float32" | "bool", [3], "float64", [3], "float64">, "float64">>;
+type DT4_WT_ANY_A = Expect<Equal<WhereCheck<[3], "bool", [3], any, [3], "float64">, DType>>;
+type DT4_WT_ANY_B = Expect<Equal<WhereCheck<[3], "bool", [3], "float64", [3], any>, DType>>;
+type DT4_WT_UNION_A = Expect<Equal<WhereCheck<[3], "bool", [3], "bool" | "int32", [3], "float64">, DType>>;
+type DT4_WT_UNION_B = Expect<Equal<WhereCheck<[3], "bool", [3], "float64", [3], "bool" | "int32">, DType>>;
+type DT4_WT_WIDE_AB = Expect<Equal<WhereCheck<[3], "bool", [3], DType, [3], DType>, DType>>;
+
+// --- the six comparisons, wired through the class: receiver/argument dtypes, result bool, the guard on EVERY op ---
+declare const dt4f64: NDArray<[2, 3]>;
+declare const dt4f32: NDArray<[2, 3], "float32">;
+declare const dt4i32: NDArray<[2, 3], "int32">;
+declare const dt4bl: NDArray<[2, 3], "bool">;
+declare const dt4v64: NDArray<[3]>;
+declare const dt4v32: NDArray<[3], "float32">;
+declare const dt4vi: NDArray<[3], "int32">;
+declare const dt4vbl: NDArray<[3], "bool">;
+declare const dt4any: AnyNDArray;
+declare const dt4uni: NDArray<[2, 3], DType>;
+declare const dt4uniBool: NDArray<[2, 3], "bool" | "float32">;
+declare const dt4uniV: NDArray<[3], DType>;
+const dt4g1 = dt4f32.gt(dt4vi);
+const dt4g2 = dt4i32.gt(2.5);
+const dt4e1 = dt4f32.ge(dt4vi);
+const dt4e2 = dt4i32.ge(2.5);
+const dt4l1 = dt4f32.lt(dt4vi);
+const dt4l2 = dt4i32.lt(2.5);
+const dt4m1 = dt4f32.le(dt4vi);
+const dt4m2 = dt4i32.le(2.5);
+const dt4q1 = dt4f32.eq(dt4vi);
+const dt4q2 = dt4i32.eq(2.5);
+const dt4n1 = dt4f32.ne(dt4vi);
+const dt4n2 = dt4i32.ne(2.5);
+type DT4_GT_ARRAY = Expect<Equal<typeof dt4g1, NDArray<[2, 3], "bool">>>;
+type DT4_GT_SCALAR = Expect<Equal<typeof dt4g2, NDArray<[2, 3], "bool">>>;
+type DT4_GE_ARRAY = Expect<Equal<typeof dt4e1, NDArray<[2, 3], "bool">>>;
+type DT4_GE_SCALAR = Expect<Equal<typeof dt4e2, NDArray<[2, 3], "bool">>>;
+type DT4_LT_ARRAY = Expect<Equal<typeof dt4l1, NDArray<[2, 3], "bool">>>;
+type DT4_LT_SCALAR = Expect<Equal<typeof dt4l2, NDArray<[2, 3], "bool">>>;
+type DT4_LE_ARRAY = Expect<Equal<typeof dt4m1, NDArray<[2, 3], "bool">>>;
+type DT4_LE_SCALAR = Expect<Equal<typeof dt4m2, NDArray<[2, 3], "bool">>>;
+type DT4_EQ_ARRAY = Expect<Equal<typeof dt4q1, NDArray<[2, 3], "bool">>>;
+type DT4_EQ_SCALAR = Expect<Equal<typeof dt4q2, NDArray<[2, 3], "bool">>>;
+type DT4_NE_ARRAY = Expect<Equal<typeof dt4n1, NDArray<[2, 3], "bool">>>;
+type DT4_NE_SCALAR = Expect<Equal<typeof dt4n2, NDArray<[2, 3], "bool">>>;
+// @ts-expect-error - gt: bool argument
+dt4f64.gt(dt4vbl);
+// @ts-expect-error - gt: bool receiver, array form
+dt4bl.gt(dt4v64);
+// @ts-expect-error - gt: bool receiver, scalar form (masked generic TS2769 — M3 v9 exception, v11)
+dt4bl.gt(1);
+// @ts-expect-error - ge: bool argument
+dt4f64.ge(dt4vbl);
+// @ts-expect-error - ge: bool receiver, scalar form
+dt4bl.ge(1);
+// @ts-expect-error - lt: bool argument
+dt4f64.lt(dt4vbl);
+// @ts-expect-error - lt: bool receiver, scalar form
+dt4bl.lt(1);
+// @ts-expect-error - le: bool argument
+dt4f64.le(dt4vbl);
+// @ts-expect-error - le: bool receiver, scalar form
+dt4bl.le(1);
+// @ts-expect-error - eq: bool argument
+dt4f64.eq(dt4vbl);
+// @ts-expect-error - eq: bool receiver, scalar form
+dt4bl.eq(1);
+// @ts-expect-error - ne: bool argument
+dt4f64.ne(dt4vbl);
+// @ts-expect-error - ne: bool receiver, scalar form
+dt4bl.ne(1);
+// @ts-expect-error - a broadcast mismatch is a compile error AT the argument
+dt4f64.gt(NDArray.zeros([4]));
+// the result is ALWAYS bool, also for union / `any` operands (a correct claim, no degradation to DType)
+const dt4u1 = dt4uni.gt(1);
+const dt4u2 = dt4uni.gt(dt4f64);
+const dt4u3 = dt4f32.le(dt4uni);
+const dt4u4 = dt4uniBool.eq(dt4i32);
+const dt4u5 = dt4any.gt(1);
+const dt4u6 = dt4any.gt(dt4f64);
+type DT4_UNION_SCALAR_BOOL = Expect<Equal<typeof dt4u1, NDArray<[2, 3], "bool">>>;
+type DT4_UNION_RECV_BOOL = Expect<Equal<typeof dt4u2, NDArray<[2, 3], "bool">>>;
+type DT4_UNION_ARG_BOOL = Expect<Equal<typeof dt4u3, NDArray<[2, 3], "bool">>>;
+type DT4_UNION_WITH_BOOL_MEMBER = Expect<Equal<typeof dt4u4, NDArray<[2, 3], "bool">>>; // compiles: a union with a bool member gives no claim
+type DT4_ANY_SCALAR_BOOL = Expect<Equal<(typeof dt4u5)["dtype"], "bool">>;
+type DT4_ANY_ARRAY_BOOL = Expect<Equal<(typeof dt4u6)["dtype"], "bool">>;
+
+// --- any / all: three overloads each, always bool, the ReduceAxis guard ------------------------------------------
+const dt4a1 = dt4f64.any();
+const dt4a2 = dt4bl.any(0);
+const dt4a3 = dt4f32.any(-1, true);
+const dt4b1 = dt4i32.all();
+const dt4b2 = dt4f32.all(1);
+const dt4b3 = dt4bl.all(0, true);
+type DT4_ANY_0 = Expect<Equal<typeof dt4a1, NDArray<[], "bool">>>;
+type DT4_ANY_AXIS = Expect<Equal<typeof dt4a2, NDArray<[3], "bool">>>;
+type DT4_ANY_KEEP = Expect<Equal<typeof dt4a3, NDArray<[2, 1], "bool">>>;
+type DT4_ALL_0 = Expect<Equal<typeof dt4b1, NDArray<[], "bool">>>;
+type DT4_ALL_AXIS = Expect<Equal<typeof dt4b2, NDArray<[2], "bool">>>;
+type DT4_ALL_KEEP = Expect<Equal<typeof dt4b3, NDArray<[1, 3], "bool">>>;
+// @ts-expect-error - any: axis out of range
+dt4f64.any(2);
+// @ts-expect-error - all: axis out of range
+dt4f64.all(2);
+const dt4a4 = dt4uni.any(0);
+const dt4b4 = dt4any.all();
+type DT4_ANY_UNION = Expect<Equal<typeof dt4a4, NDArray<[3], "bool">>>;
+type DT4_ALL_ANY = Expect<Equal<(typeof dt4b4)["dtype"], "bool">>;
+
+// --- NDArray.where: result type, and every rejection stands at the ARGUMENT that is wrong (shape -> mask -> a/b) --
+const dt4w1 = NDArray.where(dt4vbl, dt4v32, dt4v32);
+const dt4w2 = NDArray.where(dt4vbl, dt4vi, dt4vi);
+const dt4w3 = NDArray.where(dt4vbl, dt4vbl, dt4vbl);
+const dt4w4 = NDArray.where(dt4vbl, dt4v32, dt4vi);
+const dt4w5 = NDArray.where(NDArray.zeros([2, 1], "bool"), NDArray.zeros([1, 3], "float32"), NDArray.zeros([4, 1, 1]));
+type DT4_WHERE_F32 = Expect<Equal<typeof dt4w1, NDArray<[3], "float32">>>; // float32 only for float32 x float32
+type DT4_WHERE_I32 = Expect<Equal<typeof dt4w2, NDArray<[3], "int32">>>; // int32 stays int32
+type DT4_WHERE_BOOL = Expect<Equal<typeof dt4w3, NDArray<[3], "bool">>>; // A5: bool x bool
+type DT4_WHERE_MIXED = Expect<Equal<typeof dt4w4, NDArray<[3], "float64">>>; // float32 x int32 widens
+type DT4_WHERE_THREE_SHAPES = Expect<Equal<typeof dt4w5, NDArray<[4, 2, 3], "float64">>>; // the b shape takes part in the result shape
+// `any` / unions: shape claimed, dtype degraded to DType (no claim, never a false reject)
+const dt4w6 = NDArray.where(dt4vbl, dt4any, dt4v64);
+const dt4w7 = NDArray.where(dt4vbl, dt4uniV, dt4v64);
+type DT4_WHERE_ANY = Expect<Equal<(typeof dt4w6)["dtype"], DType>>;
+type DT4_WHERE_UNION = Expect<Equal<(typeof dt4w7)["dtype"], DType>>;
+NDArray.where(
+  // @ts-expect-error - the mask is not bool: the error stands at the MASK argument
+  dt4v64,
+  dt4v64,
+  dt4v64,
+);
+NDArray.where(
+  dt4vbl,
+  // @ts-expect-error - a is the bool one (b is numeric): the mix error stands at a
+  dt4vbl,
+  dt4v64,
+);
+NDArray.where(
+  dt4vbl,
+  dt4v64,
+  // @ts-expect-error - b is the bool one (a is numeric): the mix error stands at b
+  dt4vbl,
+);
+NDArray.where(
+  dt4vbl,
+  dt4v64,
+  // @ts-expect-error - shape error: stands at b
+  NDArray.zeros([4]),
+);
+NDArray.where(
+  // @ts-expect-error - the mask outranks the mix error: stands at the mask
+  dt4v64,
+  dt4vbl,
+  dt4v64,
+);
+NDArray.where(
+  NDArray.zeros([2], "bool"),
+  NDArray.zeros([1], "float64"),
+  // @ts-expect-error - a conflict only the TRIPLE produces (2 (+) 1 = 2 vs 3): stands at b
+  NDArray.zeros([3]),
+);
+NDArray.where(
+  dt4v64,
+  dt4v64,
+  // @ts-expect-error - shape outranks the non-bool mask: stands at b, not at the mask
+  NDArray.zeros([4]),
+);
+
+// --- known limit (spec D7; measured): a generic helper whose `S`/`D` are still OPEN type parameters is rejected for the array
+// form of the comparisons and for `where`, like `add`/`div` — the check cannot resolve. The scalar form compiles when only `S`
+// is open (D concrete); with an open `D` it is rejected too (as `div`'s scalar form is). `any`/`all` have no such limit. ---
+function dt4OpenScalar<S extends Shape>(x: NDArray<S, "float32">) {
+  return x.gt(1);
+}
+type DT4_OPEN_SCALAR = Expect<Equal<ReturnType<typeof dt4OpenScalar<[3]>>, NDArray<[3], "bool">>>;
+function dt4OpenArray<S extends Shape>(x: NDArray<S, "float32">, y: NDArray<S, "float32">) {
+  // @ts-expect-error - known limit: array form with an open S
+  return x.gt(y);
+}
+function dt4OpenWhere<S extends Shape>(m: NDArray<S, "bool">, x: NDArray<S, "float32">, y: NDArray<S, "float32">) {
+  // @ts-expect-error - known limit: where with an open S (stands at the first argument whose guard cannot resolve)
+  return NDArray.where(m, x, y);
+}
+function dt4OpenAny<S extends Shape, D extends DType>(x: NDArray<S, D>) {
+  return x.any();
+}
+void [dt4OpenArray, dt4OpenWhere, dt4OpenAny];

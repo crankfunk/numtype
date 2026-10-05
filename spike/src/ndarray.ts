@@ -437,8 +437,9 @@ export type CompareCheck<S extends Shape, B extends Shape, D extends DType, Dd e
  * total overload mismatch to the LAST-declared overload (the array form), so
  * the editor shows that overload's generic TS2769 and never this guard's own
  * message; the runtime (`compareScalarTyped`) throws `COMPARE_BOOL_MESSAGE`
- * regardless. */
-type CompareScalarOperand<D extends DType, N extends number> = IsUnion<D> extends true
+ * regardless. Exported only so the alias itself can be pinned directly (A4),
+ * never as a public API surface. */
+export type CompareScalarOperand<D extends DType, N extends number> = IsUnion<D> extends true
   ? N
   : D extends "bool"
     ? Guard<ShapeError<typeof COMPARE_BOOL_MESSAGE>, N>
@@ -460,17 +461,6 @@ type Broadcast3<M extends Shape, A extends Shape, B extends Shape> = Broadcast<M
       ? Broadcast<R, B>
       : readonly Dim[]
   : never;
-
-/** dt4 V2: the mask verdict of `WhereCheck` — bool is the only accepted mask
- * dtype; `any` and unions give no claim (`true`, runtime backstop), same gate
- * order as every dtype consumer (Arbeitsregel 3). */
-type WhereMaskDType<Dm extends DType> = IsAnyDType<Dm> extends true
-  ? true
-  : IsUnion<Dm> extends true
-    ? true
-    : Dm extends "bool"
-      ? true
-      : ShapeError<typeof WHERE_MASK_MESSAGE>;
 
 /** dt4 V2 (A5): the RESULT dtype of `where`'s value operands, or its
  * `ShapeError`. `any`/unions on either side degrade to the wide `DType` (no
@@ -499,8 +489,10 @@ type WhereDType<Da extends DType, Db extends DType> = IsAnyDType<Da> extends tru
 /**
  * dt4 V2: the whole verdict of `NDArray.where` in ONE alias (COVENANT M2 v11,
  * anchor `sym:WhereCheck`; exported so it can be pinned directly, A4): the
- * three-way broadcast `ShapeError` first, then the mask dtype
- * (`WHERE_MASK_MESSAGE`), then the `a`/`b` pair — either a `ShapeError`
+ * three-way broadcast `ShapeError` first, then the mask dtype (bool is the
+ * only accepted one, else `WHERE_MASK_MESSAGE`; `any` and unions give no
+ * claim and pass on to the `a`/`b` verdict, same gate order as every dtype
+ * consumer, Arbeitsregel 3), then the `a`/`b` pair — either a `ShapeError`
  * (`WHERE_BOOL_MIX_MESSAGE`) or the RESULT dtype (`WhereDType`). Order
  * shape -> mask -> a/b, identical to `whereTyped` at runtime. The three
  * per-argument guards below and the return type all derive from this one
@@ -508,9 +500,13 @@ type WhereDType<Da extends DType, Db extends DType> = IsAnyDType<Da> extends tru
 export type WhereCheck<Sm extends Shape, Dm extends DType, Sa extends Shape, Da extends DType, Sb extends Shape, Db extends DType> =
   Broadcast3<Sm, Sa, Sb> extends ShapeError<string>
     ? Broadcast3<Sm, Sa, Sb>
-    : WhereMaskDType<Dm> extends ShapeError<string>
-      ? WhereMaskDType<Dm>
-      : WhereDType<Da, Db>;
+    : IsAnyDType<Dm> extends true
+      ? WhereDType<Da, Db>
+      : IsUnion<Dm> extends true
+        ? WhereDType<Da, Db>
+        : Dm extends "bool"
+          ? WhereDType<Da, Db>
+          : ShapeError<typeof WHERE_MASK_MESSAGE>;
 
 /** dt4 V2 (v1.1, Baustein 0 D1; M3): a `where` rejection stands at the
  * argument that is wrong. The mask argument carries ONLY the mask verdict —
@@ -522,15 +518,12 @@ type WhereMaskArg<V> = [V] extends [ShapeError<typeof WHERE_MASK_MESSAGE>] ? V :
  * (so it only ever shows after shape and mask passed). */
 type WhereAArg<V, Da extends DType> = [V] extends [ShapeError<typeof WHERE_BOOL_MIX_MESSAGE>] ? ([Da] extends ["bool"] ? V : true) : true;
 
-/** dt4 V2: `b` carries the shape verdict and the mix error when `b` is the
- * bool one; never the mask verdict (that stands at the mask argument). */
-type WhereBArg<V, Da extends DType> = [V] extends [ShapeError<typeof WHERE_MASK_MESSAGE>]
-  ? true
-  : [V] extends [ShapeError<typeof WHERE_BOOL_MIX_MESSAGE>]
-    ? [Da] extends ["bool"]
-      ? true
-      : V
-    : V;
+/** dt4 V2: `b` carries the three-way SHAPE verdict and the mix error; never
+ * the mask verdict (that stands at the mask argument). When `a` is the bool
+ * one the mix error is flagged at `b` as well, but tsc reports only the FIRST
+ * failing argument of a call, which is `a` (guards are checked in argument
+ * order), so the editor shows it at `a`. */
+type WhereBArg<V> = [V] extends [ShapeError<typeof WHERE_MASK_MESSAGE>] ? true : V;
 
 /**
  * Op-Scheibe W4 (docs/op-w4-stack-spec.md, D2/F1/F2): the `NDArray` ->
@@ -1119,13 +1112,13 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * Every rejection stands at the ARGUMENT that is wrong (M3, `WhereCheck`'s
    * per-argument guards derive from one verdict) in the order shape -> mask
    * -> a/b: the mask argument carries the mask error, `a` the mix error when
-   * `a` is the bool one, `b` the three-way SHAPE error and the mix error when
-   * `b` is the bool one. A conflict only all three shapes produce together
+   * `a` is the bool one, `b` the three-way SHAPE error and the mix error (tsc
+   * reports the first failing argument only, so `a` wins when both are flagged). A conflict only all three shapes produce together
    * names the intermediate `mask (+) a` shape (compile time and runtime
    * alike). With `number` dims some guaranteed-failing triples compile and
    * throw at runtime (incomplete, never a false rejection). `any`/union
-   * dtypes give no claim. Like `add`/`div`, a generic helper with open `S`/`D`
-   * type parameters is rejected (known limit).
+   * dtypes give no claim. Like `add`/`div`, a generic helper with an open `S` or `D`
+   * type parameter is rejected (known limit, measured and pinned).
    *
    * Data movement, no arithmetic (M1 v6): values are selected, not computed.
    * Equal operand dtypes copy as-is and keep NaN payloads bit for bit — the
@@ -1135,7 +1128,7 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
   static where<Sm extends Shape, Dm extends DType, Sa extends Shape, Da extends DType, Sb extends Shape, Db extends DType>(
     mask: Guard<WhereMaskArg<WhereCheck<Sm, Dm, Sa, Da, Sb, Db>>, NDArray<Sm, Dm>>,
     a: Guard<WhereAArg<WhereCheck<Sm, Dm, Sa, Da, Sb, Db>, Da>, NDArray<Sa, Da>>,
-    b: Guard<WhereBArg<WhereCheck<Sm, Dm, Sa, Da, Sb, Db>, Da>, NDArray<Sb, Db>>,
+    b: Guard<WhereBArg<WhereCheck<Sm, Dm, Sa, Da, Sb, Db>>, NDArray<Sb, Db>>,
   ): NDArray<OkShape<Broadcast3<Sm, Sa, Sb>>, OkDType<WhereDType<Da, Db>>> {
     const m = mask as unknown as NDArray<Sm, Dm>;
     const x = a as unknown as NDArray<Sa, Da>;
@@ -1575,9 +1568,12 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * becomes ±Infinity (`f32.eq(3.4028235677973366e38)` is true for an
    * Infinity element). An int32 receiver compares exactly against a
    * non-integer scalar. A bool receiver rejects (`CompareScalarOperand`, the
-   * M3 v9 named scalar exception applies). Known limit (spec D7):
-   * in a generic helper whose `S`/`D` are still open type parameters the
-   * ARRAY form is rejected like `add`/`div`'s; the scalar form compiles. */
+   * M3 v9 named scalar exception applies). Known limit (spec D7,
+   * measured): in a generic helper whose `S` or `D` is still an open type
+   * parameter the ARRAY form is rejected, like `add`/`div`'s (the check
+   * cannot resolve); the scalar form compiles when only `S` is open and `D`
+   * concrete, and is rejected with an open `D`, like `div`'s scalar form.
+   * Pinned in ndarray.test-d.ts. */
   gt<const N extends number>(s: CompareScalarOperand<D, N>): NDArray<S, "bool">;
   gt<B extends Shape, Dd extends DType>(
     other: Guard<CompareCheck<S, B, D, Dd>, NDArray<B, Dd>>,
