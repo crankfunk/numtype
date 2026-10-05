@@ -2956,3 +2956,620 @@ test("dt3 mean float32: sum32 / n, not sum32 * (1/n) — a subnormal-tie counter
   assertSameValues([viaDivide], nd.mean(0).data, true, "mean(0) of [x, 0 x 783]");
   assertSameValues(refMeanF32([n], values, undefined).data, nd.mean().data, true, "mean() vs the independent reference");
 });
+
+// =============================================================================
+// dt4 (docs/dtype-dt4-spec.md): the six comparisons `gt/ge/lt/le/eq/ne`,
+// `NDArray.where(mask, a, b)` and `any`/`all`. Same no-new-file house
+// convention (appended at the end of this file; the Dateiset stays fixed).
+// NDArray-only, no kernel (M1 v5: kernel-less reference ops) — so the
+// oracles are INDEPENDENT of `runtime.ts`: the native JS operators over the
+// STORED values (the arithmetic IS the spec, the same stance as the W2 scalar
+// matrix), a coordinate-counting broadcast reference (no `unravel`, no
+// `alignToRank`), and — for `any`/`all` — `astype("bool")` plus a lane walk
+// (D3: truthiness is exactly `x !== 0`). Receivers in the loops go through the
+// structural `Dt4Nd` view so the loops do not pay the generic-overload type
+// machinery per call; the typed surface is pinned in ndarray.test-d.ts.
+// =============================================================================
+import { COMPARE_BOOL_MESSAGE, WHERE_BOOL_MIX_MESSAGE, WHERE_MASK_MESSAGE } from "../src/runtime.ts";
+import { genBroadcastShapes } from "./prng.ts";
+
+interface Dt4Nd {
+  readonly dtype: DType;
+  readonly shape: readonly number[];
+  readonly strides: readonly number[];
+  readonly data: DataOfRuntime;
+  gt(o: number | Dt4Nd): Dt4Nd;
+  ge(o: number | Dt4Nd): Dt4Nd;
+  lt(o: number | Dt4Nd): Dt4Nd;
+  le(o: number | Dt4Nd): Dt4Nd;
+  eq(o: number | Dt4Nd): Dt4Nd;
+  ne(o: number | Dt4Nd): Dt4Nd;
+  any(axis?: number, keepdims?: boolean): Dt4Nd;
+  all(axis?: number, keepdims?: boolean): Dt4Nd;
+  sum(axis?: number): Dt4Nd;
+  astype(dtype: DType): Dt4Nd;
+}
+const d4 = (nd: unknown): Dt4Nd => nd as Dt4Nd;
+const mk4 = (shape: readonly number[], values: ArrayLike<number>, dtype: DType): Dt4Nd => d4(NDArray.fromArray(shape as number[], Array.from(values), { dtype }));
+const where4 = (m: Dt4Nd, a: Dt4Nd, b: Dt4Nd): Dt4Nd => (NDArray.where as unknown as (m: unknown, a: unknown, b: unknown) => Dt4Nd)(m, a, b);
+
+type CmpOp = "gt" | "ge" | "lt" | "le" | "eq" | "ne";
+const CMP_OPS: readonly CmpOp[] = ["gt", "ge", "lt", "le", "eq", "ne"];
+const NATIVE_CMP: Record<CmpOp, (x: number, y: number) => boolean> = {
+  gt: (x, y) => x > y,
+  ge: (x, y) => x >= y,
+  lt: (x, y) => x < y,
+  le: (x, y) => x <= y,
+  eq: (x, y) => x === y,
+  ne: (x, y) => x !== y,
+};
+
+/** Manual n-ary broadcast shape (valid inputs only): per axis from the right,
+ * every non-1 dim must agree. */
+function refShape(...shapes: (readonly number[])[]): number[] {
+  const rank = Math.max(...shapes.map((s) => s.length));
+  const out: number[] = [];
+  for (let k = 1; k <= rank; k++) {
+    let dim = 1;
+    for (const s of shapes) {
+      const d = s[s.length - k] ?? 1;
+      if (d !== 1) {
+        assert.ok(dim === 1 || dim === d, "refShape: incompatible input");
+        dim = d;
+      }
+    }
+    out.unshift(dim);
+  }
+  return out;
+}
+
+/** For every flat output index (row-major, by COUNTING coordinates), the flat
+ * offset of the source element the broadcast reads. */
+function refOffsets(shape: readonly number[], out: readonly number[]): number[] {
+  const rank = out.length;
+  const dims = [...new Array<number>(rank - shape.length).fill(1), ...shape];
+  const strides = new Array<number>(rank).fill(0);
+  let acc = 1;
+  for (let d = rank - 1; d >= 0; d--) {
+    strides[d] = dims[d] === 1 ? 0 : acc;
+    acc *= dims[d] ?? 1;
+  }
+  const offs: number[] = [];
+  const coord = new Array<number>(rank).fill(0);
+  for (let f = 0; f < prod(out); f++) {
+    let o = 0;
+    for (let d = 0; d < rank; d++) o += (coord[d] ?? 0) * (strides[d] ?? 0);
+    offs.push(o);
+    for (let d = rank - 1; d >= 0; d--) {
+      coord[d] = (coord[d] ?? 0) + 1;
+      if ((coord[d] ?? 0) < (out[d] ?? 1)) break;
+      coord[d] = 0;
+    }
+  }
+  return offs;
+}
+
+const msgOf = (fn: () => unknown): string => {
+  let m = "";
+  assert.throws(fn, (e: unknown) => {
+    m = (e as Error).message;
+    return true;
+  });
+  return m;
+};
+
+function assertBoolResult(r: Dt4Nd, shape: readonly number[], expected: readonly (boolean | number)[], ctx: string): void {
+  assert.strictEqual(r.dtype, "bool", `${ctx}: dtype`);
+  assert.ok(r.data instanceof Uint8Array, `${ctx}: data class`);
+  assert.deepStrictEqual([...r.shape], [...shape], `${ctx}: shape`);
+  assert.deepStrictEqual(Array.from(r.data), expected.map((v) => (v ? 1 : 0)), `${ctx}: values`);
+}
+
+test("dt4 messages: the three new messages are the pinned wording, own (never the arithmetic text), and the runtime throws exactly them", () => {
+  assert.strictEqual(COMPARE_BOOL_MESSAGE, "dtype 'bool' cannot be compared — use astype() to convert first");
+  assert.strictEqual(WHERE_MASK_MESSAGE, "where: mask must have dtype 'bool' — use a comparison or astype(\"bool\") first");
+  assert.strictEqual(WHERE_BOOL_MIX_MESSAGE, "where: a and b mix dtype 'bool' with a numeric dtype — use astype() to convert first");
+  for (const m of [COMPARE_BOOL_MESSAGE, WHERE_MASK_MESSAGE, WHERE_BOOL_MIX_MESSAGE]) assert.notStrictEqual(m, BOOL_ARITHMETIC_MESSAGE);
+  assert.strictEqual(msgOf(() => mk4([2], [1, 0], "bool").gt(mk4([2], [1, 2], "float64"))), COMPARE_BOOL_MESSAGE);
+  assert.strictEqual(msgOf(() => where4(mk4([2], [1, 2], "float64"), mk4([2], [1, 2], "float64"), mk4([2], [1, 2], "float64"))), WHERE_MASK_MESSAGE);
+  assert.strictEqual(msgOf(() => where4(mk4([2], [1, 0], "bool"), mk4([2], [1, 0], "bool"), mk4([2], [1, 2], "float64"))), WHERE_BOOL_MIX_MESSAGE);
+});
+
+test("dt4 comparisons, array form: 3 numeric dtypes x 3 numeric dtypes x 6 ops, mixed dtypes compare EXACTLY (values widened, never rounded), vs the native operators over the stored values", () => {
+  // Pools chosen so that equalities and both orderings occur across dtype pairs, and so that fround(0.1) !== 0.1 matters.
+  const POOL_A: Record<string, number[]> = {
+    float64: [0.1, 0, Number.NaN, Infinity, -Infinity, 1],
+    float32: [0.1, 0, Number.NaN, Infinity, -Infinity, 1],
+    int32: [-5, 0, 3, 7, 2147483647, -2147483648],
+  };
+  const POOL_B: Record<string, number[]> = { float64: [0.1, -0, 1], float32: [0.1, -0, 1], int32: [0, 1, -5] };
+  for (const da of NUMERIC_DTYPES) {
+    for (const db of NUMERIC_DTYPES) {
+      const a = mk4([2, 3], POOL_A[da] ?? [], da);
+      const b = mk4([3], POOL_B[db] ?? [], db);
+      const storedA = Array.from(a.data);
+      const storedB = Array.from(b.data);
+      for (const op of CMP_OPS) {
+        const expected = storedA.map((x, i) => NATIVE_CMP[op](x, storedB[i % 3] ?? 0));
+        assertBoolResult(a[op](b), [2, 3], expected, `[${da} ${op} ${db}]`);
+      }
+    }
+  }
+  // Non-vacuity of the pool: float32 0.1 and float64 0.1 really differ, so the mixed-dtype cell above decides on EXACT values.
+  assert.notStrictEqual(Math.fround(0.1), 0.1);
+  assert.deepStrictEqual(Array.from(mk4([1], [0.1], "float32").gt(mk4([1], [0.1], "float64")).data), [1]);
+  assert.deepStrictEqual(Array.from(mk4([1], [0.1], "float32").eq(mk4([1], [0.1], "float32")).data), [1]);
+});
+
+test("dt4 comparisons: a bool operand (receiver, argument, both) throws COMPARE_BOOL_MESSAGE for every op, and a SHAPE error outranks it", () => {
+  for (const op of CMP_OPS) {
+    const bl = mk4([3], [1, 0, 1], "bool");
+    for (const dt of NUMERIC_DTYPES) {
+      const num = mk4([3], [1, 2, 3], dt);
+      assert.strictEqual(msgOf(() => bl[op](num)), COMPARE_BOOL_MESSAGE, `${op}: bool receiver, ${dt} argument`);
+      assert.strictEqual(msgOf(() => num[op](bl)), COMPARE_BOOL_MESSAGE, `${op}: ${dt} receiver, bool argument`);
+    }
+    assert.strictEqual(msgOf(() => bl[op](bl)), COMPARE_BOOL_MESSAGE, `${op}: bool vs bool`);
+    // shape first (compile time shows the shape error at the argument; the runtime throws the same one)
+    const shapeMsg = msgOf(() => mk4([3], [1, 2, 3], "float64")[op](mk4([4], [1, 2, 3, 4], "float64")));
+    assert.ok(/^broadcast: shapes \[3\] and \[4\] are not broadcast-compatible/.test(shapeMsg));
+    assert.strictEqual(msgOf(() => bl[op](mk4([4], [1, 2, 3, 4], "float64"))), shapeMsg, `${op}: shape error outranks a bool receiver`);
+    assert.strictEqual(msgOf(() => mk4([4], [1, 2, 3, 4], "float64")[op](bl)), msgOf(() => mk4([4], [1, 2, 3, 4], "float64")[op](mk4([3], [1, 2, 3], "float64"))), `${op}: shape error outranks a bool argument`);
+    // scalar form: a bool receiver throws, also when empty
+    assert.strictEqual(msgOf(() => bl[op](1)), COMPARE_BOOL_MESSAGE, `${op}: scalar on a bool receiver`);
+    assert.strictEqual(msgOf(() => mk4([0], [], "bool")[op](1)), COMPARE_BOOL_MESSAGE, `${op}: scalar on an EMPTY bool receiver`);
+  }
+});
+
+test("dt4 comparisons: NaN / +-0 / +-Infinity per op (IEEE: every comparison with NaN is false, ne is true; -0 equals +0)", () => {
+  const SPECIAL = [Number.NaN, -0, 0, Infinity, -Infinity, 1, -1, 3.4028234663852886e38];
+  for (const dt of ["float64", "float32"] as const) {
+    const a = mk4([8], SPECIAL, dt);
+    const stored = Array.from(a.data);
+    for (const op of CMP_OPS) {
+      // array form against every special as a column: [8,1] op [8] -> [8,8]
+      const col = mk4([8, 1], SPECIAL, dt);
+      const colStored = Array.from(col.data);
+      const expected: boolean[] = [];
+      for (const x of colStored) for (const y of stored) expected.push(NATIVE_CMP[op](x, y));
+      assertBoolResult(col[op](a), [8, 8], expected, `[${dt} ${op}] special x special`);
+      // scalar form against each special
+      for (const s of SPECIAL) {
+        const sc = dt === "float32" ? Math.fround(s) : s;
+        assertBoolResult(a[op](s), [8], stored.map((x) => NATIVE_CMP[op](x, sc)), `[${dt} ${op}] scalar ${s}`);
+      }
+    }
+    // the headline facts, spelled out
+    assert.deepStrictEqual(Array.from(a.eq(Number.NaN).data), new Array(8).fill(0), `[${dt}] NaN scalar: eq is false everywhere`);
+    assert.deepStrictEqual(Array.from(a.ne(Number.NaN).data), new Array(8).fill(1), `[${dt}] NaN scalar: ne is true everywhere`);
+    assert.deepStrictEqual(Array.from(mk4([1], [-0], dt).eq(0).data), [1], `[${dt}] -0 equals +0`);
+    assert.deepStrictEqual(Array.from(mk4([1], [0], dt).eq(-0).data), [1], `[${dt}] +0 equals -0 (scalar)`);
+    assert.deepStrictEqual(Array.from(mk4([1], [-0], dt).gt(0).data), [0], `[${dt}] -0 is not greater than +0`);
+  }
+});
+
+test("dt4 comparisons, scalar form: float32 rounds the scalar with fround (A3 iv, NEP 50), float64 does not; int32 compares exactly against any scalar (T6)", () => {
+  // f32[fround(0.1)].gt(0.1) is false: the scalar becomes fround(0.1) too. Contrast: the float64 array holding the same value is greater than 0.1.
+  const r01 = Math.fround(0.1);
+  assert.notStrictEqual(r01, 0.1, "non-vacuity: fround(0.1) differs from 0.1");
+  assert.deepStrictEqual(Array.from(mk4([1], [r01], "float32").gt(0.1).data), [0]);
+  assert.deepStrictEqual(Array.from(mk4([1], [r01], "float32").eq(0.1).data), [1]);
+  assert.deepStrictEqual(Array.from(mk4([1], [r01], "float64").gt(0.1).data), [1], "float64 does NOT round the scalar");
+  // 16777217 is not a float32: it rounds to 16777216, so the element 16777216 equals it. float64 differs.
+  assert.deepStrictEqual(Array.from(mk4([1], [16777216], "float32").eq(16777217).data), [1]);
+  assert.deepStrictEqual(Array.from(mk4([1], [16777216], "float64").eq(16777217).data), [0]);
+  // A scalar beyond the float32 range rounds to Infinity: an Infinity element equals it (documented consequence); float64 does not.
+  assert.strictEqual(Math.fround(3.4028235677973366e38), Infinity, "non-vacuity: the scalar rounds to Infinity");
+  assert.deepStrictEqual(Array.from(mk4([1], [Infinity], "float32").eq(3.4028235677973366e38).data), [1]);
+  assert.deepStrictEqual(Array.from(mk4([1], [Infinity], "float64").eq(3.4028235677973366e38).data), [0]);
+  assert.deepStrictEqual(Array.from(mk4([1], [3.4028234663852886e38], "float32").lt(3.4028235677973366e38).data), [1], "float32 max is below the rounded-to-Infinity scalar");
+  // int32: a non-integer scalar is fine and exact; NaN never equals; a scalar outside int32 compares as a plain number.
+  const i = mk4([4], [-2147483648, 2, 3, 2147483647], "int32");
+  assert.deepStrictEqual(Array.from(i.gt(2.5).data), [0, 0, 1, 1]);
+  assert.deepStrictEqual(Array.from(i.le(2.5).data), [1, 1, 0, 0]);
+  assert.deepStrictEqual(Array.from(i.eq(Number.NaN).data), [0, 0, 0, 0]);
+  assert.deepStrictEqual(Array.from(i.ne(Number.NaN).data), [1, 1, 1, 1]);
+  assert.deepStrictEqual(Array.from(i.lt(2 ** 40).data), [1, 1, 1, 1]);
+  assert.deepStrictEqual(Array.from(i.gt(-(2 ** 40)).data), [1, 1, 1, 1]);
+  assert.deepStrictEqual(Array.from(i.gt(-2147483649).data), [1, 1, 1, 1], "exact: -2147483648 > -2147483649");
+  // scalar form keeps the receiver's shape (also rank 0 and size 0)
+  assertBoolResult(mk4([], [5], "int32").gt(4), [], [1], "rank 0");
+  assertBoolResult(mk4([0, 3], [], "float32").gt(4), [0, 3], [], "size 0");
+});
+
+test("dt4 comparisons: broadcasting across mixed dtypes, rank 0 and size 0, plus a randomized differential vs the coordinate-counting reference", () => {
+  const a = mk4([2, 1, 3], [1, 2, 3, 4, 5, 6], "float32");
+  const b = mk4([4, 1], [0, 2, 4, 6], "int32");
+  const sa = Array.from(a.data);
+  const sb = Array.from(b.data);
+  const out = refShape([2, 1, 3], [4, 1]);
+  assert.deepStrictEqual(out, [2, 4, 3]);
+  const oa = refOffsets([2, 1, 3], out);
+  const ob = refOffsets([4, 1], out);
+  for (const op of CMP_OPS) assertBoolResult(a[op](b), out, oa.map((o, f) => NATIVE_CMP[op](sa[o] ?? 0, sb[ob[f] ?? 0] ?? 0)), `mixed broadcast ${op}`);
+  // rank-0 operand on either side, and a size-0 shape
+  assertBoolResult(mk4([], [2], "float64").lt(mk4([3], [1, 2, 3], "int32")), [3], [0, 0, 1], "rank 0 receiver");
+  assertBoolResult(mk4([3], [1, 2, 3], "int32").lt(mk4([], [2], "float64")), [3], [1, 0, 0], "rank 0 argument");
+  assertBoolResult(mk4([0, 3], [], "float32").ge(mk4([3], [1, 2, 3], "float32")), [0, 3], [], "size-0 receiver");
+  assertBoolResult(mk4([3], [1, 2, 3], "float32").ge(mk4([0, 3], [], "float32")), [0, 3], [], "size-0 argument");
+  // randomized differential
+  const rng = makeRng(0xd7_04_c0_ffeen);
+  for (let n = 0; n < 150; n++) {
+    const { aShape, bShape } = genBroadcastShapes(rng, 4);
+    const da = NUMERIC_DTYPES[rng.nextInt(0, 2)] ?? "float64";
+    const db = NUMERIC_DTYPES[rng.nextInt(0, 2)] ?? "float64";
+    const gen = (shape: number[], dt: DType): Dt4Nd =>
+      mk4(shape, Array.from({ length: prod(shape) }, () => (dt === "int32" ? rng.nextInt(-3, 3) : (rng.nextInt(-6, 6) / 2) * (rng.nextInt(0, 9) === 0 ? Number.NaN : 1))), dt);
+    const x = gen(aShape, da);
+    const y = gen(bShape, db);
+    const o = refShape(aShape, bShape);
+    const xa = Array.from(x.data);
+    const ya = Array.from(y.data);
+    const ox = refOffsets(aShape, o);
+    const oy = refOffsets(bShape, o);
+    const op = CMP_OPS[rng.nextInt(0, 5)] ?? "gt";
+    assertBoolResult(x[op](y), o, ox.map((off, f) => NATIVE_CMP[op](xa[off] ?? 0, ya[oy[f] ?? 0] ?? 0)), `random ${n}: ${da}${JSON.stringify(aShape)} ${op} ${db}${JSON.stringify(bShape)}`);
+  }
+});
+
+test("dt4 where: result dtype and data class for every pairing (bool x bool -> bool, numeric x numeric = Promote, a bool/numeric mix throws), both operand orders", () => {
+  const EXPECTED: Record<string, Record<string, DType>> = {
+    float64: { float64: "float64", float32: "float64", int32: "float64" },
+    float32: { float64: "float64", float32: "float32", int32: "float64" },
+    int32: { float64: "float64", float32: "float64", int32: "int32" },
+  };
+  const CLASS: Record<DType, unknown> = { float64: Float64Array, float32: Float32Array, int32: Int32Array, bool: Uint8Array };
+  const mask = mk4([3], [1, 0, 1], "bool");
+  for (const da of NUMERIC_DTYPES) {
+    for (const db of NUMERIC_DTYPES) {
+      const r = where4(mask, mk4([3], [1, 2, 3], da), mk4([3], [4, 5, 6], db));
+      const want = EXPECTED[da]?.[db];
+      assert.strictEqual(r.dtype, want, `[${da}, ${db}] dtype`);
+      assert.ok(r.data instanceof (CLASS[want ?? "float64"] as Float64ArrayConstructor), `[${da}, ${db}] data class`);
+      assert.deepStrictEqual(Array.from(r.data), [1, 5, 3], `[${da}, ${db}] values`);
+    }
+    // numeric x bool and bool x numeric: the own mix message
+    assert.strictEqual(msgOf(() => where4(mask, mk4([3], [1, 2, 3], da), mk4([3], [1, 0, 1], "bool"))), WHERE_BOOL_MIX_MESSAGE, `[${da}, bool]`);
+    assert.strictEqual(msgOf(() => where4(mask, mk4([3], [1, 0, 1], "bool"), mk4([3], [1, 2, 3], da))), WHERE_BOOL_MIX_MESSAGE, `[bool, ${da}]`);
+  }
+  const rb = where4(mask, mk4([3], [1, 1, 0], "bool"), mk4([3], [0, 0, 1], "bool"));
+  assert.strictEqual(rb.dtype, "bool");
+  assert.ok(rb.data instanceof Uint8Array);
+  assert.deepStrictEqual(Array.from(rb.data), [1, 0, 0]);
+  // a mask of every non-bool dtype is rejected with the mask message
+  for (const dt of NUMERIC_DTYPES) assert.strictEqual(msgOf(() => where4(mk4([3], [1, 0, 1], dt), mk4([3], [1, 2, 3], "float64"), mk4([3], [4, 5, 6], "float64"))), WHERE_MASK_MESSAGE, `mask ${dt}`);
+});
+
+test("dt4 where: three DIFFERENT shapes broadcast like the coordinate-counting reference, with mixed dtypes, rank 0 and size 0, plus a randomized differential", () => {
+  const m = mk4([2, 1], [1, 0], "bool");
+  const a = mk4([1, 3], [10, 20, 30], "float32");
+  const b = mk4([4, 1, 1], [-1, -2, -3, -4], "int32");
+  const out = refShape([2, 1], [1, 3], [4, 1, 1]);
+  assert.deepStrictEqual(out, [4, 2, 3]);
+  const r = where4(m, a, b);
+  assert.strictEqual(r.dtype, "float64");
+  assert.deepStrictEqual([...r.shape], out);
+  const om = refOffsets([2, 1], out);
+  const oa = refOffsets([1, 3], out);
+  const ob = refOffsets([4, 1, 1], out);
+  const sm = Array.from(m.data);
+  const sa = Array.from(a.data);
+  const sb = Array.from(b.data);
+  assert.deepStrictEqual(Array.from(r.data), om.map((o, f) => ((sm[o] ?? 0) !== 0 ? (sa[oa[f] ?? 0] ?? 0) : (sb[ob[f] ?? 0] ?? 0))));
+  // rank-0 and size-0 operands
+  assert.deepStrictEqual(Array.from(where4(mk4([], [1], "bool"), mk4([3], [1, 2, 3], "float64"), mk4([], [9], "float64")).data), [1, 2, 3]);
+  assert.deepStrictEqual(Array.from(where4(mk4([], [0], "bool"), mk4([3], [1, 2, 3], "float64"), mk4([], [9], "float64")).data), [9, 9, 9]);
+  const empty = where4(mk4([0, 3], [], "bool"), mk4([3], [1, 2, 3], "float32"), mk4([1], [0], "float32"));
+  assert.deepStrictEqual([...empty.shape], [0, 3]);
+  assert.strictEqual(empty.data.length, 0);
+  assert.strictEqual(empty.dtype, "float32");
+  // randomized differential: a/b shapes broadcast-compatible, the mask shape derived from their broadcast
+  const rng = makeRng(0xd7_04_aa_bbccn);
+  for (let n = 0; n < 150; n++) {
+    const { aShape, bShape } = genBroadcastShapes(rng, 4);
+    const o2 = refShape(aShape, bShape);
+    const mShape = o2.slice(rng.nextInt(0, o2.length)).map((d) => (rng.nextBool() ? 1 : d));
+    const dts: DType[] = ["float64", "float32", "int32"];
+    const da = dts[rng.nextInt(0, 2)] ?? "float64";
+    const db = dts[rng.nextInt(0, 2)] ?? "float64";
+    const gen = (shape: number[], dt: DType): Dt4Nd => mk4(shape, Array.from({ length: prod(shape) }, () => (dt === "int32" ? rng.nextInt(-9, 9) : rng.nextInt(-9, 9) / 4)), dt);
+    const mask = mk4(mShape, Array.from({ length: prod(mShape) }, () => rng.nextInt(0, 1)), "bool");
+    const x = gen(aShape, da);
+    const y = gen(bShape, db);
+    const res = where4(mask, x, y);
+    const o = refShape(mShape, aShape, bShape);
+    const mm = Array.from(mask.data);
+    const xa = Array.from(x.data);
+    const ya = Array.from(y.data);
+    const omm = refOffsets(mShape, o);
+    const ox = refOffsets(aShape, o);
+    const oy = refOffsets(bShape, o);
+    assert.deepStrictEqual([...res.shape], o, `random ${n}: shape`);
+    assert.deepStrictEqual(Array.from(res.data), omm.map((off, f) => ((mm[off] ?? 0) !== 0 ? (xa[ox[f] ?? 0] ?? 0) : (ya[oy[f] ?? 0] ?? 0))), `random ${n}: ${da}${JSON.stringify(aShape)} / ${db}${JSON.stringify(bShape)} mask ${JSON.stringify(mShape)}`);
+  }
+});
+
+test("dt4 where: check order shape -> mask -> a/b at runtime, and the triple-only shape conflict (each pair compatible with the intermediate, not the triple) in every argument order", () => {
+  const f = (shape: number[], dt: DType): Dt4Nd => mk4(shape, new Array<number>(prod(shape)).fill(dt === "bool" ? 1 : 2), dt);
+  const bcast = (x: string, y: string, dx: number, dy: number): string => `broadcast: shapes ${x} and ${y} are not broadcast-compatible at axis -1 (dims ${dx} and ${dy})`;
+  // shapes {[2], [1], [3]}: mask (+) a is folded first, so the message names that INTERMEDIATE shape against b.
+  const cases: [number[], number[], number[], string][] = [
+    [[2], [1], [3], bcast("[2]", "[3]", 2, 3)], // [2] (+) [1] = [2] vs [3]
+    [[1], [2], [3], bcast("[2]", "[3]", 2, 3)], // [1] (+) [2] = [2] vs [3]
+    [[3], [1], [2], bcast("[3]", "[2]", 3, 2)],
+    [[1], [3], [2], bcast("[3]", "[2]", 3, 2)],
+    [[2], [3], [1], bcast("[2]", "[3]", 2, 3)], // the FIRST pair already conflicts
+    [[3], [2], [1], bcast("[3]", "[2]", 3, 2)],
+  ];
+  for (const [sm, sa, sb, msg] of cases) {
+    assert.strictEqual(msgOf(() => where4(f(sm, "bool"), f(sa, "float64"), f(sb, "float64"))), msg, `mask ${JSON.stringify(sm)} a ${JSON.stringify(sa)} b ${JSON.stringify(sb)}`);
+  }
+  // a rank-2 triple-only conflict: [2,1] (+) [1,3] = [2,3] vs [4,3]
+  assert.strictEqual(
+    msgOf(() => where4(f([2, 1], "bool"), f([1, 3], "float64"), f([4, 3], "float64"))),
+    "broadcast: shapes [2,3] and [4,3] are not broadcast-compatible at axis -2 (dims 2 and 4)",
+  );
+  // shape outranks a non-bool mask, which outranks a bool/numeric mix
+  assert.ok(/^broadcast: shapes \[3\] and \[4\]/.test(msgOf(() => where4(f([3], "float64"), f([3], "float64"), f([4], "float64")))));
+  assert.strictEqual(msgOf(() => where4(f([3], "float64"), f([3], "bool"), f([3], "float64"))), WHERE_MASK_MESSAGE);
+  assert.strictEqual(msgOf(() => where4(f([3], "bool"), f([3], "bool"), f([3], "float64"))), WHERE_BOOL_MIX_MESSAGE);
+});
+
+test("dt4 where: values move without arithmetic — NaN payloads survive bit for bit for equal dtypes, float32 included (A6: 0x7fa00001 stays a SIGNALLING NaN)", () => {
+  // Why float32 is special: an element-wise assignment into a Float32Array turns a signalling NaN into a quiet one on this engine.
+  const cell = new Float32Array(1);
+  new Uint32Array(cell.buffer)[0] = 0x7fa00001;
+  const dst = new Float32Array(1);
+  dst[0] = cell[0] ?? 0;
+  assert.notStrictEqual(new Uint32Array(dst.buffer)[0], 0x7fa00001, "non-vacuity: a plain float32 store quiets the signalling NaN (the reason `whereTyped` copies through Uint32Array views)");
+
+  const F32_BITS_A = [0x7fa00001, 0xffa00002, 0x7fc00003, 0x7f800001, 0x00000001, 0x80000000];
+  const F32_BITS_B = [0x7f800001, 0xff800002, 0x7fffffff, 0xffc00004, 0x007fffff, 0x3f800000];
+  const withBits = (bits: number[]): Dt4Nd => {
+    const nd = mk4([bits.length], new Array<number>(bits.length).fill(0), "float32");
+    new Uint32Array(nd.data.buffer, nd.data.byteOffset, bits.length).set(bits);
+    return nd;
+  };
+  const m = mk4([6], [1, 0, 1, 0, 1, 0], "bool");
+  const r = where4(m, withBits(F32_BITS_A), withBits(F32_BITS_B));
+  assert.strictEqual(r.dtype, "float32");
+  const got = Array.from(new Uint32Array(r.data.buffer, r.data.byteOffset, 6));
+  assert.deepStrictEqual(
+    got.map((x) => x.toString(16)),
+    [F32_BITS_A[0], F32_BITS_B[1], F32_BITS_A[2], F32_BITS_B[3], F32_BITS_A[4], F32_BITS_B[5]].map((x) => (x ?? 0).toString(16)),
+    "float32 selection is bit-exact, signalling NaNs and subnormals included",
+  );
+  // float64 payloads (plain assignment preserves them; pinned so a change of the loop cannot lose them silently)
+  const F64_A = [0x7ff4000000000001n, 0xfff4000000000007n, 0x7ff8000000000005n];
+  const F64_B = [0x7ff0000000000001n, 0xfff8000000000003n, 0x0000000000000001n];
+  const withBits64 = (bits: bigint[]): Dt4Nd => {
+    const nd = mk4([bits.length], new Array<number>(bits.length).fill(0), "float64");
+    new BigUint64Array(nd.data.buffer, nd.data.byteOffset, bits.length).set(bits);
+    return nd;
+  };
+  const r64 = where4(mk4([3], [1, 0, 1], "bool"), withBits64(F64_A), withBits64(F64_B));
+  assert.deepStrictEqual(Array.from(new BigUint64Array(r64.data.buffer, r64.data.byteOffset, 3)), [F64_A[0], F64_B[1], F64_A[2]]);
+  // int32 and bool: exact copies, including the extreme values
+  const ri = where4(mk4([4], [1, 0, 1, 0], "bool"), mk4([4], [-2147483648, 2147483647, 5, 6], "int32"), mk4([4], [1, -2147483648, 3, 2147483647], "int32"));
+  assert.strictEqual(ri.dtype, "int32");
+  assert.deepStrictEqual(Array.from(ri.data), [-2147483648, -2147483648, 5, 2147483647]);
+  // a widening pair converts exactly (non-NaN values)
+  const rw = where4(mk4([3], [1, 0, 1], "bool"), mk4([3], [0.1, 2, 16777216], "float32"), mk4([3], [0.1, 0.25, 7], "float64"));
+  assert.strictEqual(rw.dtype, "float64");
+  assert.deepStrictEqual(Array.from(rw.data), [Math.fround(0.1), 0.25, 16777216]);
+});
+
+test("dt4 any/all: every dtype (A3 ii), truthiness is exactly astype('bool') (NaN true, -0 false), axes / negative axes / keepdims / rank 0 / size 0, vs a lane-walking reference", () => {
+  const VALUES: Record<string, number[]> = {
+    float64: [0, 1, Number.NaN, -0, 2, 0, 0, 0, 3, 0, 1, 4],
+    float32: [0, 1, Number.NaN, -0, 2, 0, 0, 0, 3, 0, 1, 4],
+    int32: [0, 1, 7, 0, 2, 0, 0, 0, 3, 0, 1, -4],
+    bool: [0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1],
+  };
+  /** Reference: truthiness from astype("bool") (independent of anyAllTyped), reduce by walking every lane by coordinates. */
+  const ref = (nd: Dt4Nd, kind: "any" | "all", axis: number | undefined, keep: boolean): { shape: number[]; values: number[] } => {
+    const truth = Array.from(nd.astype("bool").data);
+    const shape = [...nd.shape];
+    const ax = axis === undefined ? undefined : axis < 0 ? shape.length + axis : axis;
+    const outShape = ax === undefined ? (keep ? shape.map(() => 1) : []) : keep ? shape.map((d, i) => (i === ax ? 1 : d)) : shape.filter((_, i) => i !== ax);
+    const lanes = new Map<string, number[]>();
+    const coord = new Array<number>(shape.length).fill(0);
+    for (let f = 0; f < truth.length; f++) {
+      const key = ax === undefined ? "" : coord.filter((_, i) => i !== ax).join(",");
+      lanes.set(key, [...(lanes.get(key) ?? []), truth[f] ?? 0]);
+      for (let d = shape.length - 1; d >= 0; d--) {
+        coord[d] = (coord[d] ?? 0) + 1;
+        if ((coord[d] ?? 0) < (shape[d] ?? 1)) break;
+        coord[d] = 0;
+      }
+    }
+    const reduce = (vs: number[]): number => (kind === "any" ? (vs.some((v) => v !== 0) ? 1 : 0) : vs.every((v) => v !== 0) ? 1 : 0);
+    // lane order = row-major order of the remaining coordinates, which Map insertion order reproduces
+    const values = [...lanes.values()].map(reduce);
+    return { shape: outShape, values: values.length === 0 && prod(outShape) === 1 ? [reduce([])] : values };
+  };
+  for (const dt of DTYPES) {
+    for (const shape of [[3, 4], [2, 3, 2], [12], [1, 12]]) {
+      const nd = mk4(shape, VALUES[dt] ?? [], dt);
+      for (const kind of ["any", "all"] as const) {
+        for (const axis of [undefined, ...shape.keys(), ...[...shape.keys()].map((i) => i - shape.length)]) {
+          for (const keep of [false, true]) {
+            const got = axis === undefined ? (keep ? nd[kind](undefined, true) : nd[kind]()) : nd[kind](axis, keep);
+            const want = ref(nd, kind, axis, keep);
+            const ctx = `[${dt}] ${kind} shape=${JSON.stringify(shape)} axis=${axis} keep=${keep}`;
+            assert.strictEqual(got.dtype, "bool", `${ctx}: dtype`);
+            assert.ok(got.data instanceof Uint8Array, `${ctx}: data class`);
+            assert.deepStrictEqual([...got.shape], want.shape, `${ctx}: shape`);
+            assert.deepStrictEqual(Array.from(got.data), want.values, `${ctx}: values`);
+          }
+        }
+      }
+    }
+  }
+  // headline facts: NaN is true, -0 is false (and the two agree with astype("bool"))
+  assert.deepStrictEqual(Array.from(mk4([1], [Number.NaN], "float32").any().data), [1]);
+  assert.deepStrictEqual(Array.from(mk4([1], [Number.NaN], "float64").all().data), [1]);
+  assert.deepStrictEqual(Array.from(mk4([2], [-0, -0], "float64").any().data), [0]);
+  assert.deepStrictEqual(Array.from(mk4([2], [-0, 1], "float32").all().data), [0]);
+  // rank 0
+  assert.deepStrictEqual(Array.from(mk4([], [0], "int32").any().data), [0]);
+  assert.deepStrictEqual(Array.from(mk4([], [5], "int32").all().data), [1]);
+  // size 0 (NumPy): any is false, all is true — also per axis
+  for (const dt of DTYPES) {
+    const e1 = mk4([0], [], dt);
+    assert.deepStrictEqual(Array.from(e1.any().data), [0], `[${dt}] any of []`);
+    assert.deepStrictEqual(Array.from(e1.all().data), [1], `[${dt}] all of []`);
+    const e2 = mk4([0, 3], [], dt);
+    assertBoolResult(e2.any(0), [3], [0, 0, 0], `[${dt}] any(0) of [0,3]`);
+    assertBoolResult(e2.all(0), [3], [1, 1, 1], `[${dt}] all(0) of [0,3]`);
+    assertBoolResult(e2.any(1), [0], [], `[${dt}] any(1) of [0,3]`);
+    const e3 = mk4([3, 0], [], dt);
+    assertBoolResult(e3.any(1), [3], [0, 0, 0], `[${dt}] any(1) of [3,0]`);
+    assertBoolResult(e3.all(1), [3], [1, 1, 1], `[${dt}] all(1) of [3,0]`);
+    assertBoolResult(e3.all(1, true), [3, 1], [1, 1, 1], `[${dt}] all(1, keepdims) of [3,0]`);
+  }
+  // an out-of-range axis throws sum's own message, word for word
+  const nd = mk4([2, 3], [0, 1, 2, 3, 4, 5], "float64");
+  for (const [a, k] of [[5, undefined], [-3, undefined], [2, true]] as const) {
+    const sumMsg = msgOf(() => nd.sum(a));
+    assert.ok(/^reduce: axis /.test(sumMsg));
+    assert.strictEqual(msgOf(() => (k ? nd.any(a, k) : nd.any(a))), sumMsg, `any(${a}) shares sum's message`);
+    assert.strictEqual(msgOf(() => (k ? nd.all(a, k) : nd.all(a))), sumMsg, `all(${a}) shares sum's message`);
+  }
+});
+
+test("dt4 views (transposed / sliced / composed): classified by exact shape + strides right after construction, then comparisons, where and any/all match the hand-built expected contents", () => {
+  const values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+  for (const dtype of NUMERIC_DTYPES) {
+    const base = NDArray.fromArray([3, 4], values, { dtype });
+    const stored = Array.from(base.data);
+    const t = base.transpose();
+    assert.deepStrictEqual([...t.shape], [4, 3], `[${dtype}] transpose shape`);
+    assert.deepStrictEqual([...t.strides], [3, 1], `[${dtype}] transpose strides (natural row-major, fresh buffer)`);
+    const tExpected = Array.from({ length: 12 }, (_, f) => stored[(f % 3) * 4 + Math.floor(f / 3)] ?? 0);
+    const s = base.slice(...wideSpecs({ start: 1, stop: 3 }, null));
+    assert.deepStrictEqual([...s.shape], [2, 4], `[${dtype}] slice shape`);
+    assert.deepStrictEqual([...s.strides], [4, 1], `[${dtype}] slice strides`);
+    const sExpected = stored.slice(4, 12);
+    const c = s.transpose();
+    assert.deepStrictEqual([...c.shape], [4, 2], `[${dtype}] composed shape`);
+    assert.deepStrictEqual([...c.strides], [2, 1], `[${dtype}] composed strides`);
+    const cExpected = Array.from({ length: 8 }, (_, f) => sExpected[(f % 2) * 4 + Math.floor(f / 2)] ?? 0);
+    for (const [name, view, expected, shape] of [
+      ["transposed", t, tExpected, [4, 3]],
+      ["sliced", s, sExpected, [2, 4]],
+      ["composed", c, cExpected, [4, 2]],
+    ] as const) {
+      const v = d4(view);
+      const ctx = `[${dtype}] ${name}`;
+      assert.deepStrictEqual(Array.from(v.data), expected, `${ctx}: contents`);
+      for (const op of CMP_OPS) assertBoolResult(v[op](6), shape, expected.map((x) => NATIVE_CMP[op](x, 6)), `${ctx} ${op} scalar`);
+      // against the original (broadcast of a view with a [4]-vector / the [3,4] base where shapes allow)
+      const vec = mk4([shape[shape.length - 1] ?? 1], Array.from({ length: shape[shape.length - 1] ?? 1 }, (_, i) => i * 3), dtype);
+      const vecStored = Array.from(vec.data);
+      assertBoolResult(v.gt(vec), shape, expected.map((x, i) => x > (vecStored[i % vecStored.length] ?? 0)), `${ctx} gt vector`);
+      // where: the view as BOTH value operands and as the mask source
+      const mask = v.gt(6);
+      const w = where4(mask, v, mk4([], [0], dtype));
+      assert.deepStrictEqual(Array.from(w.data), expected.map((x) => (x > 6 ? x : 0)), `${ctx} where`);
+      for (const axis of [undefined, 0, 1] as const) {
+        const anyR = axis === undefined ? v.any() : v.any(axis);
+        const allR = axis === undefined ? v.all() : v.all(axis);
+        const rows = shape[0] ?? 1;
+        const cols = shape[1] ?? 1;
+        const wantAny = axis === undefined ? [1] : axis === 0 ? Array.from({ length: cols }, () => 1) : Array.from({ length: rows }, () => 1);
+        assert.deepStrictEqual(Array.from(anyR.data), wantAny, `${ctx} any axis=${axis}`);
+        assert.deepStrictEqual(Array.from(allR.data), wantAny, `${ctx} all axis=${axis} (every value is non-zero)`);
+      }
+    }
+  }
+});
+
+test("dt4 results are fresh buffers: inputs are never mutated or aliased by the comparisons, where and any/all", () => {
+  const a = mk4([2, 2], [1, 2, 3, 4], "float32");
+  const b = mk4([2, 2], [4, 3, 2, 1], "float32");
+  const m = mk4([2, 2], [1, 0, 1, 0], "bool");
+  const before = [Array.from(a.data), Array.from(b.data), Array.from(m.data)];
+  const results = [a.gt(b), a.gt(2), where4(m, a, b), where4(m, m, m), a.any(), a.all(0), m.any(1, true)];
+  for (const r of results) {
+    for (const input of [a, b, m]) {
+      assert.notStrictEqual(r.data, input.data, "result must not alias an input");
+      assert.notStrictEqual(r.data.buffer, input.data.buffer, "result buffer is fresh");
+    }
+  }
+  assert.deepStrictEqual([Array.from(a.data), Array.from(b.data), Array.from(m.data)], before, "inputs untouched");
+});
+
+// --- dt4 diagnostic CONTENTS (M3, Arbeitsregel 2): real tsc on a throwaway fixture OUTSIDE the repo. Every rejection
+// stands at the argument that is wrong, with the word-identical message the runtime throws (never hand-typed: the runtime
+// side comes from the imported constants / real thrown errors), in the order shape -> mask -> a/b; the masked scalar form
+// of a bool receiver shows the generic TS2769 (M3 v9 named exception, extended to comparisons by COVENANT v11).
+test("dt4 diagnostic CONTENTS (M3): comparison/where rejections name word-identical messages at the wrong ARGUMENT, in the order shape -> mask -> a/b", () => {
+  const dir = mkdtempSync(join(tmpdir(), "numtype-dt4-diag-pin-"));
+  try {
+    const ndarrayPath = fileURLToPath(new URL("../src/ndarray.ts", import.meta.url).href);
+    const ambientPath = fileURLToPath(new URL("../src/ambient.d.ts", import.meta.url).href);
+    const repoRoot = fileURLToPath(new URL("../..", import.meta.url).href);
+    // [source line, 0-based index of the argument that must carry the error, message it must show]
+    const probes: [string, number, string][] = [
+      [`f32.gt(bl3);`, 0, COMPARE_BOOL_MESSAGE], // bool ARGUMENT
+      [`bl3.gt(f32);`, 0, COMPARE_BOOL_MESSAGE], // bool RECEIVER (array form is unmasked)
+      [`f32.ne(bl3);`, 0, COMPARE_BOOL_MESSAGE], // a sibling op
+      [`f32.gt(f32b);`, 0, "cannot broadcast shapes [3] and [4]"], // shape error at the argument
+      [`bl3.gt(f32b);`, 0, "cannot broadcast shapes [3] and [4]"], // shape outranks the bool receiver
+      [`NDArray.where(f64, f64, f64);`, 0, WHERE_MASK_MESSAGE], // mask not bool: AT the mask
+      [`NDArray.where(bl3, bl3, f64);`, 1, WHERE_BOOL_MIX_MESSAGE], // `a` is the bool one: AT a
+      [`NDArray.where(bl3, f64, bl3);`, 2, WHERE_BOOL_MIX_MESSAGE], // `b` is the bool one: AT b
+      [`NDArray.where(bl3, f64, f32b);`, 2, "cannot broadcast shapes [3] and [4]"], // shape error: AT b
+      [`NDArray.where(f64, f64, f32b);`, 2, "cannot broadcast shapes [3] and [4]"], // shape outranks the non-bool mask
+      [`NDArray.where(f64, bl3, f64);`, 0, WHERE_MASK_MESSAGE], // mask outranks the mix error
+      [`NDArray.where(bl2, bl1, bl3b);`, 2, "cannot broadcast shapes [2] and [3]"], // triple-only conflict: the intermediate [2] (+) [1] vs b
+    ];
+    const header = [
+      `import { NDArray } from ${JSON.stringify(ndarrayPath)};`,
+      `const f32 = NDArray.zeros([3], "float32");`,
+      `const f32b = NDArray.zeros([4], "float32");`,
+      `const f64 = NDArray.zeros([3]);`,
+      `const bl3 = NDArray.zeros([3], "bool");`,
+      `const bl2 = NDArray.zeros([2], "bool");`,
+      `const bl1 = NDArray.zeros([1], "bool");`,
+      `const bl3b = NDArray.zeros([3], "bool");`,
+    ];
+    const scalarLine = header.length + probes.length + 1; // the masked scalar probe goes last
+    writeFileSync(join(dir, "probe.ts"), [...header, ...probes.map((p) => p[0]), `bl3.gt(1);`, ``].join("\n"));
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: { strict: true, target: "ES2022", module: "ESNext", moduleResolution: "bundler", noEmit: true, allowImportingTsExtensions: true, skipLibCheck: true, noUncheckedIndexedAccess: true, exactOptionalPropertyTypes: true },
+        include: ["probe.ts", ambientPath],
+      }),
+    );
+    const res = spawnSync("pnpm", ["exec", "tsc", "--noEmit", "-p", dir], { cwd: repoRoot, encoding: "utf8" });
+    const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
+    assert.notStrictEqual(res.status, 0, `fixture must fail to compile:\n${out}`);
+    // an error block = the `probe.ts(line,col): error TS...` line plus its indented continuation lines (overload failures span several)
+    const probeErrors: string[] = [];
+    for (const l of out.split("\n")) {
+      if (l.includes("probe.ts(") && l.includes("error TS")) probeErrors.push(l);
+      else if (/^\s/.test(l) && probeErrors.length > 0) probeErrors[probeErrors.length - 1] += `\n${l}`;
+    }
+    assert.strictEqual(probeErrors.length, probes.length + 1, `expected exactly ${probes.length + 1} fixture errors:\n${out}`);
+    const escaped = (msg: string) => JSON.stringify(msg).slice(1, -1);
+    probes.forEach(([src, argIndex, msg], i) => {
+      const line = header.length + 1 + i;
+      const args = src.slice(src.indexOf("(") + 1, src.lastIndexOf(")")).split(", ");
+      const col = src.indexOf("(") + 2 + args.slice(0, argIndex).reduce((n, a) => n + a.length + 2, 0);
+      const err = probeErrors.find((l) => l.includes(`probe.ts(${line},`)) ?? "";
+      assert.ok(err.includes(`probe.ts(${line},${col}):`), `${src}: the error must stand at argument ${argIndex} (col ${col}):\n${err}`);
+      assert.ok(err.includes(escaped(msg)), `${src}: must surface "${msg}":\n${err}`);
+    });
+    // the scalar form on a bool receiver: genuine compile error, but tsc shows the LAST overload's generic text (M3 v9 exception)
+    const scalarErr = probeErrors.find((l) => l.includes(`probe.ts(${scalarLine},`)) ?? "";
+    assert.ok(scalarErr.includes("error TS2769"), `bl3.gt(1) must be rejected:\n${scalarErr}`);
+    assert.ok(!scalarErr.includes(escaped(COMPARE_BOOL_MESSAGE)), `bl3.gt(1) shows the masked generic text, not the own message:\n${scalarErr}`);
+    // and the runtime throws the own message for it (M2: the claim is a real throw)
+    assert.strictEqual(msgOf(() => mk4([3], [1, 0, 1], "bool").gt(1)), COMPARE_BOOL_MESSAGE);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
