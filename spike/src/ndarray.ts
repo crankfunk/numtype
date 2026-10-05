@@ -1254,11 +1254,13 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * 2^53, safe up to 2^22 elements; beyond that rounded deterministically,
    * never wrapped). float32 accumulates in float32 (`acc = fround(acc + x)`,
    * strictly ascending, seed `+0`) — a plain ascending accumulator, NOT
-   * pairwise summation (the Bit-Identity law): a float32 sum saturates once
-   * the running total reaches 2^24, so 2^24 + 8 ones sum to 16,777,216. An
-   * empty receiver or size-0 axis sums to 0 in every dtype. The 0-arg overload
-   * has no dtype restriction left to hang a `Guard` on; the axis overloads are
-   * guarded for shape only (`ReduceAxis`), as before dt1. */
+   * pairwise summation (the Bit-Identity law): an addend smaller than half
+   * an ulp of the running total is absorbed (exactly half an ulp rounds to
+   * even), so large sums lose small addends. For addends of 1 this is a
+   * saturation at 2^24: 2^24 + 8 ones sum to 16,777,216. An empty receiver
+   * or size-0 axis sums to 0 in every dtype. The 0-arg overload has no dtype
+   * restriction left to hang a `Guard` on; the axis overloads are guarded for
+   * shape only (`ReduceAxis`), as before dt1. */
   sum(): NDArray<OkShape<ReduceAxis<S, undefined, false>>, ReduceDType<D>>;
   sum<const Axis extends number | undefined>(
     axis: Guard<ReduceAxis<S, Axis>, Axis>,
@@ -1582,8 +1584,9 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * (float32 → float32; float64, int32 and bool → float64 — bool takes the
    * PROPORTION of true elements). Float64/int32/bool: `sumRuntime`'s float64
    * sum divided by `n` (original `meanRuntime`). float32: `fround(sum32 / n)`
-   * — the ascending float32 sum (see `sum`, including its saturation at 2^24:
-   * 2^24 + 8 ones give mean 0.99999952) divided by the exact integer `n` in
+   * — the ascending float32 sum (see `sum`, including the absorption of
+   * addends below half an ulp of the running total: 2^24 + 8 ones give sum
+   * 16,777,216, mean 0.99999952) divided by the exact integer `n` in
    * float64 and rounded once to float32. The 0-arg overload has no dtype
    * restriction left to hang a `Guard` on; the axis overloads are guarded for
    * shape only (`ReduceAxis`), as before dt1. */
