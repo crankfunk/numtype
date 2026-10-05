@@ -28,14 +28,14 @@ import {
   argmaxRuntime,
   assertFloat64Locked,
   assertReshapeArgs,
-  assertVectorPair,
   astypeConvert,
   BOOL_ARITHMETIC_MESSAGE,
   computeStrides,
   convertToDType,
+  cosineTyped,
   type DataOf,
   type DataOfRuntime,
-  dotRuntime,
+  dotTyped,
   type DType,
   elementwiseBinary,
   elementwiseBinaryTyped,
@@ -43,10 +43,10 @@ import {
   formatNDArrayDisplay,
   itemRuntime,
   keepDimsShape,
-  matmulRuntime,
+  matmulTyped,
   meanTyped,
   normalizeSliceSpecs,
-  normSqRuntime,
+  normTyped,
   type NumericDType,
   onesData,
   product,
@@ -444,10 +444,9 @@ type RowShapesOf<Rows extends readonly NDArray<any>[]> = { [I in keyof Rows]: Un
 
 /**
  * dt1 (K4, O2(a), docs/dtype-dt1-spec.md): the compile-time half of the lock
- * for every op not yet implemented for `D != "float64"` in this slice
- * (add/sub/mul/div/matmul/dot/cosineSimilarity/sum/mean/argmax/topk/sqrt/
- * norm — dt2-dt5 unlock these progressively; `stack` has its own disclosed
- * M3 exception, see its doc comment above). `D extends DType` is an
+ * for every op not yet implemented for `D != "float64"` (after dt3:
+ * argmax/topk/sqrt — dt5 unlocks these; `stack` has its own disclosed M3
+ * exception, see its doc comment above). `D extends DType` is an
  * ordinary in-scope generic reference — the SAME mechanism `Broadcast<S,B>`
  * already is, never a `this`-parameter (Owner decision O2(a): a
  * `this`-parameter's TS2684 diagnostic is opaque and not in the M3
@@ -460,20 +459,14 @@ type RowShapesOf<Rows extends readonly NDArray<any>[]> = { [I in keyof Rows]: Un
  * errors).
  *
  * Known gap, disclosed (M2 v8 "übergangsweise nur zur Laufzeit gesperrte
- * Ops", never a false accept): a genuinely NILADIC op (`sqrt()`, `norm()`,
- * the 0-argument overloads of `mean()`/`argmax()`) has no argument position
- * to attach this to at all — those forms keep their pre-dtype signature and
- * rely solely on `assertFloat64Locked` (runtime.ts) as their ONLY backstop.
+ * Ops", never a false accept): a genuinely NILADIC op (`sqrt()`, the
+ * 0-argument overload of `argmax()`) has no argument position to attach this
+ * to at all — those forms keep their pre-dtype signature and rely solely on
+ * `assertFloat64Locked` (runtime.ts) as their ONLY backstop.
  */
 type DTypeLock<D extends DType, Op extends string> = D extends "float64"
   ? true
   : ShapeError<`${Op}: dtype '${D}' is not implemented for non-float64 arrays yet (use astype("float64") first)`>;
-
-/** `DTypeLock`'s two-operand form, for a locked op whose argument is itself
- * an `NDArray<B, Dd>` (`matmul`/`dot`/`cosineSimilarity`) — the receiver's
- * own `D` is checked FIRST (message-table order), then the argument's `Dd`,
- * so a call is rejected if EITHER side isn't float64. */
-type DTypeLockPair<D extends DType, Dd extends DType, Op extends string> = D extends "float64" ? DTypeLock<Dd, Op> : DTypeLock<D, Op>;
 
 /** dt1 (K3(b), docs/dtype-dt1-spec.md): a same-typed-array-class copy of
  * `data` — the dtype-generic successor of the plain `new
@@ -1221,16 +1214,30 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
 
   /** Full NumPy `matmul`: 2-D product, 1-D promotion, batch broadcasting.
    *
-   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt3 gives
-   * `matmul` real dtype support, including O1's int32-widening decision). */
+   * dt3 (R3, O1): works for float64, float32 and int32; the result dtype is
+   * `PromoteDiv<D, Dd>` (the SAME table as `div`, no second one):
+   * float32 ⊕ float32 → float32, every other numeric pair, including
+   * int32 ⊕ int32, → float64. float64/int32/mixed pairs compute in float64 on
+   * exactly-widened operands through the original `matmulRuntime`; int32
+   * products beyond 2^53 are rounded in float64, never wrapped (NumPy wraps
+   * there). float32 ⊕ float32 accumulates in float32 — each output element is
+   * `acc = fround(acc + fround(a * b))`, k strictly ascending, no FMA. bool, as
+   * receiver or argument, is rejected with the permanent
+   * `BOOL_ARITHMETIC_MESSAGE` — at the argument at compile time, and at
+   * runtime AFTER the shape check (a shape error outranks it in both layers). */
   matmul<B extends Shape, Dd extends DType>(
-    other: Guard<MatMul<S, B> extends ShapeError<string> ? MatMul<S, B> : DTypeLockPair<D, Dd, "matmul">, NDArray<B, Dd>>,
-  ): NDArray<OkShape<MatMul<S, B>>> {
-    assertFloat64Locked("matmul", this.dtype);
+    other: Guard<MatMul<S, B> extends ShapeError<string> ? MatMul<S, B> : PromoteDiv<D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<OkShape<MatMul<S, B>>, OkDType<PromoteDiv<D, Dd>>> {
     const o = other as unknown as NDArray<B, Dd>;
-    assertFloat64Locked("matmul", o.dtype);
-    const { shape, data } = matmulRuntime(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array);
-    return new NDArray<OkShape<MatMul<S, B>>>(shape as OkShape<MatMul<S, B>>, "float64", data);
+    const { shape, data, resultDtype } = matmulTyped(
+      this.shape,
+      this.data as unknown as DataOfRuntime,
+      this.dtype,
+      o.shape,
+      o.data as unknown as DataOfRuntime,
+      o.dtype,
+    );
+    return new NDArray<any, any>(shape, resultDtype, data);
   }
 
   /** Sum-reduce along `axis` (negative counts from the end); omit `axis` to
@@ -1279,15 +1286,18 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * runtime throw (`assertVectorPair`) for the gradual/dynamic cases the
    * type layer couldn't check statically.
    *
-   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt3). */
+   * dt3 (R3, O1): works for float64, float32 and int32, compute dtype
+   * `PromoteDiv<D, Dd>` exactly as for `matmul` above (float32 ⊕ float32
+   * accumulates in float32 — `acc = fround(acc + fround(a * b))`, ascending,
+   * no FMA; everything else in float64 through the original `dotRuntime`,
+   * int32 products beyond 2^53 rounded, never wrapped). The result is still a
+   * plain `number`. bool is rejected with `BOOL_ARITHMETIC_MESSAGE` (shape
+   * errors first, at compile time and at runtime). */
   dot<B extends Shape, Dd extends DType>(
-    other: Guard<DotCheck<S, B, "dot"> extends ShapeError<string> ? DotCheck<S, B, "dot"> : DTypeLockPair<D, Dd, "dot">, NDArray<B, Dd>>,
+    other: Guard<DotCheck<S, B, "dot"> extends ShapeError<string> ? DotCheck<S, B, "dot"> : PromoteDiv<D, Dd>, NDArray<B, Dd>>,
   ): number {
-    assertFloat64Locked("dot", this.dtype);
     const o = other as unknown as NDArray<B, Dd>;
-    assertFloat64Locked("dot", o.dtype);
-    assertVectorPair("dot", this.shape, o.shape);
-    return dotRuntime(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array);
+    return dotTyped(this.shape, this.data as unknown as DataOfRuntime, this.dtype, o.shape, o.data as unknown as DataOfRuntime, o.dtype);
   }
 
   /** L2/Frobenius norm over ALL elements (Kern 07), any rank (mirrors
@@ -1297,13 +1307,19 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * this is bit-identical to `WNDArray.norm` iff the underlying sum of
    * squares is (which the differential suite asserts).
    *
-   * dt1 (K4, O2(a)): locked for `D != "float64"` — NILADIC, the disclosed
-   * gap `DTypeLock`'s own doc comment names: no argument position to hang a
-   * compile-time `Guard` on, `assertFloat64Locked` is the ONLY backstop
-   * (M2: an honest no-claim, never a false accept). */
+   * dt3 (R4): works for float64, float32 and int32. float64/int32 square and
+   * accumulate in float64 (int32 squares beyond 2^53 are rounded, never
+   * wrapped); float32 accumulates in float32 (`acc = fround(acc + fround(v *
+   * v))`, ascending) and returns `fround(sqrt(acc))`. The result is a plain
+   * `number`.
+   *
+   * bool is a PERMANENT runtime-only rejection (A3(a), COVENANT M2 v10):
+   * `norm()` is niladic — there is no argument position for a compile-time
+   * `Guard` — so a bool receiver compiles and throws `BOOL_ARITHMETIC_MESSAGE`
+   * (also when empty). "Incomplete, not wrong" by design; nothing to follow
+   * up, since bool has no arithmetic (use `astype` first). */
   norm(): number {
-    assertFloat64Locked("norm", this.dtype);
-    return Math.sqrt(normSqRuntime(this.data as unknown as Float64Array));
+    return normTyped(this.dtype, this.data as unknown as DataOfRuntime);
   }
 
   /** Cosine similarity (Kern 07): same rank-1/equal-length operand contract
@@ -1314,21 +1330,21 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * `num` and `den`) `0`, yielding `NaN`; an adversarial magnitude split
    * can underflow `den` to `0` with `num != 0`, yielding `+/-Infinity`.
    *
-   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice — same
-   * mechanism as `dot` above. */
+   * dt3 (R3, O1): same dtype contract as `dot` above (float64/int32/mixed in
+   * float64 through the original formula, int32 squares and products beyond
+   * 2^53 rounded, never wrapped; float32 ⊕ float32 entirely in float32:
+   * `fround(num / fround(fround(sqrt(nsqA)) * fround(sqrt(nsqB))))`, so a
+   * float32 `nsq` can underflow to 0 or overflow to Infinity where float64
+   * would not). bool is rejected with `BOOL_ARITHMETIC_MESSAGE` (shape errors
+   * first). */
   cosineSimilarity<B extends Shape, Dd extends DType>(
     other: Guard<
-      DotCheck<S, B, "cosineSimilarity"> extends ShapeError<string> ? DotCheck<S, B, "cosineSimilarity"> : DTypeLockPair<D, Dd, "cosineSimilarity">,
+      DotCheck<S, B, "cosineSimilarity"> extends ShapeError<string> ? DotCheck<S, B, "cosineSimilarity"> : PromoteDiv<D, Dd>,
       NDArray<B, Dd>
     >,
   ): number {
-    assertFloat64Locked("cosineSimilarity", this.dtype);
     const o = other as unknown as NDArray<B, Dd>;
-    assertFloat64Locked("cosineSimilarity", o.dtype);
-    assertVectorPair("cosineSimilarity", this.shape, o.shape);
-    const num = dotRuntime(this.shape, this.data as unknown as Float64Array, o.shape, o.data as unknown as Float64Array);
-    const den = Math.sqrt(normSqRuntime(this.data as unknown as Float64Array)) * Math.sqrt(normSqRuntime(o.data as unknown as Float64Array));
-    return num / den;
+    return cosineTyped(this.shape, this.data as unknown as DataOfRuntime, this.dtype, o.shape, o.data as unknown as DataOfRuntime, o.dtype);
   }
 
   /** Reverse every axis (NumPy's `.T` generalized to N-D).

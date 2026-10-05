@@ -1882,3 +1882,244 @@ export function meanTyped(dtype: DType, shape: readonly number[], data: DataOfRu
   }
   return meanRuntime(shape, toFloat64(data), axis);
 }
+
+// ---------------------------------------------------------------------------
+// dt3, Commit B — R3 (matmul/dot/cosineSimilarity) + R4 (norm). Same appended-
+// only discipline: `matmulRuntime`/`dotRuntime`/`normSqRuntime` stay byte-
+// unchanged and are the float64 compute path (O1: float64, int32 and mixed
+// pairs compute in float64 on exactly-widened operands; only float32 ⊕
+// float32 computes in float32). The result-dtype rule is `promoteDTypeDiv`
+// (= `PROMOTE_DIV`, O1 word for word) — no second table.
+//
+// Check order = compile-time order (v1.1, Baustein 0 D4): SHAPE errors first,
+// the bool rejection second. When both are wrong, the runtime throws the
+// shape message — the one the editor shows at the argument.
+// ---------------------------------------------------------------------------
+
+/**
+ * The shape validation of `matmulRuntime`, copied word for word (the original
+ * stays byte-unchanged, so it cannot be shared): scalar operand, inner
+ * dimension mismatch, batch-broadcast mismatch. `matmulTyped` runs it BEFORE
+ * the dtype resolution so a shape error outranks the bool rejection (D4) and
+ * the float32 compute path needs no validation of its own. Message equality
+ * with `matmulRuntime` is pinned per error in the tests.
+ */
+function assertMatmulShapes(aShapeIn: readonly number[], bShapeIn: readonly number[]): void {
+  if (aShapeIn.length === 0) {
+    throw new Error(`matmul: scalar operand (rank 0) is not allowed as the first argument (got shape [])`);
+  }
+  if (bShapeIn.length === 0) {
+    throw new Error(`matmul: scalar operand (rank 0) is not allowed as the second argument (got shape [])`);
+  }
+  const aShape = aShapeIn.length === 1 ? [1, aShapeIn[0] ?? 1] : aShapeIn;
+  const bShape = bShapeIn.length === 1 ? [bShapeIn[0] ?? 1, 1] : bShapeIn;
+  const k1 = aShape[aShape.length - 1] ?? 1;
+  const k2 = bShape[bShape.length - 2] ?? 1;
+  if (k1 !== k2) {
+    throw new Error(`matmul: inner dimensions ${k1} and ${k2} do not match`);
+  }
+  runtimeBroadcastShape(aShape.slice(0, -2), bShape.slice(0, -2));
+}
+
+/**
+ * D8 (dt3 R3): float32 compute path of `matmulRuntime` — the same 1-D
+ * promotion / batch-broadcast / index algorithm, but each output element is
+ * `acc = fround(acc + fround(a * b))`, k strictly ascending, seed `+0`, no FMA
+ * (the float32 product of two float32 values is exact in float64, so one
+ * `fround` yields the correctly-rounded float32 product), into a
+ * `Float32Array`. Callers (`matmulTyped`) have already validated the shapes
+ * via `assertMatmulShapes`.
+ */
+function matmulF32Runtime(
+  aShapeIn: readonly number[],
+  aData: Float32Array,
+  bShapeIn: readonly number[],
+  bData: Float32Array,
+): { shape: number[]; data: Float32Array } {
+  const aPromoted = aShapeIn.length === 1;
+  const bPromoted = bShapeIn.length === 1;
+
+  const aShape = aPromoted ? [1, aShapeIn[0] ?? 1] : aShapeIn;
+  const bShape = bPromoted ? [bShapeIn[0] ?? 1, 1] : bShapeIn;
+
+  const m = aShape[aShape.length - 2] ?? 1;
+  const k = aShape[aShape.length - 1] ?? 1;
+  const n = bShape[bShape.length - 1] ?? 1;
+
+  const batchA = aShape.slice(0, -2);
+  const batchB = bShape.slice(0, -2);
+  const batchOut = runtimeBroadcastShape(batchA, batchB);
+  const batchRank = batchOut.length;
+
+  const aStridesFull = computeStrides(aShape);
+  const bStridesFull = computeStrides(bShape);
+
+  const aBatchAligned = alignToRank(batchA, aStridesFull.slice(0, -2), batchRank);
+  const bBatchAligned = alignToRank(batchB, bStridesFull.slice(0, -2), batchRank);
+  const aBatchEff = effectiveStrides(aBatchAligned.shape, aBatchAligned.strides);
+  const bBatchEff = effectiveStrides(bBatchAligned.shape, bBatchAligned.strides);
+
+  const aRowStride = aStridesFull[aStridesFull.length - 2] ?? 0;
+  const aColStride = aStridesFull[aStridesFull.length - 1] ?? 0;
+  const bRowStride = bStridesFull[bStridesFull.length - 2] ?? 0;
+  const bColStride = bStridesFull[bStridesFull.length - 1] ?? 0;
+
+  const outFullShape = [...batchOut, m, n];
+  const outStridesFull = computeStrides(outFullShape);
+  const outBatchStrides = outStridesFull.slice(0, batchRank);
+  const batchStridesPlain = computeStrides(batchOut);
+
+  const batchSize = product(batchOut);
+  const out = new Float32Array(batchSize * m * n);
+
+  for (let bIdx = 0; bIdx < batchSize; bIdx++) {
+    const multi = unravel(bIdx, batchOut, batchStridesPlain);
+    let aBatchOff = 0;
+    let bBatchOff = 0;
+    let outBatchOff = 0;
+    for (let i = 0; i < batchRank; i++) {
+      const ix = multi[i] ?? 0;
+      aBatchOff += ix * (aBatchEff[i] ?? 0);
+      bBatchOff += ix * (bBatchEff[i] ?? 0);
+      outBatchOff += ix * (outBatchStrides[i] ?? 0);
+    }
+    for (let mi = 0; mi < m; mi++) {
+      for (let ni = 0; ni < n; ni++) {
+        let sum = 0;
+        for (let ki = 0; ki < k; ki++) {
+          const aVal = aData[aBatchOff + mi * aRowStride + ki * aColStride] ?? 0;
+          const bVal = bData[bBatchOff + ki * bRowStride + ni * bColStride] ?? 0;
+          sum = Math.fround(sum + Math.fround(aVal * bVal));
+        }
+        out[outBatchOff + mi * n + ni] = sum;
+      }
+    }
+  }
+
+  // Squeezing a size-1 axis never changes the flat layout, only the shape
+  // metadata (same reasoning as `matmulRuntime`).
+  let finalShape = outFullShape;
+  if (aPromoted) {
+    finalShape = [...finalShape.slice(0, batchRank), ...finalShape.slice(batchRank + 1)];
+  }
+  if (bPromoted) {
+    finalShape = finalShape.slice(0, -1);
+  }
+  return { shape: finalShape, data: out };
+}
+
+/**
+ * dt3 R3 (O1): dtype-dispatching `matmul`. Shape errors first
+ * (`assertMatmulShapes`), then `promoteDTypeDiv` (throws
+ * `BOOL_ARITHMETIC_MESSAGE` for a bool operand). float32 ⊕ float32 →
+ * `matmulF32Runtime` (`Float32Array` result); every other numeric pair → the
+ * BESTEHENDE `matmulRuntime` on exactly-widened operands (`Float64Array`
+ * result). Disclosed (O1): int32 products beyond 2^53 are rounded in float64,
+ * never wrapped (NumPy wraps here).
+ */
+export function matmulTyped(
+  aShape: readonly number[],
+  aData: DataOfRuntime,
+  aDtype: DType,
+  bShape: readonly number[],
+  bData: DataOfRuntime,
+  bDtype: DType,
+): { shape: number[]; data: DataOfRuntime; resultDtype: "float32" | "float64" } {
+  assertMatmulShapes(aShape, bShape);
+  const resultDtype = promoteDTypeDiv(aDtype, bDtype);
+  if (resultDtype === "float32") {
+    const r = matmulF32Runtime(aShape, aData as Float32Array, bShape, bData as Float32Array);
+    return { shape: r.shape, data: r.data, resultDtype };
+  }
+  const r = matmulRuntime(aShape, toFloat64(aData), bShape, toFloat64(bData));
+  return { shape: r.shape, data: r.data, resultDtype };
+}
+
+/** float32 `dotRuntime`: `acc = fround(acc + fround(a[i] * b[i]))`, ascending,
+ * seed `+0`. Callers have validated the operand pair (`assertVectorPair`). */
+function dotF32Runtime(n: number, a: Float32Array, b: Float32Array): number {
+  let acc = 0;
+  for (let i = 0; i < n; i++) acc = Math.fround(acc + Math.fround((a[i] ?? 0) * (b[i] ?? 0)));
+  return acc;
+}
+
+/** float32 `normSqRuntime`: `acc = fround(acc + fround(v * v))`, flat order,
+ * seed `+0`. */
+function normSqF32Runtime(data: Float32Array): number {
+  let acc = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i] ?? 0;
+    acc = Math.fround(acc + Math.fround(v * v));
+  }
+  return acc;
+}
+
+/**
+ * dt3 R3: dtype-dispatching `dot`. `assertVectorPair` first (shape errors
+ * outrank the bool rejection, D4), then `promoteDTypeDiv`. float32 ⊕ float32
+ * → `dotF32Runtime`; otherwise the BESTEHENDE `dotRuntime` on widened
+ * operands. The result is a plain `number` in every case (a float32 result is
+ * the float32 value widened to a JS number, exactly).
+ */
+export function dotTyped(
+  aShape: readonly number[],
+  aData: DataOfRuntime,
+  aDtype: DType,
+  bShape: readonly number[],
+  bData: DataOfRuntime,
+  bDtype: DType,
+): number {
+  assertVectorPair("dot", aShape, bShape);
+  const resultDtype = promoteDTypeDiv(aDtype, bDtype);
+  if (resultDtype === "float32") return dotF32Runtime(aShape[0] ?? 0, aData as Float32Array, bData as Float32Array);
+  return dotRuntime(aShape, toFloat64(aData), bShape, toFloat64(bData));
+}
+
+/**
+ * dt3 R4: dtype-dispatching `norm()` — L2 norm over every element. float64/
+ * int32 → `Math.sqrt(normSqRuntime(widened))` (int32 squares beyond 2^53 are
+ * rounded in float64, never wrapped). float32 → `fround(sqrt(nsq32))` with the
+ * float32 accumulator `normSqF32Runtime`. bool throws
+ * `BOOL_ARITHMETIC_MESSAGE` always, including size-0 (A3(a): `norm()` is
+ * niladic, so the rejection is runtime-only and permanent).
+ */
+export function normTyped(dtype: DType, data: DataOfRuntime): number {
+  if (dtype === "bool") throw new Error(BOOL_ARITHMETIC_MESSAGE);
+  if (dtype === "float32") return Math.fround(Math.sqrt(normSqF32Runtime(data as Float32Array)));
+  return Math.sqrt(normSqRuntime(toFloat64(data)));
+}
+
+/**
+ * dt3 R3: dtype-dispatching `cosineSimilarity`, the same composition as the
+ * pre-dt3 method body (num = dot, den = sqrt(normSq a) * sqrt(normSq b),
+ * num / den) per compute dtype. float64 path: the BESTEHENDE `dotRuntime`/
+ * `normSqRuntime` on widened operands, `num / den` (pure IEEE, no epsilon
+ * guards). float32 path: `fround(num / fround(fround(sqrt(nsqA)) *
+ * fround(sqrt(nsqB))))` with `num`/`nsq` from the float32 accumulators. A
+ * float32 `nsq` can underflow to 0 or overflow to Infinity where float64
+ * would not — then `den` is 0/Infinity and the result NaN/±Infinity/0 by
+ * plain IEEE. Order: `assertVectorPair`, then `promoteDTypeDiv`.
+ */
+export function cosineTyped(
+  aShape: readonly number[],
+  aData: DataOfRuntime,
+  aDtype: DType,
+  bShape: readonly number[],
+  bData: DataOfRuntime,
+  bDtype: DType,
+): number {
+  assertVectorPair("cosineSimilarity", aShape, bShape);
+  const resultDtype = promoteDTypeDiv(aDtype, bDtype);
+  if (resultDtype === "float32") {
+    const a = aData as Float32Array;
+    const b = bData as Float32Array;
+    const num = dotF32Runtime(aShape[0] ?? 0, a, b);
+    const den = Math.fround(Math.fround(Math.sqrt(normSqF32Runtime(a))) * Math.fround(Math.sqrt(normSqF32Runtime(b))));
+    return Math.fround(num / den);
+  }
+  const a64 = toFloat64(aData);
+  const b64 = toFloat64(bData);
+  const num = dotRuntime(aShape, a64, bShape, b64);
+  const den = Math.sqrt(normSqRuntime(a64)) * Math.sqrt(normSqRuntime(b64));
+  return num / den;
+}
