@@ -1870,3 +1870,161 @@ type G1_MUL_ANY_DTYPE = Expect<Equal<(typeof g1Mul)["dtype"], DType>>;
 // hole without it. Pinned so a future regression here is caught too.
 const g1Div = g1AnyRecv.div(g1KnownArg);
 type G1_DIV_ANY_DTYPE = Expect<Equal<(typeof g1Div)["dtype"], DType>>;
+
+// =============================================================================
+// dt3 (docs/dtype-dt3-spec.md, R1-R4, R6): `ReduceDType<D>` and the dtype-aware
+// signatures of `sum`/`mean` (E3), `matmul`/`dot`/`cosineSimilarity` (O1, via
+// `PromoteDiv`) and `norm`. Appended at the end of this file (no new file) — the
+// RUNTIME half of every claim below is pinned in scalar-mean.test.ts's dt3
+// section, against the same two tables (`REDUCE_DTYPE`/`PROMOTE_DIV`).
+// =============================================================================
+import type { ReduceDType } from "../src/ndarray.ts";
+
+// --- ReduceDType<D>: the full table, then the degradation cases --------------
+type DT3_RD_F64 = Expect<Equal<ReduceDType<"float64">, "float64">>;
+type DT3_RD_F32 = Expect<Equal<ReduceDType<"float32">, "float32">>;
+type DT3_RD_I32 = Expect<Equal<ReduceDType<"int32">, "float64">>;
+type DT3_RD_BOOL = Expect<Equal<ReduceDType<"bool">, "float64">>;
+// Union gate: a union receiver degrades to the wide `DType` (no claim) — never a per-member distribution that
+// would claim e.g. `"float32" | "float64"` for `"float32" | "int32"` (precision, not soundness: see the
+// mutant note in the dt3 results) and never a false narrow.
+type DT3_RD_UNION = Expect<Equal<ReduceDType<"float32" | "int32">, DType>>;
+type DT3_RD_UNION_BOOL = Expect<Equal<ReduceDType<"bool" | "float32">, DType>>;
+type DT3_RD_WIDE = Expect<Equal<ReduceDType<DType>, DType>>;
+// G1-class gate: an `any` dtype must degrade to `DType`, never collapse the indexed-access leaf to `any`
+// (which `Guard`-less return types would silently accept as "anything").
+type DT3_RD_ANY = Expect<Equal<ReduceDType<any>, DType>>;
+
+declare const d3f64: NDArray<[2, 3]>;
+declare const d3f32: NDArray<[2, 3], "float32">;
+declare const d3i32: NDArray<[2, 3], "int32">;
+declare const d3bl: NDArray<[2, 3], "bool">;
+declare const d3any: AnyNDArray;
+declare const d3uni: NDArray<[2, 3], DType>;
+declare const d3uni2: NDArray<[2, 3], "float32" | "int32">;
+declare const d3uni3: NDArray<[2, 3], "bool" | "float32">;
+declare const d3m32: NDArray<[3, 4], "float32">;
+declare const d3m64: NDArray<[3, 4]>;
+declare const d3mi: NDArray<[3, 4], "int32">;
+declare const d3mb: NDArray<[3, 4], "bool">;
+declare const d3v32: NDArray<[3], "float32">;
+declare const d3v64: NDArray<[3]>;
+declare const d3vi: NDArray<[3], "int32">;
+declare const d3vb: NDArray<[3], "bool">;
+
+// --- sum: every dtype, 0-arg / axis / keepdims -------------------------------
+const d3s1 = d3f64.sum();
+const d3s2 = d3f32.sum();
+const d3s3 = d3i32.sum();
+const d3s4 = d3bl.sum();
+const d3s5 = d3f32.sum(0);
+const d3s6 = d3i32.sum(1);
+const d3s7 = d3bl.sum(0);
+const d3s8 = d3f64.sum(0, true);
+const d3s9 = d3f32.sum(1, true);
+type DT3_SUM_F64 = Expect<Equal<typeof d3s1, NDArray<[], "float64">>>;
+type DT3_SUM_F32 = Expect<Equal<typeof d3s2, NDArray<[], "float32">>>;
+type DT3_SUM_I32 = Expect<Equal<typeof d3s3, NDArray<[], "float64">>>;
+type DT3_SUM_BOOL = Expect<Equal<typeof d3s4, NDArray<[], "float64">>>;
+type DT3_SUM_F32_AXIS = Expect<Equal<typeof d3s5, NDArray<[3], "float32">>>;
+type DT3_SUM_I32_AXIS = Expect<Equal<typeof d3s6, NDArray<[2], "float64">>>;
+type DT3_SUM_BOOL_AXIS = Expect<Equal<typeof d3s7, NDArray<[3], "float64">>>;
+type DT3_SUM_F64_KEEP = Expect<Equal<typeof d3s8, NDArray<[1, 3], "float64">>>;
+type DT3_SUM_F32_KEEP = Expect<Equal<typeof d3s9, NDArray<[2, 1], "float32">>>;
+
+// --- mean: same dtype rule ---------------------------------------------------
+const d3me1 = d3f64.mean();
+const d3me2 = d3f32.mean();
+const d3me3 = d3i32.mean();
+const d3me4 = d3bl.mean();
+const d3me5 = d3f32.mean(0);
+const d3me6 = d3i32.mean(1);
+const d3me8 = d3f32.mean(1, true);
+type DT3_MEAN_F64 = Expect<Equal<typeof d3me1, NDArray<[], "float64">>>;
+type DT3_MEAN_F32 = Expect<Equal<typeof d3me2, NDArray<[], "float32">>>;
+type DT3_MEAN_I32 = Expect<Equal<typeof d3me3, NDArray<[], "float64">>>;
+type DT3_MEAN_BOOL = Expect<Equal<typeof d3me4, NDArray<[], "float64">>>;
+type DT3_MEAN_F32_AXIS = Expect<Equal<typeof d3me5, NDArray<[3], "float32">>>;
+type DT3_MEAN_I32_AXIS = Expect<Equal<typeof d3me6, NDArray<[2], "float64">>>;
+type DT3_MEAN_F32_KEEP = Expect<Equal<typeof d3me8, NDArray<[2, 1], "float32">>>;
+
+// --- sum/mean: `any` and union receivers degrade to the wide DType (no claim, never a false accept) ---
+const d3a1 = d3any.sum();
+const d3a2 = d3any.mean(0);
+const d3u1 = d3uni.sum(0);
+const d3u2 = d3uni2.sum(0);
+const d3u3 = d3uni3.mean();
+const d3u4 = d3uni.mean(1, true);
+type DT3_ANY_SUM = Expect<Equal<(typeof d3a1)["dtype"], DType>>;
+type DT3_ANY_MEAN = Expect<Equal<(typeof d3a2)["dtype"], DType>>;
+type DT3_WIDE_SUM = Expect<Equal<typeof d3u1, NDArray<[3], DType>>>;
+type DT3_UNION_SUM = Expect<Equal<typeof d3u2, NDArray<[3], DType>>>;
+type DT3_UNION_BOOL_MEAN = Expect<Equal<typeof d3u3, NDArray<[], DType>>>;
+type DT3_WIDE_MEAN_KEEP = Expect<Equal<typeof d3u4, NDArray<[2, 1], DType>>>;
+
+// --- matmul: PromoteDiv — float32 only for float32 x float32 (O1) ------------
+const d3x1 = d3f32.matmul(d3m32);
+const d3x2 = d3f32.matmul(d3mi);
+const d3x3 = d3i32.matmul(d3mi);
+const d3x4 = d3f64.matmul(d3m32);
+const d3x5 = d3f64.matmul(d3m64);
+type DT3_MM_F32_F32 = Expect<Equal<typeof d3x1, NDArray<[2, 4], "float32">>>;
+type DT3_MM_F32_I32 = Expect<Equal<typeof d3x2, NDArray<[2, 4], "float64">>>;
+type DT3_MM_I32_I32 = Expect<Equal<typeof d3x3, NDArray<[2, 4], "float64">>>; // widens, unlike add/sub/mul
+type DT3_MM_F64_F32 = Expect<Equal<typeof d3x4, NDArray<[2, 4], "float64">>>;
+type DT3_MM_F64_F64 = Expect<Equal<typeof d3x5, NDArray<[2, 4], "float64">>>;
+// batch broadcast and 1-D promotion keep the dtype rule
+declare const d3b32: NDArray<[5, 2, 3], "float32">;
+declare const d3bi: NDArray<[3, 4], "int32">;
+const d3x7 = d3b32.matmul(d3bi);
+const d3x9 = d3f32.matmul(d3v32);
+type DT3_MM_BATCH_MIXED = Expect<Equal<typeof d3x7, NDArray<[5, 2, 4], "float64">>>;
+type DT3_MM_VEC_RIGHT = Expect<Equal<typeof d3x9, NDArray<[2], "float32">>>;
+// `any` / union on either side degrade to DType (G1 class: PromoteDiv's gates apply here too)
+const d3xa = d3f32.matmul(d3any);
+const d3xb = d3any.matmul(d3m32);
+const d3xc = d3uni2.matmul(d3m32);
+type DT3_MM_ANY_ARG = Expect<Equal<(typeof d3xa)["dtype"], DType>>;
+type DT3_MM_ANY_RECV = Expect<Equal<(typeof d3xb)["dtype"], DType>>;
+type DT3_MM_UNION_RECV = Expect<Equal<(typeof d3xc)["dtype"], DType>>;
+
+// --- dot / cosineSimilarity / norm: still a plain `number` --------------------
+const d3d1 = d3v32.dot(d3v32);
+const d3d2 = d3v32.dot(d3vi);
+const d3d5 = d3v32.dot(d3any);
+const d3c1 = d3v32.cosineSimilarity(d3v32);
+const d3c2 = d3vi.cosineSimilarity(d3v64);
+const d3c3 = d3v32.cosineSimilarity(d3any);
+type DT3_DOT_F32 = Expect<Equal<typeof d3d1, number>>;
+type DT3_DOT_MIXED = Expect<Equal<typeof d3d2, number>>;
+type DT3_DOT_ANY = Expect<Equal<typeof d3d5, number>>;
+type DT3_COS_F32 = Expect<Equal<typeof d3c1, number>>;
+type DT3_COS_MIXED = Expect<Equal<typeof d3c2, number>>;
+type DT3_COS_ANY = Expect<Equal<typeof d3c3, number>>;
+const d3n2 = d3v32.norm();
+const d3n3 = d3vi.norm();
+type DT3_NORM_F32 = Expect<Equal<typeof d3n2, number>>;
+type DT3_NORM_I32 = Expect<Equal<typeof d3n3, number>>;
+// A3(a) (COVENANT M2 v10): `norm()` on bool COMPILES — it is niladic, there is no argument to hang a rejection on;
+// the permanent rejection is runtime-only (BOOL_ARITHMETIC_MESSAGE, pinned in scalar-mean.test.ts). No
+// `@ts-expect-error` here on purpose: if a later change ever makes this a compile error, the call below fails.
+const d3n1 = d3vb.norm();
+type DT3_NORM_BOOL_COMPILES = Expect<Equal<typeof d3n1, number>>;
+
+// --- bool is rejected at the ARGUMENT for the two-operand ops, receiver or argument (O1 / `PromoteDiv`) ---
+// @ts-expect-error - bool argument (matmul)
+d3f32.matmul(d3mb);
+// @ts-expect-error - bool receiver (matmul)
+d3mb.matmul(d3m32 as unknown as NDArray<[4, 3], "float32">);
+// @ts-expect-error - bool receiver (dot)
+d3vb.dot(d3v32);
+// @ts-expect-error - bool argument (dot)
+d3v32.dot(d3vb);
+// @ts-expect-error - bool receiver (cosineSimilarity)
+d3vb.cosineSimilarity(d3v32);
+// @ts-expect-error - bool argument (cosineSimilarity)
+d3v32.cosineSimilarity(d3vb);
+// A shape error with a bool operand is still a compile error (WHICH message wins — the shape one — is pinned
+// per diagnostic content in scalar-mean.test.ts, "dt3 diagnostic CONTENTS").
+// @ts-expect-error - inner dimensions 3 and 5 do not match (and the argument is bool)
+d3f32.matmul(d3mb as unknown as NDArray<[5, 4], "bool">);

@@ -2842,3 +2842,98 @@ test("dt3 results are fresh buffers: inputs are never mutated or aliased by sum/
     assert.deepStrictEqual(Array.from(nd.data), before, `[${dtype}] input untouched`);
   }
 });
+
+// --- dt3 diagnostic CONTENTS (M3, Arbeitsregel 2): real tsc on a throwaway
+// fixture OUTSIDE the repo. The bool rejection and the shape errors of
+// matmul/dot/cosineSimilarity surface at the ARGUMENT with word-identical text
+// to the runtime messages (never hand-typed: the runtime side comes from real
+// thrown errors / the imported constant), and when BOTH a shape error and a bool
+// operand are present the SHAPE message wins at compile time exactly as it does
+// at runtime (D4). `norm()` on bool compiles clean (A3(a)).
+test("dt3 diagnostic CONTENTS (M3): bool rejection and shape errors name word-identical messages at the argument; the shape message outranks bool; norm() on bool compiles clean", () => {
+  const runtimeMessage = (fn: () => unknown): string => {
+    let m = "";
+    assert.throws(fn, (e: unknown) => {
+      m = (e as Error).message;
+      return true;
+    });
+    return m;
+  };
+  const shapeMatmul = runtimeMessage(() => mkNd([2, 3], new Array<number>(6).fill(0), "float32").matmul(mkNd([4, 5], new Array<number>(20).fill(0), "float32")));
+  const shapeDot = runtimeMessage(() => mkNd([3], [0, 0, 0], "float32").dot(mkNd([4], [0, 0, 0, 0], "float32")));
+  const shapeCos = runtimeMessage(() => mkNd([3], [0, 0, 0], "float32").cosineSimilarity(mkNd([4], [0, 0, 0, 0], "float32")));
+
+  const dir = mkdtempSync(join(tmpdir(), "numtype-dt3-diag-pin-"));
+  try {
+    const ndarrayPath = fileURLToPath(new URL("../src/ndarray.ts", import.meta.url).href);
+    const ambientPath = fileURLToPath(new URL("../src/ambient.d.ts", import.meta.url).href);
+    const repoRoot = fileURLToPath(new URL("../..", import.meta.url).href);
+    writeFileSync(
+      join(dir, "probe.ts"),
+      [
+        `import { NDArray } from ${JSON.stringify(ndarrayPath)};`, // 1
+        `const f32Mat = NDArray.zeros([2, 3], "float32");`, // 2
+        `const boolMat34 = NDArray.zeros([3, 4], "bool");`, // 3
+        `const boolMat45 = NDArray.zeros([4, 5], "bool");`, // 4
+        `const boolVec3 = NDArray.zeros([3], "bool");`, // 5
+        `const f32Vec3 = NDArray.zeros([3], "float32");`, // 6
+        `const f32Vec4 = NDArray.zeros([4], "float32");`, // 7
+        `const boolVec4 = NDArray.zeros([4], "bool");`, // 8
+        `f32Mat.matmul(boolMat34);`, // 9  bool ARGUMENT
+        `boolVec3.dot(f32Vec3);`, // 10 bool RECEIVER
+        `f32Vec3.cosineSimilarity(boolVec3);`, // 11 bool ARGUMENT
+        `f32Mat.matmul(boolMat45);`, // 12 shape error outranks the bool argument
+        `boolVec3.dot(f32Vec4);`, // 13 length mismatch outranks the bool receiver
+        `f32Vec3.cosineSimilarity(boolVec4);`, // 14 length mismatch outranks the bool argument
+        `const normOfBool = boolVec3.norm();`, // 15 compiles clean (A3(a))
+        `void normOfBool;`, // 16
+        ``,
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "bundler",
+          noEmit: true,
+          allowImportingTsExtensions: true,
+          skipLibCheck: true,
+          noUncheckedIndexedAccess: true,
+          exactOptionalPropertyTypes: true,
+        },
+        include: ["probe.ts", ambientPath],
+      }),
+    );
+    const res = spawnSync("pnpm", ["exec", "tsc", "--noEmit", "-p", dir], { cwd: repoRoot, encoding: "utf8" });
+    const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
+    assert.notStrictEqual(res.status, 0, `fixture must fail to compile:\n${out}`);
+    const probeErrors = out.split("\n").filter((l) => l.includes("probe.ts(") && l.includes("error TS"));
+    assert.strictEqual(probeErrors.length, 6, `expected exactly SIX fixture errors (lines 9-14; line 15 norm() must compile):\n${out}`);
+
+    // tsc prints the message as the content of a quoted string-literal type: `JSON.stringify(...).slice(1, -1)`
+    // reproduces its escaping, so neither side is hand-typed.
+    const escaped = (msg: string) => JSON.stringify(msg).slice(1, -1);
+    const quoted = (msg: string) => `"${escaped(msg)}"`;
+    const atLine = (n: number): string => probeErrors.find((l) => l.includes(`probe.ts(${n},`)) ?? "";
+    const cases: [number, string, string][] = [
+      [9, BOOL_ARITHMETIC_MESSAGE, "matmul: bool ARGUMENT"],
+      [10, BOOL_ARITHMETIC_MESSAGE, "dot: bool RECEIVER"],
+      [11, BOOL_ARITHMETIC_MESSAGE, "cosineSimilarity: bool ARGUMENT"],
+      [12, shapeMatmul, "matmul: shape error (3 vs 4) with a bool argument"],
+      [13, shapeDot, "dot: length mismatch with a bool receiver"],
+      [14, shapeCos, "cosineSimilarity: length mismatch with a bool argument"],
+    ];
+    for (const [line, msg, what] of cases) {
+      assert.ok(atLine(line).includes(quoted(msg)), `${what} (probe line ${line}) must surface "${msg}" verbatim:\n${out}`);
+    }
+    for (const line of [12, 13, 14]) {
+      assert.ok(!atLine(line).includes(escaped(BOOL_ARITHMETIC_MESSAGE)), `the shape error must OUTRANK the bool message at probe line ${line}:\n${out}`);
+    }
+    assert.strictEqual(atLine(15), "", `norm() on bool must compile clean:\n${out}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
