@@ -986,15 +986,28 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // other pin. Measured TWICE (fresh `gen-workloads.ts` run each time),
 // byte-identical both times. Correctness gate (every hover position) and
 // latency medians unaffected (still PASS, still under the 2x ceiling).
+//
+// Re-pinned 2026-10-06 (dt4, docs/dtype-dt4-spec.md, Commit D): the six
+// comparisons `gt`/`ge`/`lt`/`le`/`eq`/`ne`, the static `NDArray.where` and
+// `any`/`all` enlarge the shared class surface (generic members with overloads
+// and the new `CompareCheck`/`WhereCheck` guards); none of the eight workloads
+// calls any of them, so every pin moves by the SAME +3,844 — exactly the
+// stress-corpus delta of the same change (119,263 -> 123,107), i.e. the
+// "editor delta = stress delta" rule of thumb holds again. A class-surface
+// ripple, not a per-call cost. Measured TWICE (fresh `gen-workloads.ts` run
+// each time), byte-identical both times (w1 44965, w2 46885, w3 77642,
+// w4 45028, w5 50664, w6 51281, w7 43878, w8 51951). Correctness gate (every
+// hover position) and latency medians unaffected (still PASS, under the 2x
+// ceiling).
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 41121,
-  w2: 43041,
-  w3: 73798,
-  w4: 41184,
-  w5: 46820,
-  w6: 47437,
-  w7: 40034,
-  w8: 48107,
+  w1: 44965,
+  w2: 46885,
+  w3: 77642,
+  w4: 45028,
+  w5: 50664,
+  w6: 51281,
+  w7: 43878,
+  w8: 51951,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {
