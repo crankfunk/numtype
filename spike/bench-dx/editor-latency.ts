@@ -957,15 +957,44 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // touched, not every op). Measured TWICE (fresh `gen-workloads.ts` run each
 // time), byte-identical both times. Correctness gate and latency medians
 // unaffected (still PASS, still under the 2x ceiling).
+// Re-pinned 2026-10-05 (dt3, docs/dtype-dt3-spec.md, Commit D): `sum`/`mean`
+// lose their `DTypeLock` guard component and gain `ReduceDType<D>` (R1/R2);
+// `matmul`/`dot`/`cosineSimilarity` swap `DTypeLockPair` for the `PromoteDiv`
+// guard (R3), `matmul`'s return type gains `OkDType<PromoteDiv<D, Dd>>`;
+// `DTypeLockPair` is deleted (R5). Measured per commit in fresh detached
+// checkouts (baseline reproduces the pins above, exit 0):
+//   commit A (sum/mean):  w1 -340, w2 -354, w3 -354, w4 -354, w5 -340,
+//                         w6 -354, w7 -321, w8 -340
+//   commit B (+matmul..): w1 +296, w2 +224, w3 +224, w4 +332, w5 +409,
+//                         w6 +224, w7 +224, w8 +322 (relative to A)
+// A is a near-uniform SAVING: the removed `DTypeLock<D, "sum"|"mean">`
+// conditional sat in eight overload signatures of the shared class surface,
+// so every workload pays less; the workloads that call `sum`/`mean` give a
+// little back to the new `ReduceDType` return type (w1/w5/w8 about +14 — the
+// same for w1's six calls as for w5's one; w7's union-axis sums +33). B is a
+// uniform +224 for the workloads that call none of the changed ops (w2, w3,
+// w6, w7 — the `PromoteDiv` guard is a longer gate chain than
+// `DTypeLockPair` was, declared on three class members), plus a per-workload
+// share on top for those that do call them: w1 (97 matmul calls) +72, w4
+// (2 calls) +108, w8 (1 matmul, 6 dot, 6 cosineSimilarity) +98, w5 (45 matmul
+// calls) +185 — NOT proportional to the call count, the super-additivity /
+// order-dependence CLAUDE.md's measurement rules already name (only the
+// all-or-nothing numbers above are meaningful, no per-call figure exists).
+// Net: -130 for the workloads without matmul/dot/cosineSimilarity (w2, w3,
+// w6), w7 -97 (its two union-axis sums), w1 -44, w4 -22, w8 -18, and w5, the
+// matmul-heaviest workload, nets POSITIVE (+69) — against the sign of every
+// other pin. Measured TWICE (fresh `gen-workloads.ts` run each time),
+// byte-identical both times. Correctness gate (every hover position) and
+// latency medians unaffected (still PASS, still under the 2x ceiling).
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 41165,
-  w2: 43171,
-  w3: 73928,
-  w4: 41206,
-  w5: 46751,
-  w6: 47567,
-  w7: 40131,
-  w8: 48125,
+  w1: 41121,
+  w2: 43041,
+  w3: 73798,
+  w4: 41184,
+  w5: 46820,
+  w6: 47437,
+  w7: 40034,
+  w8: 48107,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {
