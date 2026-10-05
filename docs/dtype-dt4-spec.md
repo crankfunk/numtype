@@ -2,7 +2,7 @@
 
 **Version:** v1.1 (2026-10-06) · **Status:** Owner-abgenommen (A1, A2, A3 i–iv, 2026-10-05; A4–A6 nach
 Baustein 0, 2026-10-06), Baustein 0 gelaufen (kein Blocker, A2 empirisch: kein Test betroffen) →
-**implementierungsreif** (v11-Wortlaut s. A3)
+**implementierungsreif**
 **Stufe:** 3b — neue Typ-Maschinerie (`CompareCheck`, drei-Wege-Broadcast für `where`),
 Covenant-Änderung (v11, A3), kein Kernel.
 **Berührte Invarianten:** M2 (Vergleichs-/`where`-Prüfung, Union/`any`-Gate), M3 (Meldungen am
@@ -143,7 +143,7 @@ slice-Lücke nach FOLLOWUPS.
   nicht mit 0.1. Alternative: exakter Vergleich mit dem f64-Skalar (anders als NumPy).
 
 Covenant-Wortlaut (v11) — v1.1 um M3 und die Masken-Ablehnung erweitert (Baustein 0 C1),
-**Owner-Bestätigung des erweiterten Wortlauts ausstehend**:
+**erweiterter Wortlaut vom Owner bestätigt 2026-10-06**:
 
 > **M2 · Präzisierung v11 — Vergleiche und `where` (Owner-entschieden 2026-10-05/06):** die Prüfungen
 > der Vergleiche (`CompareCheck`) und von `where` (`WhereCheck`) sind dtype-Maschinerie nach

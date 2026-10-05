@@ -125,7 +125,7 @@ Gate gilt für jede dtype-Funktion (Vergleiche, `where`, Reduktions-dtype).
 | `argmax` | Index als `number` wie heute; Achsen-Variante → `NDArray<…, "int32">` (E6) |
 | `topk` | `values: NDArray<…, D>`, `indices: NDArray<…, "int32">` (E6) |
 | Vergleiche `gt`/`ge`/`lt`/`le`/`eq`/`ne` (neu) | numerisch ⊕ numerisch (mit Promotion zum Vergleichen) → bool; bool-Operand → Compile-Fehler |
-| `where(mask, a, b)` (neu), `any`/`all` (neu) | nur bool-Maske; `where` → `Promote` von a, b |
+| `where(mask, a, b)` (neu), `any`/`all` (neu) | nur bool-Maske; `where` → `Promote` von a, b — **Nachtrag dt4 (2026-10-06, docs/dtype-dt4-spec.md A3 ii, A5):** `any`/`all` akzeptieren alle dtypes (≠ 0, NaN → wahr, wie `astype("bool")`); `where` mit bool × bool → bool, bool gemischt → Ablehnung |
 | `stack` | alle Zeilen gleicher dtype, sonst Compile-Fehler (Promotion über Zeilen bewusst NICHT, Budget) |
 | `transpose`/`slice`/`reshape`/`flatten`/`item` | D unverändert; `item` liefert `boolean` bei bool, sonst `number` |
 | `toNestedArray`/`toJSON` | `NestedArray<S, D>` bekommt D: bool → `boolean`-Blätter; `toJSON` `data: number[]` bzw. `boolean[]` |

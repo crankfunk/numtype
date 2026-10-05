@@ -1,5 +1,5 @@
 # Covenant — NumType
-<!-- covenant:version 10 -->
+<!-- covenant:version 11 -->
 
 ## Invarianten
 
@@ -68,7 +68,14 @@
   `BOOL_ARITHMETIC_MESSAGE`; sie gilt dauerhaft als „unvollständig, nicht falsch" und ist im
   Quelltext an der Op dokumentiert — anders als die übergangsweisen Sperren nach v8 braucht sie
   keinen FOLLOWUPS-Eintrag, weil nichts nachzuziehen ist.
-  Anker: `spike/src/dim.ts`, `spike/src/literal-arithmetic.ts`, `sym:Guard`, `sym:OkShape`, `sym:DTypeLock`, `sym:Promote`, `sym:PromoteDiv`, `sym:ReduceDType`
+  · **Präzisierung v11 — Vergleiche und `where` (Owner-entschieden 2026-10-05/06):** die Prüfungen
+  der Vergleiche (`CompareCheck`) und von `where` (`WhereCheck`) sind dtype-Maschinerie nach
+  v8–v10: `any` und Unions degradieren zu keinem Anspruch, bevor eine Ablehnung greift; der
+  Ergebnis-dtype eines Vergleichs ist bool unabhängig von den Operanden (ein gültiger Anspruch
+  auch bei Union-Operanden). Garantiert abgelehnt werden: ein bool-Operand eines Vergleichs, eine
+  nicht-bool-Maske von `where`, eine Mischung aus bool und numerisch in `a`/`b` von `where`.
+  Meldungen und Laufzeit-Tabellen stammen aus einer Quelle.
+  Anker: `spike/src/dim.ts`, `spike/src/literal-arithmetic.ts`, `sym:Guard`, `sym:OkShape`, `sym:DTypeLock`, `sym:Promote`, `sym:PromoteDiv`, `sym:ReduceDType`, `sym:CompareCheck`, `sym:WhereCheck`
   · GESCHLOSSEN in Item 11 / S1 (2026-07-17): der `Literal|undefined`-Verstoß durch OPTIONALE
   Parameter (`sum`s `axis`/`keepdims`) ist behoben. Der `sum`-Overload-Umbau (Overloads nach
   Argument-Anzahl 0/1/2 — keine optionalen Parameter mehr in der Mehr-Argument-Form — plus
@@ -129,6 +136,10 @@
   Meldung; die Laufzeit wirft die eigene. Begründung gemessen: die einzige korrekte Alternative (eine
   Signatur mit `IsUnion`-Gate) kostete +8,495 Instantiations (docs/dtype-design-ergebnisse.md). Im
   Quelltext an den Überladungen dokumentiert (Präzedenz W4/W5).
+  · **Präzisierung v11 (Owner-entschieden 2026-10-06):** die benannte Ausnahme dtype-Skalar (v9)
+  gilt auch für einen bool-Empfänger in der Skalar-Form eines Vergleichs (dort scheitert ein
+  Vergleich, keine Arithmetik). Bei `where` steht jede Ablehnung am fehlerhaften Argument (Maske,
+  `a` oder `b`), in der Reihenfolge Shape → Maske → `a`/`b`, zur Compile- wie zur Laufzeit.
   Anker: `sym:Guard`, `sym:ShowShape`
 - **M4** · Frozen Baseline: v1-Kerne/-Einstiegspunkte bleiben byte-unberührt; der bindende
   Freeze-Beweis ist der Artefakt-Hash aus einem Clean-Rebuild; abi.rs/matmul_blocked.rs/shape.rs
@@ -187,6 +198,13 @@
 - Keine transzendenten Ops ohne eigene Determinismus-Entscheidung (brechen Bit-Parität).
 
 ## Änderungslog
+- v11 (2026-10-06) · **Vergleiche, `where`, `any`/`all` (Scheibe dt4, docs/dtype-dt4-spec.md v1.1).**
+  M2: `CompareCheck`/`WhereCheck` unter der dtype-Maschinerie, Ergebnis-dtype bool als gültiger
+  Anspruch auch bei Union-Operanden, die drei garantierten Ablehnungen benannt; Anker
+  `sym:CompareCheck`, `sym:WhereCheck`. M3: v9-Skalar-Ausnahme auf bool-Empfänger bei Vergleichen
+  erstreckt; `where`-Ablehnungen am fehlerhaften Argument in fester Reihenfolge. Erstentwurf
+  (nur M2) am 2026-10-05 abgenommen; auf Befund C1 von Baustein 0 um M3 und die Ablehnungsliste
+  erweitert, erweiterter Wortlaut vom Owner bestätigt 2026-10-06.
 - v10 (2026-10-05) · **Reduktionen (Scheibe dt3, docs/dtype-dt3-spec.md v1.1).** M2: Ergebnis-dtype
   der Reduktionen (`ReduceDType`) und die Wiederverwendung von `PromoteDiv` für
   `matmul`/`dot`/`cosineSimilarity` (O1) unter der dtype-Maschinerie; Anker `sym:ReduceDType`. Neu
