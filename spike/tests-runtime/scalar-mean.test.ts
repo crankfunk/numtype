@@ -2937,3 +2937,22 @@ test("dt3 diagnostic CONTENTS (M3): bool rejection and shape errors name word-id
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// G1 (dt3 fix round): the float32 mean must be `fround(sum32 / n)`, NOT `fround(sum32 * (1/n))`. The two agree
+// almost everywhere, but not in the subnormal range, where the float32 spacing is absolute (2^-149) and the
+// f64 rounding error of 1/n can flip a tie: x = fround(-5.022606823353154e-38), n = 784. (An earlier claim that
+// the two are provably equal for n <= 2^24 was wrong; this is the counterexample.)
+test("dt3 mean float32: sum32 / n, not sum32 * (1/n) — a subnormal-tie counterexample (G1)", () => {
+  const x = new Float32Array([-5.022606823353154e-38])[0] ?? 0;
+  const n = 784;
+  const values = new Float32Array(n);
+  values[0] = x;
+  // Non-vacuity: the two formulas really give different float32 results for this input.
+  const viaDivide = new Float32Array([x / n])[0] ?? 0;
+  const viaReciprocal = new Float32Array([x * (1 / n)])[0] ?? 0;
+  assert.notStrictEqual(viaDivide, viaReciprocal, "the divide and reciprocal formulas must differ here");
+  const nd = loose(NDArray.fromArray([n], values));
+  assertSameValues([viaDivide], nd.mean().data, true, "mean() of [x, 0 x 783]");
+  assertSameValues([viaDivide], nd.mean(0).data, true, "mean(0) of [x, 0 x 783]");
+  assertSameValues(refMeanF32([n], values, undefined).data, nd.mean().data, true, "mean() vs the independent reference");
+});
