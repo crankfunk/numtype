@@ -2123,3 +2123,108 @@ export function cosineTyped(
   const den = Math.sqrt(normSqRuntime(a64)) * Math.sqrt(normSqRuntime(b64));
   return num / den;
 }
+
+// ---------------------------------------------------------------------------
+// dt4, Commit A — V1 comparisons (docs/dtype-dt4-spec.md). Same appended-only
+// discipline: nothing above this line is touched. Reference functions
+// WITHOUT a WASM-kernel counterpart (COVENANT M1 v5 — the parity gap is
+// tracked in FOLLOWUPS; M1 binds the moment a kernel for these appears).
+// ---------------------------------------------------------------------------
+
+/** dt4 A3(i): a bool operand of a comparison. The arithmetic message
+ * (`BOOL_ARITHMETIC_MESSAGE`, "has no arithmetic") would be wrong here — a
+ * comparison is not arithmetic — so comparisons carry their own. One `const`
+ * read by both layers: the compile-time `CompareCheck`/`CompareScalarOperand`
+ * (ndarray.ts) take it via `typeof`, the runtime throws it (M3, single
+ * source). */
+export const COMPARE_BOOL_MESSAGE = "dtype 'bool' cannot be compared — use astype() to convert first";
+
+/** The six comparison operators `NDArray.gt/ge/lt/le/eq/ne` dispatch on. */
+export type CompareOp = "gt" | "ge" | "lt" | "le" | "eq" | "ne";
+
+/**
+ * One comparison on two JS numbers, as 0/1. Exact for EVERY dtype pairing:
+ * float64, float32 and int32 are all exactly representable in float64, and a
+ * comparison never rounds — so comparing the widened values equals comparing
+ * in the promoted type. IEEE 754 semantics: any comparison with NaN is
+ * `false` except `ne` (`true`); `-0 === +0`.
+ */
+function compareValues(op: CompareOp, x: number, y: number): number {
+  switch (op) {
+    case "gt":
+      return x > y ? 1 : 0;
+    case "ge":
+      return x >= y ? 1 : 0;
+    case "lt":
+      return x < y ? 1 : 0;
+    case "le":
+      return x <= y ? 1 : 0;
+    case "eq":
+      return x === y ? 1 : 0;
+    case "ne":
+      return x !== y ? 1 : 0;
+  }
+}
+
+/**
+ * dt4 V1: scalar form of a comparison, `x.gt(2)`. The result is always a
+ * `Uint8Array` of 0/1 with the receiver's own shape. A float32 receiver
+ * rounds the scalar with `Math.fround` first (A3(iv): NEP-50 "weak scalar",
+ * consistent with D6 — the scalar adopts the array's dtype), so
+ * `f32.gt(0.1)` compares against `fround(0.1)`, not 0.1, and a scalar beyond
+ * the float32 range becomes ±Infinity. An int32 receiver compares exactly
+ * against any scalar, integral or not (no result is stored in int32, so
+ * D6's integer restriction does not apply). A bool receiver throws
+ * `COMPARE_BOOL_MESSAGE` (also for size 0).
+ */
+export function compareScalarTyped(op: CompareOp, dtype: DType, data: DataOfRuntime, s: number): Uint8Array {
+  if (dtype === "bool") throw new Error(COMPARE_BOOL_MESSAGE);
+  const sv = dtype === "float32" ? Math.fround(s) : s;
+  const out = new Uint8Array(data.length);
+  for (let i = 0; i < data.length; i++) out[i] = compareValues(op, data[i] ?? 0, sv);
+  return out;
+}
+
+/**
+ * dt4 V1: array form of a comparison with NumPy broadcasting — the same
+ * broadcast/index algorithm as `elementwiseBinaryTyped`, producing 0/1 in a
+ * `Uint8Array`. Check order = compile-time order (`CompareCheck`): the SHAPE
+ * error first (`runtimeBroadcastShape`), the bool rejection second, so when
+ * both are wrong the throw is the shape message — the one the editor shows
+ * at the argument.
+ */
+export function compareTyped(
+  op: CompareOp,
+  aShape: readonly number[],
+  aData: DataOfRuntime,
+  aDtype: DType,
+  bShape: readonly number[],
+  bData: DataOfRuntime,
+  bDtype: DType,
+): { shape: number[]; data: Uint8Array } {
+  const outShape = runtimeBroadcastShape(aShape, bShape);
+  if (aDtype === "bool" || bDtype === "bool") throw new Error(COMPARE_BOOL_MESSAGE);
+  const rank = outShape.length;
+
+  const aAligned = alignToRank(aShape, computeStrides(aShape), rank);
+  const bAligned = alignToRank(bShape, computeStrides(bShape), rank);
+  const aEff = effectiveStrides(aAligned.shape, aAligned.strides);
+  const bEff = effectiveStrides(bAligned.shape, bAligned.strides);
+
+  const outStrides = computeStrides(outShape);
+  const size = product(outShape);
+  const out = new Uint8Array(size);
+
+  for (let flat = 0; flat < size; flat++) {
+    const idx = unravel(flat, outShape, outStrides);
+    let aOff = 0;
+    let bOff = 0;
+    for (let i = 0; i < rank; i++) {
+      const ix = idx[i] ?? 0;
+      aOff += ix * (aEff[i] ?? 0);
+      bOff += ix * (bEff[i] ?? 0);
+    }
+    out[flat] = compareValues(op, aData[aOff] ?? 0, bData[bOff] ?? 0);
+  }
+  return { shape: outShape, data: out };
+}

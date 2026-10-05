@@ -30,6 +30,9 @@ import {
   assertReshapeArgs,
   astypeConvert,
   BOOL_ARITHMETIC_MESSAGE,
+  COMPARE_BOOL_MESSAGE,
+  compareScalarTyped,
+  compareTyped,
   computeStrides,
   convertToDType,
   cosineTyped,
@@ -379,6 +382,63 @@ type DivScalarOperand<D extends DType, N extends number> = IsUnion<D> extends tr
  * accepted, non-bool case, since a bool receiver is already rejected by
  * `DivScalarOperand` above. */
 type DivScalarDType<D extends DType> = IsUnion<D> extends true ? DType : D extends "float32" ? "float32" : "float64";
+
+/**
+ * dt4 V1 (docs/dtype-dt4-spec.md; COVENANT M2 v11): the dtype half of
+ * `CompareCheck` — is the pair `(D, Dd)` comparable? Resolves to `true`
+ * (accepted) or a `ShapeError` carrying `COMPARE_BOOL_MESSAGE` (runtime.ts,
+ * one `const` for both layers, M3). Same gate order as `Promote` (Arbeits-
+ * regel 3): `IsAnyDType` on both operands FIRST, then `IsUnion` on both —
+ * `any` and unions give NO claim (`true`: accept, the runtime still throws
+ * for an ACTUAL bool value) — and only then the bool rejection. Unlike
+ * `Promote` there is no table lookup: a comparison needs no result dtype
+ * from its operands (it is always bool, see `CompareCheck`'s call sites),
+ * so a numeric pair of any dtypes is simply valid. */
+type CompareDType<D extends DType, Dd extends DType> = IsAnyDType<D> extends true
+  ? true
+  : IsAnyDType<Dd> extends true
+    ? true
+    : IsUnion<D> extends true
+      ? true
+      : IsUnion<Dd> extends true
+        ? true
+        : D extends "bool"
+          ? ShapeError<typeof COMPARE_BOOL_MESSAGE>
+          : Dd extends "bool"
+            ? ShapeError<typeof COMPARE_BOOL_MESSAGE>
+            : true;
+
+/**
+ * dt4 V1: the argument guard of `gt`/`ge`/`lt`/`le`/`eq`/`ne`'s array form
+ * (COVENANT M2 v11, anchor `sym:CompareCheck`; exported so the alias itself
+ * can be pinned, A4 — the `any`/union gates inside `CompareDType` are
+ * behaviour-redundant at call level, only a direct alias pin can kill their
+ * mutants). The SHAPE error comes first (`Broadcast`, the editor shows it at
+ * the argument), the dtype verdict second — the runtime (`compareTyped`)
+ * checks in the same order. The RESULT dtype of a comparison is bool for
+ * every operand pair, so unlike `add` it is never read from this type:
+ * even for union/`any` operands the claim `NDArray<…, "bool">` is correct. */
+export type CompareCheck<S extends Shape, B extends Shape, D extends DType, Dd extends DType> =
+  Broadcast<S, B> extends ShapeError<string> ? Broadcast<S, B> : CompareDType<D, Dd>;
+
+/**
+ * dt4 V1: the scalar-operand guard of the comparisons' scalar overload — a
+ * bool RECEIVER rejects (`COMPARE_BOOL_MESSAGE`); every other receiver takes
+ * any number (int32 compares exactly against `2.5`, a float32 receiver
+ * rounds the scalar at runtime, A3(iv); there is no D6-style integer
+ * restriction because no result is stored in the receiver's dtype). Union-
+ * gated on `D` first (D4), same as `DivScalarOperand`. M3 v9 named scalar
+ * exception applies unchanged (also to bool receivers of comparisons, v11):
+ * a failing scalar call is a genuine compile error, but tsc attributes a
+ * total overload mismatch to the LAST-declared overload (the array form), so
+ * the editor shows that overload's generic TS2769 and never this guard's own
+ * message; the runtime (`compareScalarTyped`) throws `COMPARE_BOOL_MESSAGE`
+ * regardless. */
+type CompareScalarOperand<D extends DType, N extends number> = IsUnion<D> extends true
+  ? N
+  : D extends "bool"
+    ? Guard<ShapeError<typeof COMPARE_BOOL_MESSAGE>, N>
+    : N;
 
 /**
  * Op-Scheibe W4 (docs/op-w4-stack-spec.md, D2/F1/F2): the `NDArray` ->
@@ -1347,6 +1407,117 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
   ): number {
     const o = other as unknown as NDArray<B, Dd>;
     return cosineTyped(this.shape, this.data as unknown as DataOfRuntime, this.dtype, o.shape, o.data as unknown as DataOfRuntime, o.dtype);
+  }
+
+  /** dt4 V1 (docs/dtype-dt4-spec.md): elementwise "greater than", a bool mask
+   * — `NDArray<…, "bool">` for EVERY operand dtype (comparison results do not
+   * depend on the operands' promotion, only their VALUES). `ge`/`lt`/`le`/
+   * `eq`/`ne` below are structural mirrors with their own operator.
+   *
+   * Array overload: broadcasts like `add` (a `Broadcast` mismatch is a
+   * compile error AT the argument, naming both shapes), then `CompareCheck`'s
+   * dtype verdict — bool, as receiver or argument, is rejected with
+   * `COMPARE_BOOL_MESSAGE` (A3(i): comparing masks is not supported; convert
+   * with `astype()`). `any`/union dtypes give no claim, the runtime still
+   * throws for an actual bool operand. Values are compared as JS numbers,
+   * which is exact in the promoted type for every pairing (int32 and float32
+   * are exact in float64; a comparison never rounds). IEEE: any comparison
+   * with NaN is false (`ne`: true), `-0 === +0`.
+   *
+   * Scalar overload (first, array form last — Arbeitsregel 2: the LAST
+   * overload carries the failure diagnostic): same shape-preserving
+   * semantics, `NDArray<S, "bool">`. A float32 receiver rounds the scalar
+   * with `Math.fround` (NEP 50 weak scalar, consistent with D6): `f32.gt(0.1)`
+   * compares against `fround(0.1)`, and a scalar beyond the float32 range
+   * becomes ±Infinity (`f32.eq(3.4028235677973366e38)` is true for an
+   * Infinity element). An int32 receiver compares exactly against a
+   * non-integer scalar. A bool receiver rejects (`CompareScalarOperand`, the
+   * M3 v9 named scalar exception applies). Known limit (spec D7):
+   * in a generic helper whose `S`/`D` are still open type parameters the
+   * ARRAY form is rejected like `add`/`div`'s; the scalar form compiles. */
+  gt<const N extends number>(s: CompareScalarOperand<D, N>): NDArray<S, "bool">;
+  gt<B extends Shape, Dd extends DType>(
+    other: Guard<CompareCheck<S, B, D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>, "bool">;
+  gt<B extends Shape, Dd extends DType>(other: number | Guard<CompareCheck<S, B, D, Dd>, NDArray<B, Dd>>): NDArray<any, any> {
+    if (typeof other === "number") {
+      return new NDArray<any, any>(this.shape, "bool", compareScalarTyped("gt", this.dtype, this.data as unknown as DataOfRuntime, other));
+    }
+    const o = other as unknown as NDArray<B, Dd>;
+    const { shape, data } = compareTyped("gt", this.shape, this.data as unknown as DataOfRuntime, this.dtype, o.shape, o.data as unknown as DataOfRuntime, o.dtype);
+    return new NDArray<any, any>(shape, "bool", data);
+  }
+
+  /** dt4 V1: elementwise "greater than or equal" — structural mirror of `gt`. */
+  ge<const N extends number>(s: CompareScalarOperand<D, N>): NDArray<S, "bool">;
+  ge<B extends Shape, Dd extends DType>(
+    other: Guard<CompareCheck<S, B, D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>, "bool">;
+  ge<B extends Shape, Dd extends DType>(other: number | Guard<CompareCheck<S, B, D, Dd>, NDArray<B, Dd>>): NDArray<any, any> {
+    if (typeof other === "number") {
+      return new NDArray<any, any>(this.shape, "bool", compareScalarTyped("ge", this.dtype, this.data as unknown as DataOfRuntime, other));
+    }
+    const o = other as unknown as NDArray<B, Dd>;
+    const { shape, data } = compareTyped("ge", this.shape, this.data as unknown as DataOfRuntime, this.dtype, o.shape, o.data as unknown as DataOfRuntime, o.dtype);
+    return new NDArray<any, any>(shape, "bool", data);
+  }
+
+  /** dt4 V1: elementwise "less than" — structural mirror of `gt`. */
+  lt<const N extends number>(s: CompareScalarOperand<D, N>): NDArray<S, "bool">;
+  lt<B extends Shape, Dd extends DType>(
+    other: Guard<CompareCheck<S, B, D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>, "bool">;
+  lt<B extends Shape, Dd extends DType>(other: number | Guard<CompareCheck<S, B, D, Dd>, NDArray<B, Dd>>): NDArray<any, any> {
+    if (typeof other === "number") {
+      return new NDArray<any, any>(this.shape, "bool", compareScalarTyped("lt", this.dtype, this.data as unknown as DataOfRuntime, other));
+    }
+    const o = other as unknown as NDArray<B, Dd>;
+    const { shape, data } = compareTyped("lt", this.shape, this.data as unknown as DataOfRuntime, this.dtype, o.shape, o.data as unknown as DataOfRuntime, o.dtype);
+    return new NDArray<any, any>(shape, "bool", data);
+  }
+
+  /** dt4 V1: elementwise "less than or equal" — structural mirror of `gt`. */
+  le<const N extends number>(s: CompareScalarOperand<D, N>): NDArray<S, "bool">;
+  le<B extends Shape, Dd extends DType>(
+    other: Guard<CompareCheck<S, B, D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>, "bool">;
+  le<B extends Shape, Dd extends DType>(other: number | Guard<CompareCheck<S, B, D, Dd>, NDArray<B, Dd>>): NDArray<any, any> {
+    if (typeof other === "number") {
+      return new NDArray<any, any>(this.shape, "bool", compareScalarTyped("le", this.dtype, this.data as unknown as DataOfRuntime, other));
+    }
+    const o = other as unknown as NDArray<B, Dd>;
+    const { shape, data } = compareTyped("le", this.shape, this.data as unknown as DataOfRuntime, this.dtype, o.shape, o.data as unknown as DataOfRuntime, o.dtype);
+    return new NDArray<any, any>(shape, "bool", data);
+  }
+
+  /** dt4 V1: elementwise equality — structural mirror of `gt`. NaN is never
+   * equal to anything (including itself); `-0` equals `+0`. */
+  eq<const N extends number>(s: CompareScalarOperand<D, N>): NDArray<S, "bool">;
+  eq<B extends Shape, Dd extends DType>(
+    other: Guard<CompareCheck<S, B, D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>, "bool">;
+  eq<B extends Shape, Dd extends DType>(other: number | Guard<CompareCheck<S, B, D, Dd>, NDArray<B, Dd>>): NDArray<any, any> {
+    if (typeof other === "number") {
+      return new NDArray<any, any>(this.shape, "bool", compareScalarTyped("eq", this.dtype, this.data as unknown as DataOfRuntime, other));
+    }
+    const o = other as unknown as NDArray<B, Dd>;
+    const { shape, data } = compareTyped("eq", this.shape, this.data as unknown as DataOfRuntime, this.dtype, o.shape, o.data as unknown as DataOfRuntime, o.dtype);
+    return new NDArray<any, any>(shape, "bool", data);
+  }
+
+  /** dt4 V1: elementwise inequality — structural mirror of `gt`. NaN is not
+   * equal to anything, so `ne` is `true` wherever either operand is NaN. */
+  ne<const N extends number>(s: CompareScalarOperand<D, N>): NDArray<S, "bool">;
+  ne<B extends Shape, Dd extends DType>(
+    other: Guard<CompareCheck<S, B, D, Dd>, NDArray<B, Dd>>,
+  ): NDArray<OkShape<Broadcast<S, B>>, "bool">;
+  ne<B extends Shape, Dd extends DType>(other: number | Guard<CompareCheck<S, B, D, Dd>, NDArray<B, Dd>>): NDArray<any, any> {
+    if (typeof other === "number") {
+      return new NDArray<any, any>(this.shape, "bool", compareScalarTyped("ne", this.dtype, this.data as unknown as DataOfRuntime, other));
+    }
+    const o = other as unknown as NDArray<B, Dd>;
+    const { shape, data } = compareTyped("ne", this.shape, this.data as unknown as DataOfRuntime, this.dtype, o.shape, o.data as unknown as DataOfRuntime, o.dtype);
+    return new NDArray<any, any>(shape, "bool", data);
   }
 
   /** Reverse every axis (NumPy's `.T` generalized to N-D).
