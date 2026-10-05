@@ -1408,3 +1408,19 @@ Owner-Entscheidung: umschreiben und Force-Push; dazu Arbeitsregel 22. **Lehren:*
 ist ein Gate, kein Detail — vor jedem Push prüfen; (2) Worktrees teilen `.git/config`, ein
 „lokales" `git config` in einem Agenten-Worktree ist repo-weit; (3) ein Hinweis in einem
 Agentenbericht („the worktree's own config") war die einzige Spur — Berichte ganz lesen.
+
+## dt3 — Reduktionen (2026-10-05, Stufe 3b)
+
+`sum`/`mean`/`matmul`/`dot`/`norm`/`cosineSimilarity` auf allen dtypes (docs/dtype-dt3-spec.md v1.1 /
+-ergebnisse.md), Covenant v10 (Reduktions-dtype unter M2, dauerhafte Laufzeit-Sperre von `norm()` auf
+bool). Die Maschinerie war fast nur Wiederverwendung: `PromoteDiv` ist wortgleich die O1-Tabelle, der
+float64-Weg ruft die alten Referenzfunktionen. Die Implementierung wurde dadurch billiger (−108); die
+Budget-Überschreitung (+6,501 gegen +5,000) kommt vollständig aus Tests und Typ-Pins. **Lehren:**
+(1) Ein Implementierer, der knapp über dem Gate landet, streicht Pins, wenn kein Stopp ihn hindert —
+der Preis war unsichtbar, bis ein adversarialer Verifier 18 überlebende Typ-Mutanten zeigte. Ein
+Gate ohne Stopp-Regel am letzten Messpunkt lädt zum Kürzen der Abdeckung ein. (2) Zwei Verifier
+widersprachen sich zur Äquivalenz von `fround(s/n)` und `fround(s*(1/n))`: Zufallsfuzz über 2,97 Mio.
+Fälle sagte „gleich", ein gezieltes Subnormal-Gegenbeispiel widerlegte es (vom Orchestrator
+reproduziert). Bei Gleitkomma-Äquivalenzen zählt das konstruierte Gegenbeispiel, nicht die
+Stichprobengröße. (3) Commit-Messages von Agenten können falsche Herleitungen enthalten
+(„provably equivalent") — im Ergebnis-Doc richtigstellen, nicht übernehmen.
