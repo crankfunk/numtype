@@ -1,5 +1,5 @@
 # Covenant — NumType
-<!-- covenant:version 9 -->
+<!-- covenant:version 10 -->
 
 ## Invarianten
 
@@ -60,7 +60,15 @@
   (`Promote`, für die Division `PromoteDiv`) ist Teil der dtype-Maschinerie nach v8: eine Union als dtype eines Operanden degradiert
   das Ergebnis zu `DType` (kein Anspruch), bevor die Tabelle greift; Typ- und Laufzeit-Tabelle
   stammen aus einer Quelle.
-  Anker: `spike/src/dim.ts`, `spike/src/literal-arithmetic.ts`, `sym:Guard`, `sym:OkShape`, `sym:DTypeLock`, `sym:Promote`, `sym:PromoteDiv`
+  · **Präzisierung v10 — Reduktionen (Owner-entschieden 2026-10-05):** der Ergebnis-dtype einer
+  Reduktion (`ReduceDType`: float32 → float32, sonst float64) und die Promotion von
+  `matmul`/`dot`/`cosineSimilarity` (`PromoteDiv`, O1) sind dtype-Maschinerie nach v8/v9: `any` und
+  Unions degradieren zu `DType`, Typ- und Laufzeit-Tabelle stammen aus einer Quelle. Eine
+  NILADISCHE Op, die bool dauerhaft ablehnt (ab dt3 `norm()`), lehnt nur zur Laufzeit ab, mit
+  `BOOL_ARITHMETIC_MESSAGE`; sie gilt dauerhaft als „unvollständig, nicht falsch" und ist im
+  Quelltext an der Op dokumentiert — anders als die übergangsweisen Sperren nach v8 braucht sie
+  keinen FOLLOWUPS-Eintrag, weil nichts nachzuziehen ist.
+  Anker: `spike/src/dim.ts`, `spike/src/literal-arithmetic.ts`, `sym:Guard`, `sym:OkShape`, `sym:DTypeLock`, `sym:Promote`, `sym:PromoteDiv`, `sym:ReduceDType`
   · GESCHLOSSEN in Item 11 / S1 (2026-07-17): der `Literal|undefined`-Verstoß durch OPTIONALE
   Parameter (`sum`s `axis`/`keepdims`) ist behoben. Der `sum`-Overload-Umbau (Overloads nach
   Argument-Anzahl 0/1/2 — keine optionalen Parameter mehr in der Mehr-Argument-Form — plus
@@ -179,6 +187,13 @@
 - Keine transzendenten Ops ohne eigene Determinismus-Entscheidung (brechen Bit-Parität).
 
 ## Änderungslog
+- v10 (2026-10-05) · **Reduktionen (Scheibe dt3, docs/dtype-dt3-spec.md v1.1).** M2: Ergebnis-dtype
+  der Reduktionen (`ReduceDType`) und die Wiederverwendung von `PromoteDiv` für
+  `matmul`/`dot`/`cosineSimilarity` (O1) unter der dtype-Maschinerie; Anker `sym:ReduceDType`. Neu
+  die DAUERHAFTE Laufzeit-Sperre niladischer Ops auf bool (`norm()`; eine Compile-Sperre ist
+  mangels Argumentposition unmöglich, `this`-Parameter per O2 ausgeschlossen) — abgegrenzt von den
+  übergangsweisen Sperren nach v8, ohne FOLLOWUPS-Pflicht. Wortlaut vom Owner abgenommen 2026-10-05
+  (A3 = Option (a); der FOLLOWUPS-Halbsatz auf Empfehlung von Baustein 0 ergänzt und bestätigt).
 - v9 (2026-09-26) · **Promotion und elementweise Arithmetik (Scheibe dt2, docs/dtype-dt2-spec.md
   v1.1).** M3: benannte Ausnahme für die generische TS2769 bei Skalar-Fehlbenutzung einer dtype-Regel
   (gemessene Begründung: +8,495 für die einzige korrekte Alternative). M2: `Promote` unter der

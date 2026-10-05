@@ -155,7 +155,7 @@ Wortlaut bei (a):
 > keinen FOLLOWUPS-Eintrag, weil nichts nachzuziehen ist. Anker ergänzt: `sym:ReduceDType`.
 
 (v1.1: der Halbsatz zu FOLLOWUPS ist auf Empfehlung von Baustein 0 ergänzt — v10 ersetzt sonst das
-„übergangsweise" aus v8 stillschweigend. Owner-Bestätigung des ergänzten Wortlauts ausstehend.)
+„übergangsweise" aus v8 stillschweigend. Vom Owner bestätigt 2026-10-05.)
 
 ## Reihenfolge der Umsetzung (Arbeitsregel 21 — jeder Messpunkt ein eigener Commit)
 
