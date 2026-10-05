@@ -25,6 +25,7 @@ import type { MatMul } from "./matmul.ts";
 import type { ReduceAxis, Transpose } from "./reduce.ts";
 import type { ReshapeCheck } from "./reshape.ts";
 import {
+  anyAllTyped,
   argmaxRuntime,
   assertFloat64Locked,
   assertReshapeArgs,
@@ -66,6 +67,9 @@ import {
   sumTyped,
   topkRuntime,
   transposeDtyped,
+  WHERE_BOOL_MIX_MESSAGE,
+  WHERE_MASK_MESSAGE,
+  whereTyped,
   zerosData,
 } from "./runtime.ts";
 import type { IsDotFormStep, LiteralShapeProduct } from "./literal-arithmetic.ts";
@@ -439,6 +443,94 @@ type CompareScalarOperand<D extends DType, N extends number> = IsUnion<D> extend
   : D extends "bool"
     ? Guard<ShapeError<typeof COMPARE_BOOL_MESSAGE>, N>
     : N;
+
+/**
+ * dt4 V2 (docs/dtype-dt4-spec.md): three-way NumPy broadcast of `where`'s
+ * `(mask, a, b)` shapes, pairwise — `(mask, a)` first, then `(., b)`. The
+ * `ShapeError` of the FIRST failing pair wins, so a conflict only the
+ * combination of all three shapes produces (each pair is fine, the triple
+ * is not) names the intermediate `mask (+) a` shape — the runtime
+ * (`whereTyped`) folds in the same order and says the same. `[R] extends
+ * [Shape]` guards the fallback for a non-`Shape` intermediate (rank-
+ * unknowable inputs): no claim, `readonly Dim[]`, never a false rejection. */
+type Broadcast3<M extends Shape, A extends Shape, B extends Shape> = Broadcast<M, A> extends infer R
+  ? [R] extends [ShapeError<string>]
+    ? R
+    : [R] extends [Shape]
+      ? Broadcast<R, B>
+      : readonly Dim[]
+  : never;
+
+/** dt4 V2: the mask verdict of `WhereCheck` — bool is the only accepted mask
+ * dtype; `any` and unions give no claim (`true`, runtime backstop), same gate
+ * order as every dtype consumer (Arbeitsregel 3). */
+type WhereMaskDType<Dm extends DType> = IsAnyDType<Dm> extends true
+  ? true
+  : IsUnion<Dm> extends true
+    ? true
+    : Dm extends "bool"
+      ? true
+      : ShapeError<typeof WHERE_MASK_MESSAGE>;
+
+/** dt4 V2 (A5): the RESULT dtype of `where`'s value operands, or its
+ * `ShapeError`. `any`/unions on either side degrade to the wide `DType` (no
+ * claim, G1 class); bool x bool stays bool (pure selection); a bool/numeric
+ * mix is `WHERE_BOOL_MIX_MESSAGE`; numeric x numeric reads `PROMOTE_NUMERIC`
+ * via `typeof` — the same table `Promote` and `add` use, no second table (the
+ * gates above make the indexed-access leaf safe: it never sees `any` or a
+ * union, G1; measured cheaper than going through `Promote<Da, Db>`, which
+ * would repeat those gates). */
+type WhereDType<Da extends DType, Db extends DType> = IsAnyDType<Da> extends true
+  ? DType
+  : IsAnyDType<Db> extends true
+    ? DType
+    : IsUnion<Da> extends true
+      ? DType
+      : IsUnion<Db> extends true
+        ? DType
+        : Da extends "bool"
+          ? Db extends "bool"
+            ? "bool"
+            : ShapeError<typeof WHERE_BOOL_MIX_MESSAGE>
+          : Db extends "bool"
+            ? ShapeError<typeof WHERE_BOOL_MIX_MESSAGE>
+            : (typeof PROMOTE_NUMERIC)[Da & NumericDType][Db & NumericDType];
+
+/**
+ * dt4 V2: the whole verdict of `NDArray.where` in ONE alias (COVENANT M2 v11,
+ * anchor `sym:WhereCheck`; exported so it can be pinned directly, A4): the
+ * three-way broadcast `ShapeError` first, then the mask dtype
+ * (`WHERE_MASK_MESSAGE`), then the `a`/`b` pair — either a `ShapeError`
+ * (`WHERE_BOOL_MIX_MESSAGE`) or the RESULT dtype (`WhereDType`). Order
+ * shape -> mask -> a/b, identical to `whereTyped` at runtime. The three
+ * per-argument guards below and the return type all derive from this one
+ * alias (one cached instantiation), so verdict and attribution cannot drift. */
+export type WhereCheck<Sm extends Shape, Dm extends DType, Sa extends Shape, Da extends DType, Sb extends Shape, Db extends DType> =
+  Broadcast3<Sm, Sa, Sb> extends ShapeError<string>
+    ? Broadcast3<Sm, Sa, Sb>
+    : WhereMaskDType<Dm> extends ShapeError<string>
+      ? WhereMaskDType<Dm>
+      : WhereDType<Da, Db>;
+
+/** dt4 V2 (v1.1, Baustein 0 D1; M3): a `where` rejection stands at the
+ * argument that is wrong. The mask argument carries ONLY the mask verdict —
+ * and only when the shape check passed (a shape error is `WhereCheck`'s
+ * first answer, so the mask verdict never shows then). */
+type WhereMaskArg<V> = [V] extends [ShapeError<typeof WHERE_MASK_MESSAGE>] ? V : true;
+
+/** dt4 V2: `a` carries the bool/numeric-mix error when `a` is the bool one
+ * (so it only ever shows after shape and mask passed). */
+type WhereAArg<V, Da extends DType> = [V] extends [ShapeError<typeof WHERE_BOOL_MIX_MESSAGE>] ? ([Da] extends ["bool"] ? V : true) : true;
+
+/** dt4 V2: `b` carries the shape verdict and the mix error when `b` is the
+ * bool one; never the mask verdict (that stands at the mask argument). */
+type WhereBArg<V, Da extends DType> = [V] extends [ShapeError<typeof WHERE_MASK_MESSAGE>]
+  ? true
+  : [V] extends [ShapeError<typeof WHERE_BOOL_MIX_MESSAGE>]
+    ? [Da] extends ["bool"]
+      ? true
+      : V
+    : V;
 
 /**
  * Op-Scheibe W4 (docs/op-w4-stack-spec.md, D2/F1/F2): the `NDArray` ->
@@ -1011,6 +1103,57 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
     return new NDArray<OkShape<StackShape<RowShapesOf<Rows>>>>(shape as unknown as OkShape<StackShape<RowShapesOf<Rows>>>, "float64", data);
   }
 
+  /** dt4 V2 (docs/dtype-dt4-spec.md): `NDArray.where(mask, a, b)` — NumPy's
+   * three-argument `np.where`: element-wise `mask ? a : b` over the three-way
+   * NumPy broadcast of the three shapes. STATIC and arrays-only (A3(iii)):
+   * the mask is an argument, so it gets a compile-time check AT ITS OWN
+   * argument; a scalar `a`/`b` (`where(m, a, 0)`) is not offered (FOLLOWUPS).
+   *
+   * Result dtype (A5): bool x bool -> bool (pure selection — in dt4 the way
+   * to combine masks), numeric x numeric -> `Promote<Da, Db>` (float32 only
+   * for float32 x float32, int32 stays int32 for int32 x int32, everything
+   * else float64). The mask must be bool, else `WHERE_MASK_MESSAGE`; a
+   * bool/numeric mix in `a`/`b` is `WHERE_BOOL_MIX_MESSAGE` — both word-
+   * identical at compile time and at runtime (`WhereCheck`/`whereTyped`).
+   *
+   * Every rejection stands at the ARGUMENT that is wrong (M3, `WhereCheck`'s
+   * per-argument guards derive from one verdict) in the order shape -> mask
+   * -> a/b: the mask argument carries the mask error, `a` the mix error when
+   * `a` is the bool one, `b` the three-way SHAPE error and the mix error when
+   * `b` is the bool one. A conflict only all three shapes produce together
+   * names the intermediate `mask (+) a` shape (compile time and runtime
+   * alike). With `number` dims some guaranteed-failing triples compile and
+   * throw at runtime (incomplete, never a false rejection). `any`/union
+   * dtypes give no claim. Like `add`/`div`, a generic helper with open `S`/`D`
+   * type parameters is rejected (known limit).
+   *
+   * Data movement, no arithmetic (M1 v6): values are selected, not computed.
+   * Equal operand dtypes copy as-is and keep NaN payloads bit for bit — the
+   * float32 case through `Uint32Array` views (`whereTyped`), since a plain
+   * assignment into a `Float32Array` quiets a signalling NaN. A widening pair
+   * (float32/int32 with float64) converts exactly. */
+  static where<Sm extends Shape, Dm extends DType, Sa extends Shape, Da extends DType, Sb extends Shape, Db extends DType>(
+    mask: Guard<WhereMaskArg<WhereCheck<Sm, Dm, Sa, Da, Sb, Db>>, NDArray<Sm, Dm>>,
+    a: Guard<WhereAArg<WhereCheck<Sm, Dm, Sa, Da, Sb, Db>, Da>, NDArray<Sa, Da>>,
+    b: Guard<WhereBArg<WhereCheck<Sm, Dm, Sa, Da, Sb, Db>, Da>, NDArray<Sb, Db>>,
+  ): NDArray<OkShape<Broadcast3<Sm, Sa, Sb>>, OkDType<WhereDType<Da, Db>>> {
+    const m = mask as unknown as NDArray<Sm, Dm>;
+    const x = a as unknown as NDArray<Sa, Da>;
+    const y = b as unknown as NDArray<Sb, Db>;
+    const { shape, data, resultDtype } = whereTyped(
+      m.shape,
+      m.data as unknown as DataOfRuntime,
+      m.dtype,
+      x.shape,
+      x.data as unknown as DataOfRuntime,
+      x.dtype,
+      y.shape,
+      y.data as unknown as DataOfRuntime,
+      y.dtype,
+    );
+    return new NDArray<any, any>(shape, resultDtype, data);
+  }
+
   /** Explicit, opt-in performance backends (Item 10 — Backend-Wahl-API,
    * docs/item-10-backend-api-spec.md, D1). `NDArray` itself stays the
    * synchronous, browser-safe JS default and carries the USP (compile-time
@@ -1518,6 +1661,52 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
     const o = other as unknown as NDArray<B, Dd>;
     const { shape, data } = compareTyped("ne", this.shape, this.data as unknown as DataOfRuntime, this.dtype, o.shape, o.data as unknown as DataOfRuntime, o.dtype);
     return new NDArray<any, any>(shape, "bool", data);
+  }
+
+  /** dt4 V3 (docs/dtype-dt4-spec.md): `true` iff ANY element is non-zero —
+   * a bool reduction in the shape `sum` would give (same three overloads,
+   * same `ReduceAxis` guard: an out-of-range axis is a compile error at the
+   * argument, rank 0 for the 0-arg form, `keepdims` keeps the reduced axis as
+   * size 1). Works on EVERY dtype (A3(ii)), not only bool masks: an element is
+   * true iff `x !== 0`, NaN is true, `-0` is false — exactly
+   * `astype("bool")` (D3), like NumPy. size-0: `any` is false. */
+  any(): NDArray<OkShape<ReduceAxis<S, undefined, false>>, "bool">;
+  any<const Axis extends number | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, false>>, "bool">;
+  any<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims: KeepDims,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>, "bool">;
+  any<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
+    axis?: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims?: KeepDims,
+  ): NDArray<any, any> {
+    const axisNum = axis as unknown as Axis | undefined;
+    const { shape, data } = anyAllTyped("any", this.shape, this.data as unknown as DataOfRuntime, axisNum);
+    const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : shape;
+    return new NDArray<any, any>(outShape, "bool", data);
+  }
+
+  /** dt4 V3: `true` iff EVERY element is non-zero — structural mirror of
+   * `any` (same overloads, guard, dtypes and truthiness rule). size-0: `all`
+   * is true (NumPy). */
+  all(): NDArray<OkShape<ReduceAxis<S, undefined, false>>, "bool">;
+  all<const Axis extends number | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, false>>, "bool">;
+  all<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims: KeepDims,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>, "bool">;
+  all<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
+    axis?: Guard<ReduceAxis<S, Axis>, Axis>,
+    keepdims?: KeepDims,
+  ): NDArray<any, any> {
+    const axisNum = axis as unknown as Axis | undefined;
+    const { shape, data } = anyAllTyped("all", this.shape, this.data as unknown as DataOfRuntime, axisNum);
+    const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : shape;
+    return new NDArray<any, any>(outShape, "bool", data);
   }
 
   /** Reverse every axis (NumPy's `.T` generalized to N-D).

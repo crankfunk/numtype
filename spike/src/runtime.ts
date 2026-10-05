@@ -2228,3 +2228,123 @@ export function compareTyped(
   }
   return { shape: outShape, data: out };
 }
+
+// ---------------------------------------------------------------------------
+// dt4, Commit B — V2 `where` and V3 `any`/`all` (docs/dtype-dt4-spec.md).
+// Appended after the comparison block above; nothing earlier is touched.
+// Kernel-less reference functions like the comparisons (COVENANT M1 v5).
+// ---------------------------------------------------------------------------
+
+/** dt4 V2: the mask of `NDArray.where` must be bool. No interpolation, so one
+ * `const` for both layers: `WhereCheck` (ndarray.ts) takes it via `typeof`,
+ * `whereTyped` throws it (M3, single source). */
+export const WHERE_MASK_MESSAGE = "where: mask must have dtype 'bool' — use a comparison or astype(\"bool\") first";
+
+/** dt4 V2 (A5): `a` and `b` of `where` mix bool with a numeric dtype. bool x
+ * bool is a pure selection (bool result), numeric x numeric promotes; the
+ * mixed pair has no sensible result dtype and is not the arithmetic case
+ * (`BOOL_ARITHMETIC_MESSAGE` would read wrong), so it has its own message. */
+export const WHERE_BOOL_MIX_MESSAGE = "where: a and b mix dtype 'bool' with a numeric dtype — use astype() to convert first";
+
+/**
+ * dt4 V2 (A5): result dtype of `where`'s two value operands — bool x bool ->
+ * bool (selection only), numeric x numeric -> `promoteDType` (the SAME
+ * `PROMOTE_NUMERIC` table `add` reads; no second encoding), a bool/numeric
+ * mix throws `WHERE_BOOL_MIX_MESSAGE`.
+ */
+export function whereResultDType(a: DType, b: DType): DType {
+  if (a === "bool" && b === "bool") return "bool";
+  if (a === "bool" || b === "bool") throw new Error(WHERE_BOOL_MIX_MESSAGE);
+  return promoteDType(a, b);
+}
+
+/**
+ * dt4 V2: `where(mask, a, b)` — three-way NumPy broadcast of the three
+ * shapes, then per output element `mask ? a : b`. Check order = compile-time
+ * order (`WhereCheck`): the SHAPE error first (pairwise `(mask, a)`, then
+ * `(., b)` — a conflict that only the combination of all three shapes
+ * produces names the intermediate mask (+) a shape, exactly like the type),
+ * the mask dtype second, the `a`/`b` dtype pair third. The mask is bool, so
+ * "true" is any non-zero byte.
+ *
+ * Values move WITHOUT arithmetic (M1 v6 data-movement clause, NaN payloads
+ * included). Where the result dtype equals both operand dtypes the values are
+ * copied as-is; the `float32` case goes through `Uint32Array` views over the
+ * same buffers, because an element-wise assignment into a `Float32Array`
+ * turns a signalling NaN into a quiet one (`0x7fa00001` -> `0x7fe00001`,
+ * measured on V8). float64, int32 and bool keep their bits through plain
+ * assignment. A float32 result only ever arises from two float32 operands
+ * (`PROMOTE_NUMERIC`), so no value needs `fround` here. A widening pair
+ * (float32 or int32 with float64) is converted by the assignment itself,
+ * exactly.
+ */
+export function whereTyped(
+  mShape: readonly number[],
+  mData: DataOfRuntime,
+  mDtype: DType,
+  aShape: readonly number[],
+  aData: DataOfRuntime,
+  aDtype: DType,
+  bShape: readonly number[],
+  bData: DataOfRuntime,
+  bDtype: DType,
+): { shape: number[]; data: DataOfRuntime; resultDtype: DType } {
+  const outShape = runtimeBroadcastShape(runtimeBroadcastShape(mShape, aShape), bShape);
+  if (mDtype !== "bool") throw new Error(WHERE_MASK_MESSAGE);
+  const resultDtype = whereResultDType(aDtype, bDtype);
+  const rank = outShape.length;
+
+  const mAligned = alignToRank(mShape, computeStrides(mShape), rank);
+  const aAligned = alignToRank(aShape, computeStrides(aShape), rank);
+  const bAligned = alignToRank(bShape, computeStrides(bShape), rank);
+  const mEff = effectiveStrides(mAligned.shape, mAligned.strides);
+  const aEff = effectiveStrides(aAligned.shape, aAligned.strides);
+  const bEff = effectiveStrides(bAligned.shape, bAligned.strides);
+
+  const outStrides = computeStrides(outShape);
+  const size = product(outShape);
+  const out = zerosData(resultDtype, size);
+  const asBits = (d: DataOfRuntime): DataOfRuntime | Uint32Array => (resultDtype === "float32" ? new Uint32Array(d.buffer, d.byteOffset, d.length) : d);
+  const aSrc = asBits(aData);
+  const bSrc = asBits(bData);
+  const dst = asBits(out);
+
+  for (let flat = 0; flat < size; flat++) {
+    const idx = unravel(flat, outShape, outStrides);
+    let mOff = 0;
+    let aOff = 0;
+    let bOff = 0;
+    for (let i = 0; i < rank; i++) {
+      const ix = idx[i] ?? 0;
+      mOff += ix * (mEff[i] ?? 0);
+      aOff += ix * (aEff[i] ?? 0);
+      bOff += ix * (bEff[i] ?? 0);
+    }
+    dst[flat] = (mData[mOff] ?? 0) !== 0 ? (aSrc[aOff] ?? 0) : (bSrc[bOff] ?? 0);
+  }
+  return { shape: outShape, data: out, resultDtype };
+}
+
+/**
+ * dt4 V3: `any`/`all` over truthiness for EVERY dtype (A3(ii)): an element is
+ * true iff it is `!== 0` (NaN is true, `-0` is false — identical to
+ * `astype("bool")`, D3). Composed from the BESTEHENDE `sumRuntime` over the
+ * 0/1 truthiness flags (a float64 count, exact), so the axis normalization
+ * and the thrown "reduce: axis ..." message are `sum`'s own, word for word.
+ * `any` = count > 0, `all` = count equals the reduced length. size-0: `any`
+ * is false, `all` is true (NumPy). Result: a `Uint8Array` of 0/1 in the
+ * reduced shape (`sumRuntime`'s shape; keepdims is applied by the caller via
+ * `keepDimsShape`, as for `sum`).
+ */
+export function anyAllTyped(kind: "any" | "all", shape: readonly number[], data: DataOfRuntime, axis: number | undefined): { shape: number[]; data: Uint8Array } {
+  const truthy = new Float64Array(data.length);
+  for (let i = 0; i < data.length; i++) truthy[i] = (data[i] ?? 0) !== 0 ? 1 : 0;
+  const summed = sumRuntime(shape, truthy, axis);
+  const n = axis === undefined ? product(shape) : (shape[axis < 0 ? shape.length + axis : axis] ?? 1);
+  const out = new Uint8Array(summed.data.length);
+  for (let i = 0; i < out.length; i++) {
+    const count = summed.data[i] ?? 0;
+    out[i] = kind === "any" ? (count > 0 ? 1 : 0) : count === n ? 1 : 0;
+  }
+  return { shape: summed.shape, data: out };
+}
