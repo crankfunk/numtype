@@ -1772,3 +1772,113 @@ export function scalarDivTyped(dtype: DType, data: DataOfRuntime, s: number): Da
   for (let i = 0; i < data.length; i++) out[i] = (data[i] ?? 0) / s;
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// dt3 (docs/dtype-dt3-spec.md), Commit A — R1 (REDUCE_DTYPE) + R2 (sum/mean
+// on every dtype). Appended strictly after all pre-existing content (frozen-
+// baseline discipline): `sumRuntime`/`meanRuntime` above stay byte-unchanged
+// and are the float64 oracle AND the float64 compute path of the dispatchers
+// below; the float32 compute path is its own function (it cannot reuse them —
+// they accumulate in float64).
+// ---------------------------------------------------------------------------
+
+/**
+ * E3 (dt3 R1): the single source of truth for a REDUCTION's result dtype
+ * (`sum`/`mean`): float32 stays float32, float64/int32/bool all widen to
+ * float64 (bool counts / takes the proportion in float64, int32 sums exactly
+ * in float64). The compile-time `ReduceDType<D>` (ndarray.ts) reads this SAME
+ * object via `typeof` (mirrors `PROMOTE_NUMERIC`/`PROMOTE_DIV`), and the
+ * `NDArray` runtime reads it for the result's `dtype` field — type and
+ * runtime cannot drift apart (M2 "single source").
+ */
+export const REDUCE_DTYPE = { float64: "float64", float32: "float32", int32: "float64", bool: "float64" } as const;
+
+/** Exact widening of any dtype's data to float64 (int32 → f64 exact, bool →
+ * 0/1). A `Float64Array` is returned as-is, NOT copied: the float64 compute
+ * path stays byte-identical to the pre-dt3 behavior for float64 receivers. */
+function toFloat64(data: DataOfRuntime): Float64Array {
+  return data instanceof Float64Array ? data : Float64Array.from(data);
+}
+
+/**
+ * D8 (dt3 R2): float32 compute path of `sumRuntime` — `acc = fround(acc +
+ * x)`, strictly ascending along the reduced axis, seed `+0`, one accumulator
+ * per output element, into a `Float32Array`. The f64 addition of two float32
+ * values followed by `Math.fround` equals the correctly-rounded float32 sum
+ * (float64 has well over 2p+2 bits for p = 24), so this is exactly what a
+ * float32 add would produce. The axis normalization/validation and the
+ * thrown message are copied word for word from `sumRuntime` (the original
+ * stays byte-unchanged, so the f32 path cannot delegate); the test suite
+ * pins message equality per error.
+ */
+function sumF32Runtime(shape: readonly number[], data: Float32Array, axis: number | undefined): { shape: number[]; data: Float32Array } {
+  if (axis === undefined) {
+    let total = 0;
+    for (let i = 0; i < data.length; i++) total = Math.fround(total + (data[i] ?? 0));
+    return { shape: [], data: Float32Array.from([total]) };
+  }
+
+  const rank = shape.length;
+  const normAxis = axis < 0 ? rank + axis : axis;
+  if (normAxis < 0 || normAxis >= rank) {
+    throw new Error(`reduce: axis ${axis} is out of range for shape [${shape.join(",")}] (rank ${rank})`);
+  }
+
+  const outShape = [...shape.slice(0, normAxis), ...shape.slice(normAxis + 1)];
+  const strides = computeStrides(shape);
+  const outStrides = computeStrides(outShape);
+  const outSize = product(outShape);
+  const out = new Float32Array(outSize);
+  const axisDim = shape[normAxis] ?? 1;
+  const axisStride = strides[normAxis] ?? 0;
+
+  for (let outFlat = 0; outFlat < outSize; outFlat++) {
+    const idx = unravel(outFlat, outShape, outStrides);
+    let baseOffset = 0;
+    let outAxis = 0;
+    for (let inAxis = 0; inAxis < rank; inAxis++) {
+      if (inAxis === normAxis) continue;
+      baseOffset += (idx[outAxis] ?? 0) * (strides[inAxis] ?? 0);
+      outAxis++;
+    }
+    let total = 0;
+    for (let a = 0; a < axisDim; a++) {
+      total = Math.fround(total + (data[baseOffset + a * axisStride] ?? 0));
+    }
+    out[outFlat] = total;
+  }
+  return { shape: outShape, data: out };
+}
+
+/**
+ * dt3 R2: dtype-dispatching `sum`. float32 → `sumF32Runtime` (result
+ * `Float32Array`); float64/int32/bool → the BESTEHENDE `sumRuntime` on the
+ * exactly-widened data (result `Float64Array`). Result class matches
+ * `REDUCE_DTYPE[dtype]`. int32 sums are exact in float64 while every partial
+ * sum stays within 2^53 (safe up to 2^22 elements); beyond that they round
+ * deterministically, never wrap.
+ */
+export function sumTyped(dtype: DType, shape: readonly number[], data: DataOfRuntime, axis: number | undefined): { shape: number[]; data: DataOfRuntime } {
+  if (dtype === "float32") return sumF32Runtime(shape, data as Float32Array, axis);
+  return sumRuntime(shape, toFloat64(data), axis);
+}
+
+/**
+ * dt3 R2: dtype-dispatching `mean`. float64/int32/bool → the BESTEHENDE
+ * `meanRuntime` on the exactly-widened data (bool → proportion of true).
+ * float32 → `fround(sum32 / n)`: the float32 sum divided by the exact integer
+ * `n` in float64, then rounded once to float32 (never `sum * (1/n)`, same
+ * precedence as `meanRuntime`; reproducible in WASM as `f64.div` +
+ * `f32.demote`). size-0 → `0/0 → NaN`, as in float64. Axis errors are
+ * `sumF32Runtime`'s own, identical to `sumRuntime`'s.
+ */
+export function meanTyped(dtype: DType, shape: readonly number[], data: DataOfRuntime, axis: number | undefined): { shape: number[]; data: DataOfRuntime } {
+  if (dtype === "float32") {
+    const summed = sumF32Runtime(shape, data as Float32Array, axis);
+    const n = axis === undefined ? product(shape) : (shape[axis < 0 ? shape.length + axis : axis] ?? 1);
+    const out = new Float32Array(summed.data.length);
+    for (let i = 0; i < out.length; i++) out[i] = Math.fround((summed.data[i] ?? 0) / n);
+    return { shape: summed.shape, data: out };
+  }
+  return meanRuntime(shape, toFloat64(data), axis);
+}

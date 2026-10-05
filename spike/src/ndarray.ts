@@ -44,7 +44,7 @@ import {
   itemRuntime,
   keepDimsShape,
   matmulRuntime,
-  meanRuntime,
+  meanTyped,
   normalizeSliceSpecs,
   normSqRuntime,
   type NumericDType,
@@ -52,6 +52,7 @@ import {
   product,
   PROMOTE_DIV,
   PROMOTE_NUMERIC,
+  REDUCE_DTYPE,
   scalarArithTyped,
   scalarDivTyped,
   scalarElementwiseRuntime,
@@ -59,7 +60,7 @@ import {
   type SliceSpec,
   sqrtRuntime,
   stackRuntime,
-  sumRuntime,
+  sumTyped,
   topkRuntime,
   transposeDtyped,
   zerosData,
@@ -260,6 +261,20 @@ export type PromoteDiv<A extends DType, B extends DType> = IsAnyDType<A> extends
  * union-degraded ACCEPT case — `DType` itself already satisfies `extends
  * DType`). */
 export type OkDType<P> = P extends ShapeError<string> ? never : P extends DType ? P : never;
+
+/** dt3 R1 (E3): result dtype of a reduction (`sum`/`mean`) — float32 stays
+ * float32, float64/int32/bool widen to float64. Reads `REDUCE_DTYPE`
+ * (runtime.ts) via `typeof`, the same single-source pattern as `PromoteDiv`
+ * above, with the same gate order: `IsAnyDType` FIRST (an `any` receiver
+ * would otherwise collapse the indexed-access leaf to `any`, G1), then
+ * `IsUnion` — `any` and unions degrade to `DType` (no claim). Unlike
+ * `PromoteDiv` there is no bool rejection: bool is a valid reduction
+ * input (`sum` counts, `mean` takes the proportion of true). */
+export type ReduceDType<D extends DType> = IsAnyDType<D> extends true
+  ? DType
+  : IsUnion<D> extends true
+    ? DType
+    : (typeof REDUCE_DTYPE)[D];
 
 /** dt2 P3 (D6): does `N`'s own literal template form PROVE it non-integer
  * via the dot-form pattern (`2.5`, never `2.5e0`)? Built from the exported
@@ -1225,32 +1240,34 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * all-ones shape. keepdims is pure shape metadata: the summed DATA is
    * byte-identical to the non-keepdims result (Kern 09).
    *
-   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt3 gives
-   * `sum` real dtype support, E3: int32/bool widen to float64). The 0-arg
-   * overload is NILADIC (same disclosed gap as `norm()` below — no argument
-   * position to hang a compile-time `DTypeLock` on); the axis-bearing
-   * overloads combine `DTypeLock` into their existing `ReduceAxis` `Guard`. */
-  sum(): NDArray<OkShape<ReduceAxis<S, undefined, false>>>;
+   * dt3 (R1/R2, E3): works on every dtype, result dtype `ReduceDType<D>`
+   * (float32 → float32; float64, int32 and bool → float64 — bool COUNTS the
+   * true elements). Float64/int32/bool accumulate in float64 through the
+   * original `sumRuntime` (int32 exactly while every partial sum stays within
+   * 2^53, safe up to 2^22 elements; beyond that rounded deterministically,
+   * never wrapped). float32 accumulates in float32 (`acc = fround(acc + x)`,
+   * strictly ascending, seed `+0`) — a plain ascending accumulator, NOT
+   * pairwise summation (the Bit-Identity law): a float32 sum saturates once
+   * the running total reaches 2^24, so 2^24 + 8 ones sum to 16,777,216. An
+   * empty receiver or size-0 axis sums to 0 in every dtype. The 0-arg overload
+   * has no dtype restriction left to hang a `Guard` on; the axis overloads are
+   * guarded for shape only (`ReduceAxis`), as before dt1. */
+  sum(): NDArray<OkShape<ReduceAxis<S, undefined, false>>, ReduceDType<D>>;
   sum<const Axis extends number | undefined>(
-    axis: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "sum">, Axis>,
-  ): NDArray<OkShape<ReduceAxis<S, Axis, false>>>;
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, false>>, ReduceDType<D>>;
   sum<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
-    axis: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "sum">, Axis>,
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
     keepdims: KeepDims,
-  ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>;
+  ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>, ReduceDType<D>>;
   sum<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
-    axis?: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "sum">, Axis>,
+    axis?: Guard<ReduceAxis<S, Axis>, Axis>,
     keepdims?: KeepDims,
-  ): NDArray<any> {
-    assertFloat64Locked("sum", this.dtype);
+  ): NDArray<any, any> {
     const axisNum = axis as unknown as Axis | undefined;
-    const { shape, data } = sumRuntime(this.shape, this.data as unknown as Float64Array, axisNum);
+    const { shape, data } = sumTyped(this.dtype, this.shape, this.data as unknown as DataOfRuntime, axisNum);
     const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : shape;
-    return new NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>(
-      outShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
-      "float64",
-      data,
-    );
+    return new NDArray<any, any>(outShape, REDUCE_DTYPE[this.dtype], data);
   }
 
   /** 1-D inner product (Kern 07): `a.dot(b)` for two rank-1 arrays of equal
@@ -1545,31 +1562,31 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * this is a deliberate, disclosed divergence between the two reductions,
    * not an oversight.
    *
-   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt3, E3:
-   * int32/bool widen to float64). The 0-arg overload is NILADIC (same
-   * disclosed gap as `norm()`); the axis-bearing overloads combine
-   * `DTypeLock` into their existing `ReduceAxis` `Guard`. */
-  mean(): NDArray<OkShape<ReduceAxis<S, undefined, false>>>;
+   * dt3 (R1/R2, E3): works on every dtype, result dtype `ReduceDType<D>`
+   * (float32 → float32; float64, int32 and bool → float64 — bool takes the
+   * PROPORTION of true elements). Float64/int32/bool: `sumRuntime`'s float64
+   * sum divided by `n` (original `meanRuntime`). float32: `fround(sum32 / n)`
+   * — the ascending float32 sum (see `sum`, including its saturation at 2^24:
+   * 2^24 + 8 ones give mean 0.99999952) divided by the exact integer `n` in
+   * float64 and rounded once to float32. The 0-arg overload has no dtype
+   * restriction left to hang a `Guard` on; the axis overloads are guarded for
+   * shape only (`ReduceAxis`), as before dt1. */
+  mean(): NDArray<OkShape<ReduceAxis<S, undefined, false>>, ReduceDType<D>>;
   mean<const Axis extends number | undefined>(
-    axis: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "mean">, Axis>,
-  ): NDArray<OkShape<ReduceAxis<S, Axis, false>>>;
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, false>>, ReduceDType<D>>;
   mean<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
-    axis: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "mean">, Axis>,
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
     keepdims: KeepDims,
-  ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>;
+  ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>, ReduceDType<D>>;
   mean<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
-    axis?: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "mean">, Axis>,
+    axis?: Guard<ReduceAxis<S, Axis>, Axis>,
     keepdims?: KeepDims,
-  ): NDArray<any> {
-    assertFloat64Locked("mean", this.dtype);
+  ): NDArray<any, any> {
     const axisNum = axis as unknown as Axis | undefined;
-    const { shape, data } = meanRuntime(this.shape, this.data as unknown as Float64Array, axisNum);
+    const { shape, data } = meanTyped(this.dtype, this.shape, this.data as unknown as DataOfRuntime, axisNum);
     const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : shape;
-    return new NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>(
-      outShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
-      "float64",
-      data,
-    );
+    return new NDArray<any, any>(outShape, REDUCE_DTYPE[this.dtype], data);
   }
 
   /** Elementwise square root (Op-Scheibe W3, docs/op-w3-sqrt-spec.md, D1/D2):
