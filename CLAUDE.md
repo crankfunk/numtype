@@ -28,7 +28,7 @@ NumPy-like n-dimensional array library: TypeScript type-level shape checking + f
 
 NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor errors — gradual, with a `number`-dim escape hatch for dynamic shapes. Consumer-scale is measured (Scale-Probe 2026-07-21); **API-surface scale is still unproven** — that is the open research question.
 
-## Status (IST, 2026-10-14)
+## Status (IST, 2026-10-14, nach infra-02)
 
 - **npm:** `numtype@0.3.0` (2026-09-24, „parity and polish"; davor 0.2.0 am 2026-07-21). Registry-Tarball nach dem Publish verifiziert (Integrität, Inhalt), Beispiel läuft unverändert auf 0.3.0. Tags `v0.1.0`/`v0.1.1`/`v0.2.0`/`v0.3.0`, Apache-2.0, Repo public, Rulesets `protect-main` + `protect-release-tags`.
 - **Aktive Roadmap (Owner-entschieden 2026-09-23, docs/roadmap.md „Roadmap ab 2026-09-23"):**
@@ -41,7 +41,7 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 ## Aktuelle Pins & Gates (IST; Historie im Archiv/Log)
 
 - **Freeze-Hash** (Clean-Rebuild, SHA256 `spike/src/wasm/numtype_core.wasm`): `2a54d9fdba55e4e88a9d54cb3b01e111c2717abf13017f778b90accd5cff87e4` (seit S5/topk). Threads-Artefakt bewusst ohne Pin — test:threaded beweist Bit-Identität. CI-Gate `check:freeze`; die Byte-Identität ist cross-host (macOS-arm64 = linux-x64).
-- **check:diag** Root **264,285 @ 140** · **stress 123,138 @ 82** · **browser 2,142 @ 75** (seit dt4 2026-10-14: Root Δ+13,966, Gate +9,000 überschritten, vom Owner akzeptiert) (stress/browser ungated, `pnpm check` compoundet alle drei).
+- **check:diag** Root **246,763 @ 140** · **dtype 67,108 @ 81** · **stress 123,138 @ 82** · **browser 2,142 @ 75** (seit infra-02 2026-10-14: dtype-Typ-Pins in eigenem Korpus `spike/tests-dtype/`, Root Δ−17,522; Root gegated, dtype/stress/browser nur gepinnt, `pnpm check` compoundet alle vier). Neue dtype-Pins gehören nach `spike/tests-dtype/`.
 - **bench:editor** W1–W8 exact-match: `{w1 44,996, w2 46,916, w3 77,673, w4 45,059, w5 50,695, w6 51,312, w7 43,909, w8 51,982}` (seit dt4; Hover-Erwartungen tragen jetzt den dtype; „editor-Δ = stress-Δ" ist Faustregel, kein Gesetz); Latenz am 2x-Ceiling.
 - **Tests:** test:core 1668 · test:resident 6155+2 · test:threaded 139 · test:browser 4 · test:package 3 + zwei Konsumenten-Typ-Smokes (`consumer` skipLibCheck:true, `consumer-strict` skipLibCheck:false ohne @types/node) · cargo 222+1 · test:example (Registry-Install + 8 asserted Queries).
 - Alle Werte am 2026-09-23 im frischen Worktree reproduziert (Toolchain: node 24.16, pnpm 11.6, tsc 7.0.2, rustc 1.95.0, nightly-2026-07-09).
@@ -50,7 +50,7 @@ NumType is to NumPy what TypeScript is to JavaScript: shape errors become editor
 
 - Der Instantiation-Counter ist **CHECK-ORDER-abhängig** — Pins sind nur für ein fixes File-Set exakt. Datei hinzufügen/umbenennen verschiebt um **bis zu ±≈7,000** (Order-Noise) → per empty-then-fill dekomponieren. Datei-EDITS können echte Kosten sein → bisektieren mit gleichlanger Kommentar-Kontrollprobe.
 - Weitere Mechanismen: geteilte **Klassen-Surface** rippelt in alle Korpora (generische Member/Overloads); **`keyof`-getriebene Alias-Neuauflösung** (`Omit`/`Pick` über ein wachsendes Interface: +N pro Member, uniform — S0/D10 hat ihn in threaded.ts umgangen); **Super-Additivität** innerhalb eines fixen File-Sets (nur Alles-oder-nichts-Messungen sind aussagekräftig, eine Pro-Aufrufstelle-Zahl existiert nicht).
-- Nie über den Root/Stress-Split vergleichen. Baselines nur im frischen `git worktree` des Zielcommits (nie `git stash`). IMMER Exit-Code + Fehlerausgabe prüfen, nie nur die Kennzahl greppen.
+- Nie über den Root/Stress/dtype-Split vergleichen (Root-Zahlen vor infra-02 enthalten die dtype-Pins). Baselines nur im frischen `git worktree` des Zielcommits (nie `git stash`). IMMER Exit-Code + Fehlerausgabe prüfen, nie nur die Kennzahl greppen.
 
 ## Arbeitsregeln (Herleitungen im Archiv)
 

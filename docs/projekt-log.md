@@ -1441,3 +1441,13 @@ signalisierenden NaNs ruhige (V8, reproduziert) — Datenbewegung braucht eine G
 nicht testbar. Dritte Scheibe in Folge über dem Gate, jedes Mal durch Typ-Pins im Root-Korpus →
 Struktur-Folgepunkt (eigener Pin-Korpus, Präzedenz infra-01). Stopp-Regel geschärft: der Stopp gilt
 für die erste vollständige Messung — Optimieren erst nach Rückmeldung.
+
+## infra-02 — dtype-Typ-Pins in eigenem Messkorpus (2026-10-14, Stufe 3a)
+
+Nach drei Gate-Überschreitungen in Folge, alle aus Typ-Pins, zogen die dtype-Pins nach
+`spike/tests-dtype/` (Präzedenz infra-01). Root misst wieder Produkt + Laufzeittests: 246,763
+(−17,522); der dtype-Korpus hat einen Pin (67,108), kein Budget — seine Qualität sichert der
+Mutanten-Nachweis. Lehre: ein Korpus-Schnitt verschiebt nicht nur Zahlen, sondern auch, WO ein
+Mutant gefangen wird — der Root-Check allein übersieht danach jeden Typ-Mutanten der dtype-Maschinerie
+(acht von acht belegt). Deshalb läuft jeder Typ-Mutanten-Nachweis gegen den Verbund (Verify-Template
+Regel 8).

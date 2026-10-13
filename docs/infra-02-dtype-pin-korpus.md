@@ -80,3 +80,17 @@ dtype-Korpus festlegen (O3) · Covenant-Änderung.
 1. Commit A: Korpus + tsconfig + Umzug + package.json + CI. Messen (alle vier Korpora).
 2. Commit B: Verify-Template-Satz (Punkt 5).
 3. Verifier R (eigener Worktree), dann Doku-Commit und Push.
+
+## Ergebnis (2026-10-14)
+
+Umgesetzt in `b30d704` (Korpus, Umzug, Verbund, CI-Jobname) und `d29f64d` (Verify-Template Regel 8).
+**Zahlen:** Root 264,285 → **246,763 @ 140** (Δ−17,522), neuer Pin **dtype 67,108 @ 81**, stress
+123,138 und browser 2,142 unverändert, bench:editor und Freeze-Hash unverändert, test:core 1668,
+resident 6155+2, package 3. **Umzug:** 898 Zeilen (alt 230–236 und 1583–2471) zeichengleich verschoben,
+geändert nur zwei Importzeilen. **Verifier R (MERGE):** eigene Zählmethode bestätigt die
+Relocation (z. B. `Expect<` 466 = 194 + 272, `@ts-expect-error` 116 = 64 + 52); acht eigene
+Typ-Mutanten werden ausschließlich über den dtype-Korpus gefangen, der Root-Check allein übersieht
+alle acht; Rulesets verlangen keine Status-Checks, die Umbenennung des CI-Jobs ist unbedenklich.
+Nebenbefunde: veraltete Querverweise in Bestandsdateien (FOLLOWUPS); Regel 8 präzisiert
+(Laufzeit-Mutanten weiterhin gegen die Suites); der Verbund kostet in Summe mehr (der dtype-Korpus
+prüft `src` ein zweites Mal), betrifft nur die Laufzeit des Checks, nicht das Produkt.
