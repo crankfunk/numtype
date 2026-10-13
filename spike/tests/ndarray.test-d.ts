@@ -2300,6 +2300,58 @@ type DT4_UNION_WITH_BOOL_MEMBER = Expect<Equal<typeof dt4u4, NDArray<[2, 3], "bo
 type DT4_ANY_SCALAR_BOOL = Expect<Equal<(typeof dt4u5)["dtype"], "bool">>;
 type DT4_ANY_ARRAY_BOOL = Expect<Equal<(typeof dt4u6)["dtype"], "bool">>;
 
+// --- the grid (fix round F1): for EVERY op the result shape of the array form (the LARGER operand is the argument: a
+// result of S instead of Broadcast<S, B> shows) and the bool result for union-dtype operands in each position —
+// scalar form with a union receiver, array form with a union receiver, array form with a union argument. ---
+const dt4x_gt1 = dt4v64.gt(dt4f64);
+const dt4x_gt2 = dt4uni.gt(1);
+const dt4x_gt3 = dt4uni.gt(dt4f64);
+const dt4x_gt4 = dt4f32.gt(dt4uniV);
+type DT4_GRID_GT_SHAPE = Expect<Equal<typeof dt4x_gt1, NDArray<[2, 3], "bool">>>; // [3] gt [2, 3]: the argument is the larger operand
+type DT4_GRID_GT_UNION_SCALAR = Expect<Equal<typeof dt4x_gt2, NDArray<[2, 3], "bool">>>;
+type DT4_GRID_GT_UNION_RECV = Expect<Equal<typeof dt4x_gt3, NDArray<[2, 3], "bool">>>;
+type DT4_GRID_GT_UNION_ARG = Expect<Equal<typeof dt4x_gt4, NDArray<[2, 3], "bool">>>;
+const dt4x_ge1 = dt4v64.ge(dt4f64);
+const dt4x_ge2 = dt4uni.ge(1);
+const dt4x_ge3 = dt4uni.ge(dt4f64);
+const dt4x_ge4 = dt4f32.ge(dt4uniV);
+type DT4_GRID_GE_SHAPE = Expect<Equal<typeof dt4x_ge1, NDArray<[2, 3], "bool">>>; // [3] ge [2, 3]: the argument is the larger operand
+type DT4_GRID_GE_UNION_SCALAR = Expect<Equal<typeof dt4x_ge2, NDArray<[2, 3], "bool">>>;
+type DT4_GRID_GE_UNION_RECV = Expect<Equal<typeof dt4x_ge3, NDArray<[2, 3], "bool">>>;
+type DT4_GRID_GE_UNION_ARG = Expect<Equal<typeof dt4x_ge4, NDArray<[2, 3], "bool">>>;
+const dt4x_lt1 = dt4v64.lt(dt4f64);
+const dt4x_lt2 = dt4uni.lt(1);
+const dt4x_lt3 = dt4uni.lt(dt4f64);
+const dt4x_lt4 = dt4f32.lt(dt4uniV);
+type DT4_GRID_LT_SHAPE = Expect<Equal<typeof dt4x_lt1, NDArray<[2, 3], "bool">>>; // [3] lt [2, 3]: the argument is the larger operand
+type DT4_GRID_LT_UNION_SCALAR = Expect<Equal<typeof dt4x_lt2, NDArray<[2, 3], "bool">>>;
+type DT4_GRID_LT_UNION_RECV = Expect<Equal<typeof dt4x_lt3, NDArray<[2, 3], "bool">>>;
+type DT4_GRID_LT_UNION_ARG = Expect<Equal<typeof dt4x_lt4, NDArray<[2, 3], "bool">>>;
+const dt4x_le1 = dt4v64.le(dt4f64);
+const dt4x_le2 = dt4uni.le(1);
+const dt4x_le3 = dt4uni.le(dt4f64);
+const dt4x_le4 = dt4f32.le(dt4uniV);
+type DT4_GRID_LE_SHAPE = Expect<Equal<typeof dt4x_le1, NDArray<[2, 3], "bool">>>; // [3] le [2, 3]: the argument is the larger operand
+type DT4_GRID_LE_UNION_SCALAR = Expect<Equal<typeof dt4x_le2, NDArray<[2, 3], "bool">>>;
+type DT4_GRID_LE_UNION_RECV = Expect<Equal<typeof dt4x_le3, NDArray<[2, 3], "bool">>>;
+type DT4_GRID_LE_UNION_ARG = Expect<Equal<typeof dt4x_le4, NDArray<[2, 3], "bool">>>;
+const dt4x_eq1 = dt4v64.eq(dt4f64);
+const dt4x_eq2 = dt4uni.eq(1);
+const dt4x_eq3 = dt4uni.eq(dt4f64);
+const dt4x_eq4 = dt4f32.eq(dt4uniV);
+type DT4_GRID_EQ_SHAPE = Expect<Equal<typeof dt4x_eq1, NDArray<[2, 3], "bool">>>; // [3] eq [2, 3]: the argument is the larger operand
+type DT4_GRID_EQ_UNION_SCALAR = Expect<Equal<typeof dt4x_eq2, NDArray<[2, 3], "bool">>>;
+type DT4_GRID_EQ_UNION_RECV = Expect<Equal<typeof dt4x_eq3, NDArray<[2, 3], "bool">>>;
+type DT4_GRID_EQ_UNION_ARG = Expect<Equal<typeof dt4x_eq4, NDArray<[2, 3], "bool">>>;
+const dt4x_ne1 = dt4v64.ne(dt4f64);
+const dt4x_ne2 = dt4uni.ne(1);
+const dt4x_ne3 = dt4uni.ne(dt4f64);
+const dt4x_ne4 = dt4f32.ne(dt4uniV);
+type DT4_GRID_NE_SHAPE = Expect<Equal<typeof dt4x_ne1, NDArray<[2, 3], "bool">>>; // [3] ne [2, 3]: the argument is the larger operand
+type DT4_GRID_NE_UNION_SCALAR = Expect<Equal<typeof dt4x_ne2, NDArray<[2, 3], "bool">>>;
+type DT4_GRID_NE_UNION_RECV = Expect<Equal<typeof dt4x_ne3, NDArray<[2, 3], "bool">>>;
+type DT4_GRID_NE_UNION_ARG = Expect<Equal<typeof dt4x_ne4, NDArray<[2, 3], "bool">>>;
+
 // --- any / all: three overloads each, always bool, the ReduceAxis guard ------------------------------------------
 const dt4a1 = dt4f64.any();
 const dt4a2 = dt4bl.any(0);
@@ -2321,6 +2373,23 @@ const dt4a4 = dt4uni.any(0);
 const dt4b4 = dt4any.all();
 type DT4_ANY_UNION = Expect<Equal<typeof dt4a4, NDArray<[3], "bool">>>;
 type DT4_ALL_ANY = Expect<Equal<(typeof dt4b4)["dtype"], "bool">>;
+
+// the third overload (axis, keepdims) — fix round F1: the result is bool for a NON-bool receiver too (a result of `D`
+// shows), and an out-of-range axis is rejected AT the axis argument on this overload as well (the guard is not optional)
+const dt4a5 = dt4f32.all(0, true);
+const dt4a6 = dt4i32.any(1, true);
+type DT4_ALL_KEEP_NONBOOL = Expect<Equal<typeof dt4a5, NDArray<[1, 3], "bool">>>;
+type DT4_ANY_KEEP_NONBOOL = Expect<Equal<typeof dt4a6, NDArray<[2, 1], "bool">>>;
+dt4f64.any(
+  // @ts-expect-error - any(axis, keepdims): axis out of range stands at the axis argument
+  5,
+  true,
+);
+dt4f64.all(
+  // @ts-expect-error - all(axis, keepdims): axis out of range stands at the axis argument
+  5,
+  true,
+);
 
 // --- NDArray.where: result type, and every rejection stands at the ARGUMENT that is wrong (shape -> mask -> a/b) --
 const dt4w1 = NDArray.where(dt4vbl, dt4v32, dt4v32);

@@ -3515,6 +3515,12 @@ test("dt4 diagnostic CONTENTS (M3): comparison/where rejections name word-identi
       [`f32.gt(bl3);`, 0, COMPARE_BOOL_MESSAGE], // bool ARGUMENT
       [`bl3.gt(f32);`, 0, COMPARE_BOOL_MESSAGE], // bool RECEIVER (array form is unmasked)
       [`f32.ne(bl3);`, 0, COMPARE_BOOL_MESSAGE], // a sibling op
+      // every other op too (fix round F1): a bool ARGUMENT shows the op's OWN message, which only holds while the array
+      // overload is declared LAST (Arbeitsregel 2) — a scalar overload declared last would show the generic TS2769 text
+      [`f32.ge(bl3);`, 0, COMPARE_BOOL_MESSAGE],
+      [`f32.lt(bl3);`, 0, COMPARE_BOOL_MESSAGE],
+      [`f32.le(bl3);`, 0, COMPARE_BOOL_MESSAGE],
+      [`f32.eq(bl3);`, 0, COMPARE_BOOL_MESSAGE],
       [`f32.gt(f32b);`, 0, "cannot broadcast shapes [3] and [4]"], // shape error at the argument
       [`bl3.gt(f32b);`, 0, "cannot broadcast shapes [3] and [4]"], // shape outranks the bool receiver
       [`NDArray.where(f64, f64, f64);`, 0, WHERE_MASK_MESSAGE], // mask not bool: AT the mask
