@@ -14,6 +14,7 @@
   "exclude": [
     "spike/bench-dx/workloads",
     "spike/tests-stress",
+    "spike/tests-dtype",
     "spike/tests-browser",
     "spike/tests-package/consumer",
     "spike/tests-package/consumer-strict",

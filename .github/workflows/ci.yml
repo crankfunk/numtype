@@ -21,10 +21,10 @@ permissions:
   contents: read
 
 jobs:
-  # Fastest gate: the pnpm check triple-verbund (root + stress + browser
+  # Fastest gate: the pnpm check quad-verbund (root + stress + dtype + browser
   # tsconfigs). Node + tsc only, no Rust.
   check:
-    name: check (types, triple-verbund)
+    name: check (types, quad-verbund)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
