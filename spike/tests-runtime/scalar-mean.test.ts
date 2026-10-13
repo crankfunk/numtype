@@ -2970,7 +2970,7 @@ test("dt3 mean float32: sum32 / n, not sum32 * (1/n) — a subnormal-tie counter
 // structural `Dt4Nd` view so the loops do not pay the generic-overload type
 // machinery per call; the typed surface is pinned in ndarray.test-d.ts.
 // =============================================================================
-import { COMPARE_BOOL_MESSAGE, WHERE_BOOL_MIX_MESSAGE, WHERE_MASK_MESSAGE } from "../src/runtime.ts";
+import { COMPARE_BOOL_MESSAGE, WHERE_BOOL_MIX_MESSAGE, WHERE_MASK_MESSAGE, whereTyped } from "../src/runtime.ts";
 import { genBroadcastShapes } from "./prng.ts";
 
 interface Dt4Nd {
@@ -3339,7 +3339,9 @@ test("dt4 where: values move without arithmetic — NaN payloads survive bit for
     [F32_BITS_A[0], F32_BITS_B[1], F32_BITS_A[2], F32_BITS_B[3], F32_BITS_A[4], F32_BITS_B[5]].map((x) => (x ?? 0).toString(16)),
     "float32 selection is bit-exact, signalling NaNs and subnormals included",
   );
-  // float64 payloads (plain assignment preserves them; pinned so a change of the loop cannot lose them silently)
+  // float64 payloads. HONEST LIMIT: on V8 a plain Float64Array assignment keeps the payload bits as well, so this check
+  // passes with and without `whereTyped`'s BigUint64Array views — it pins the guarantee, it cannot kill a mutant that drops the
+  // views (ECMAScript allows other engines to canonicalise NaN on store; the views make the guarantee engine-independent).
   const F64_A = [0x7ff4000000000001n, 0xfff4000000000007n, 0x7ff8000000000005n];
   const F64_B = [0x7ff0000000000001n, 0xfff8000000000003n, 0x0000000000000001n];
   const withBits64 = (bits: bigint[]): Dt4Nd => {
@@ -3357,6 +3359,26 @@ test("dt4 where: values move without arithmetic — NaN payloads survive bit for
   const rw = where4(mk4([3], [1, 0, 1], "bool"), mk4([3], [0.1, 2, 16777216], "float32"), mk4([3], [0.1, 0.25, 7], "float64"));
   assert.strictEqual(rw.dtype, "float64");
   assert.deepStrictEqual(Array.from(rw.data), [Math.fround(0.1), 0.25, 16777216]);
+});
+
+test("dt4 where: float64 x float64 selects through 64-bit views — operands backed by a Float64Array with a NON-ZERO byteOffset, broadcast shapes, payloads and -0 intact", () => {
+  // The BigUint64Array views are built from (buffer, byteOffset, length): an operand that is a subarray of a larger buffer must
+  // be read at its own offset, not at the buffer start.
+  const backing = new Float64Array(10);
+  const a = backing.subarray(2, 5); // byteOffset 16
+  const b = backing.subarray(6, 9); // byteOffset 48
+  const A = [0x7ff4000000000001n, 0x8000000000000000n, 0x3ff0000000000000n]; // sNaN payload, -0, 1
+  const B = [0xfff4000000000007n, 0x0000000000000001n, 0x7ff8000000000005n]; // negative sNaN payload, denormal min, qNaN payload
+  new BigUint64Array(a.buffer, a.byteOffset, 3).set(A);
+  new BigUint64Array(b.buffer, b.byteOffset, 3).set(B);
+  assert.strictEqual(a.byteOffset, 16);
+  assert.strictEqual(b.byteOffset, 48);
+  const m = mk4([2, 3], [1, 0, 1, 0, 1, 0], "bool");
+  const r = whereTyped(m.shape, m.data, m.dtype, [3], a, "float64", [3], b, "float64");
+  assert.strictEqual(r.resultDtype, "float64");
+  assert.deepStrictEqual(r.shape, [2, 3]);
+  const got = Array.from(new BigUint64Array(r.data.buffer, r.data.byteOffset, 6));
+  assert.deepStrictEqual(got, [A[0], B[1], A[2], B[0], A[1], B[2]]);
 });
 
 test("dt4 any/all: every dtype (A3 ii), truthiness is exactly astype('bool') (NaN true, -0 false), axes / negative axes / keepdims / rank 0 / size 0, vs a lane-walking reference", () => {

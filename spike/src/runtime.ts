@@ -2272,11 +2272,17 @@ export function whereResultDType(a: DType, b: DType): DType {
  * copied as-is; the `float32` case goes through `Uint32Array` views over the
  * same buffers, because an element-wise assignment into a `Float32Array`
  * turns a signalling NaN into a quiet one (`0x7fa00001` -> `0x7fe00001`,
- * measured on V8). float64, int32 and bool keep their bits through plain
- * assignment. A float32 result only ever arises from two float32 operands
- * (`PROMOTE_NUMERIC`), so no value needs `fround` here. A widening pair
- * (float32 or int32 with float64) is converted by the assignment itself,
- * exactly.
+ * measured on V8). float64 with float64 goes through `BigUint64Array` views
+ * for the same reason: ECMAScript lets an engine pick ANY NaN encoding when a
+ * number is stored into a `Float64Array`, so a plain assignment keeps the
+ * payload only by the grace of the engine. V8 does keep it, so on V8 the
+ * views change no observable bit and a test cannot tell the two apart (the
+ * existing float64 payload test passes with or without them); they make the
+ * payload guarantee engine-independent, not observable here. int32 and bool
+ * keep their bits through plain assignment (no NaN exists). A float32 result
+ * only ever arises from two float32 operands (`PROMOTE_NUMERIC`), so no value
+ * needs `fround` here. A widening pair (float32 or int32 with float64) is
+ * converted by the assignment itself, exactly.
  */
 export function whereTyped(
   mShape: readonly number[],
@@ -2308,6 +2314,11 @@ export function whereTyped(
   const aSrc = asBits(aData);
   const bSrc = asBits(bData);
   const dst = asBits(out);
+  // float64 x float64: the same copy through 64-bit integer views (payload-exact on every engine, see above)
+  const bitwise64 = aDtype === "float64" && bDtype === "float64";
+  const a64 = bitwise64 ? new BigUint64Array(aData.buffer, aData.byteOffset, aData.length) : undefined;
+  const b64 = bitwise64 ? new BigUint64Array(bData.buffer, bData.byteOffset, bData.length) : undefined;
+  const dst64 = bitwise64 ? new BigUint64Array(out.buffer, out.byteOffset, out.length) : undefined;
 
   for (let flat = 0; flat < size; flat++) {
     const idx = unravel(flat, outShape, outStrides);
@@ -2320,7 +2331,9 @@ export function whereTyped(
       aOff += ix * (aEff[i] ?? 0);
       bOff += ix * (bEff[i] ?? 0);
     }
-    dst[flat] = (mData[mOff] ?? 0) !== 0 ? (aSrc[aOff] ?? 0) : (bSrc[bOff] ?? 0);
+    const takeA = (mData[mOff] ?? 0) !== 0;
+    if (a64 !== undefined && b64 !== undefined && dst64 !== undefined) dst64[flat] = (takeA ? a64[aOff] : b64[bOff]) ?? 0n;
+    else dst[flat] = takeA ? (aSrc[aOff] ?? 0) : (bSrc[bOff] ?? 0);
   }
   return { shape: outShape, data: out, resultDtype };
 }
