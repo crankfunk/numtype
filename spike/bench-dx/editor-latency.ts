@@ -999,15 +999,24 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // w4 45028, w5 50664, w6 51281, w7 43878, w8 51951). Correctness gate (every
 // hover position) and latency medians unaffected (still PASS, under the 2x
 // ceiling).
+//
+// Re-pinned (dt4 fix round F2): `whereTyped` now copies float64 x float64
+// through `BigUint64Array` views (engine-independent NaN payloads). Every pin
+// moves by the SAME +31 (w1 44996, w2 46916, w3 77673, w4 45059, w5 50695,
+// w6 51312, w7 43909, w8 51982). Pure value-level code in a function body, no
+// type change; the attribution is proven: a clean export of the preceding
+// commit (F1, tests only) holds the old pins exactly and passes the hard
+// gate. The same change moves the stress corpus by +31 (123,107 ->
+// 123,138). Measured TWICE, byte-identical both times.
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 44965,
-  w2: 46885,
-  w3: 77642,
-  w4: 45028,
-  w5: 50664,
-  w6: 51281,
-  w7: 43878,
-  w8: 51951,
+  w1: 44996,
+  w2: 46916,
+  w3: 77673,
+  w4: 45059,
+  w5: 50695,
+  w6: 51312,
+  w7: 43909,
+  w8: 51982,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {
