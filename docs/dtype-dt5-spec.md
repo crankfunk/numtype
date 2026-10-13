@@ -1,6 +1,7 @@
 # dt5 — `sqrt`, `argmax`, `topk`, `stack` auf allen dtypes — bindende Spec (Stufe 3b)
 
-**Version:** v1 (2026-10-14) · **Status:** Owner-abgenommen (A1–A4 je nach Empfehlung, 2026-10-14) → Baustein 0
+**Version:** v1.1 (2026-10-14) · **Status:** Owner-abgenommen (A1–A4, Nachträge A5–A8 nach Baustein 0),
+Baustein 0 gelaufen (ein Blocker, eingearbeitet) → implementierungsreif nach Bestätigung des v13-Wortlauts
 **Stufe:** 3b — neue Typ-Maschinerie (`StackDTypeCheck`, ein Fold über die Zeilen-dtypes),
 Covenant-Änderung (v13), Verhaltensänderung bestehender Ops (E6, A3 i).
 **Berührte Invarianten:** M2 (Fold mit Union-Gate, niladische bool-Sperre von `sqrt()`, Ende der
@@ -46,16 +47,34 @@ folgt das Release 0.4.0 (eigener Schritt, README erst dann, Regel 19).
 - **F3 `sqrt`**: float64 → float64 (bestehende Referenz), float32 → float32 (`Math.fround(Math.sqrt(x))`,
   korrekt gerundet nach Figueroa, D8), int32 → float64. **bool:** niladisch, also keine
   Compile-Sperre möglich → dauerhafte Laufzeit-Sperre mit `BOOL_ARITHMETIC_MESSAGE` (Präzedenz
-  `norm()`, M2 v10); Rückgabe-dtype für bool: A3 ii.
+  `norm()`, M2 v10). Rückgabe-dtype `SqrtDType<D>` = **`IsAnyDType` zuerst** (Baustein-0-Blocker D-1:
+  ohne das Gate behauptet `AnyNDArray.sqrt()` falsch `never`) → `IsUnion` → bool `never`, sonst wie
+  `ReduceDType` (float32 → float32, sonst float64). Offengelegt und per Pin festgehalten (A6): auf
+  einem `never`-Ergebnis zeigen drei Folgefälle eine native Meldung über den privaten
+  `__varianceD`-Marker (Zuweisung an `AnyNDArray`, `stack` mit dieser Zeile, Skalar-`add`) — nur in
+  Code, der beim `sqrt()` ohnehin wirft.
 - **F4 `stack`**: alle Zeilen gleicher dtype → Ergebnis `NDArray<…, D>`; verschiedene dtypes → eigene
   Meldung am Argument, wortgleich zur Laufzeit (keine Promotion über Zeilen, D5). Neuer Fold
-  `StackDTypeCheck` über die Zeilen-dtypes: `IsAnyDType`/`IsUnion` JE ZEILE zuerst (eine Zeile mit
-  Union- oder `any`-dtype → kein Anspruch, Laufzeit prüft; Arbeitsregel 3), dann Gleichheit. Werte
+  `StackDTypeCheck` über die Zeilen-dtypes: `IsAnyDType`/`IsUnion` JE ZEILE zuerst; eine Zeile mit
+  Union- oder `any`-dtype wird ÜBERSPRUNGEN und weitergefaltet (Baustein 0 D-3: reihenfolge-
+  unabhängig, kein Anspruch über diese Zeile, Laufzeit prüft; Arbeitsregel 3), dann Gleichheit der
+  übrigen. Festlegungen (Baustein 0 D-4): Shape-Fehler gehen vor dtype-Fehlern (Compile- und
+  Laufzeit); die Meldung nennt den dtype der ersten definiten Zeile und den der ersten abweichenden;
+  Ergebnis-dtype bei Union-/`any`-Zeilen bzw. Array-Eingaben (`NDArray<…>[]`) die Vereinigung bzw.
+  `any`. A1 umfasst dafür auch `UnwrapRow`/`RowShapesOf` (Modulebene; `NDArray<infer S>` füllte `D`
+  mit float64). Der Meldungstext existiert als Typ-Template und als Laufzeitfunktion — die
+  Wortgleichheit ist per tsc-Fixture PFLICHT (Baustein 0 C-3). Offengelegt: der Fold verteuert die
+  quadratische Tupel-Faltung (400 Zeilen: 309k → 483k Instantiations, kein Tiefenfehler). Werte
   sind Datenbewegung: bit-exakt je dtype (Ganzzahl-Sicht für float32/float64). Die M3-v8-Ausnahme
   (native `__varianceD`-Meldung) entfällt.
 - **F5 Aufräumen:** `DTypeLock` gelöscht (null Nutzer). `lockedOpMessage`/`assertFloat64Locked`
   gelöscht (null Aufrufer, nicht öffentlich; A1). Doc-Kommentare der vier Ops aktualisiert.
-- **F6 Tests und Pins** — Laufzeittests an `scalar-mean.test.ts` (bzw. `argmax-topk.test.ts`, falls
+- **F6 Tests und Pins** — (v1.1 ergänzt: Reihenfolge Shape vor dtype bei `stack` per tsc-Fixture mit
+  Inhaltsprüfung, da `@ts-expect-error` den Mutanten „dtype vor Shape" nicht tötet (Baustein 0 T-1);
+  `sqrt` mit `any`-/`AnyNDArray`-/Union-Empfänger (T-2); float64-sNaN-Tests als „pinnt die Garantie,
+  tötet keinen Mutanten ohne Sicht" formuliert (V8, T-3); `topkTyped`/`stackTyped` direkt mit
+  `byteOffset ≠ 0` (T-4); bool-Fälle nur mit 0/1 (T-6); die drei `never`-Folgefälle als Pins (A6);
+  Known-Limit-Pins für offene Typparameter bei `stack`/`argmax(0)` (D-6).) — Laufzeittests an `scalar-mean.test.ts` (bzw. `argmax-topk.test.ts`, falls
   sinnvoller; Dateiset unverändert), **Typ-Pins in `spike/tests-dtype/dtype.test-d.ts`** (infra-02),
   Pins auf Alias-Ebene (`StackDTypeCheck` direkt) plus Aufruf-Pins JE Op und JE Überladung, inkl.
   Ergebnis-Shape mit Broadcast/Achse und Union-Operanden (Lehren dt3/dt4). Laufzeit: Index-Werte
@@ -85,9 +104,13 @@ astype, Achse 1.5).
    neuen Semantik ersetzt (bool bei `sqrt` bleibt als Sperr-Test);
 2. der Cross-Layer-Test (Editor zeigt `lockedOpMessage` wortgleich), seit dt3 auf `argmax(0)` → entfällt
    ersatzlos (es gibt keine übergangsweise Sperre mehr);
-3. **zusätzlich wegen E6:** jeder bestehende Test, der für `NDArray.argmax(axis)`/`topk` float64-
-   Indizes (`Float64Array`, `dtype "float64"`) festhält — erwartet in `argmax-topk.test.ts` und
-   gegebenenfalls in Differential-Tests gegen `WNDArray` (`resident.test.ts`). Baustein 0 zählt sie.
+3. **zusätzlich wegen E6 (v1.1, empirisch, A7):** `argmax-topk.test.ts` bleibt unberührt (vergleicht
+   über `Array.from`). Betroffen ist `resident.test.ts:2452` (topk-Cross-Surface-Pin vergleicht die
+   Indizes bitweise als float64 → eine Zeile: Indizes vor dem Vergleich nach float64 wandeln).
+4. **wegen F5 (v1.1, A7):** in `scalar-mean.test.ts` der Import von `lockedOpMessage` (sonst lädt die
+   ganze Datei nicht), die Hilfsfunktion `lockedMsgRegex` und die dann ungenutzte Konstante
+   `NON_FLOAT64`. Kompilier-notwendige A2-Edits liegen im SELBEN Commit wie die Produktänderung, die
+   sie erzwingt — kein Commit mit rotem Baum (Baustein 0 F-4).
 
 **A3 — vier Design-Entscheidungen (ENTSCHIEDEN 2026-10-14: alle nach Empfehlung):**
 - **(i) E6 jetzt auch für float64:** `argmax(axis)` und `topk().indices` liefern int32 für JEDEN
@@ -106,7 +129,15 @@ astype, Achse 1.5).
   (z. B. „stack: rows must share one dtype (got 'float32' and 'int32') — use astype() first"),
   wortgleich zur Laufzeit; eine Zeile mit Union-/`any`-dtype → kein Anspruch.
 
-**A4 — Covenant v13 (Wortlaut abgenommen 2026-10-14):**
+**A5–A8 (nach Baustein 0, ENTSCHIEDEN 2026-10-14):** A5 Root-Gate ≤ +2,500 mit Stopps +500/+1,800/
++2,500 · A6 `never` für `sqrt()` auf bool bleibt (mit `any`-Gate, die drei Folgefälle dokumentiert und
+gepinnt) · A7 A1/A2 erweitert (s. o.) · A8 v13-Wortlaut nachgeschärft (s. u., Bestätigung ausstehend).
+Offengelegt ohne Entscheidungsbedarf: `argmax`/`topk` akzeptieren bool, Vergleiche lehnen bool ab
+(D-5, bewusste Asymmetrie, in v13 benannt); E6 bricht Konsumenten, die `indices` als `NDArray<[k]>`
+annotieren (README.md:188, examples/rag-demo — gehört in Release-Notes und README-Schritt von 0.4.0,
+D-7); `argmax`/`topk` widen Nicht-float64 auf eine temporäre f64-Kopie (20M Elemente: 51–116 ms, D-8).
+
+**A4 — Covenant v13 (Erstfassung abgenommen 2026-10-14; durch A8 ersetzt):**
 
 > **M2 · Präzisierung v13 — Ende der übergangsweisen Sperren (Owner-entschieden 2026-10-14):** seit dt5
 > rechnet jede Op auf `NDArray` auf jedem dtype; die übergangsweisen Sperren aus v8 und `DTypeLock`
@@ -118,12 +149,33 @@ astype, Achse 1.5).
 > **M3 · v13:** die befristete Ausnahme `stack` (v8) entfällt — eine dtype-Ablehnung von `stack`
 > zeigt die eigene Meldung am Argument, wortgleich zur Laufzeit.
 
+**A8 — v13 nachgeschärft (Baustein 0 C-1, C-2, D-5) — Bestätigung ausstehend:**
+
+> **M2 · Präzisierung v13 — Ende der übergangsweisen Sperren (Owner-entschieden 2026-10-14):** seit dt5
+> ist keine Op auf `NDArray` mehr übergangsweise für einen dtype gesperrt; `DTypeLock` und die
+> übergangsweisen Sperren aus v8 entfallen. Dauerhaft abgelehnt bleibt bool-Arithmetik (v9–v11;
+> Vergleiche lehnen bool-Operanden ab), während `argmax`/`topk` bool als reine Ordnungsoperationen
+> akzeptieren — eine bewusste Asymmetrie. Niladische Ops auf bool lehnen nach v10 nur zur Laufzeit
+> ab, jetzt `norm()` und `sqrt()`; `sqrt()` trägt den Rückgabe-dtype `SqrtDType` (bool → `never` als
+> Compile-Zeit-Signal, dass kein Wert entsteht; `any` und Unions → `DType`). `stack` prüft die
+> Gleichheit der Zeilen-dtypes über `StackDTypeCheck` (dtype-Maschinerie nach v8–v12; Zeilen mit
+> `any`- oder Union-dtype werden übersprungen, kein Anspruch über sie). Anker: `sym:DTypeLock`
+> entfernt, `sym:StackDTypeCheck` und `sym:SqrtDType` ergänzt.
+>
+> **M3 · v13:** die befristete Ausnahme `stack` (v8) entfällt — eine dtype-Ablehnung von `stack`
+> zeigt die eigene Meldung am Argument, wortgleich zur Laufzeit; Shape-Fehler gehen vor. Benannte,
+> hingenommene Folgemeldungen: auf einem Ergebnis von `sqrt()` über bool (dtype `never`, das zur
+> Laufzeit ohnehin wirft) können Folgeaufrufe eine native Meldung über den privaten
+> `__varianceD`-Marker zeigen.
+
 ## Reihenfolge der Umsetzung (Arbeitsregel 21 — jeder Messpunkt ein eigener Commit, jeder mit Stopp;
 der Stopp gilt für die ERSTE vollständige Messung, Optimieren erst nach Rückmeldung)
 
-1. **Commit A:** F1 + F2 + F3 (ohne Tests). Messen (Root + dtype). **Stopp** bei Root-Δ > **+2,500**.
-2. **Commit B:** F4 + F5. Messen. **Stopp** bei Root-Δ kumuliert > **+4,000**.
-3. **Commit C1:** Laufzeittests + A2-Änderungen. Messen. **Stopp** bei Root-Δ kumuliert > **+5,500**.
+1. **Commit A:** F1 + F2 + F3 + die dadurch erzwungenen A2-Edits (A2.1 für argmax/topk/sqrt, A2.3). Messen
+   (Root + dtype). **Stopp** bei Root-Δ > **+500** (Baustein 0: −573).
+2. **Commit B:** F4 + F5 + die dadurch erzwungenen A2-Edits (A2.1 stack, A2.2, A2.4). Messen. **Stopp**
+   bei Root-Δ kumuliert > **+1,800** (Baustein 0: +899).
+3. **Commit C1:** Laufzeittests. Messen. **Stopp** bei Root-Δ kumuliert > **+2,500** (Baustein 0: +1,031).
 4. **Commit C2:** Typ-Pins (dtype-Korpus) + FOLLOWUPS; Covenant-Text vorab als eigener Commit.
 5. **Commit D:** bench:editor-Re-Pin, falls die Klassen-Surface die Pins verschiebt (zweimal gemessen).
 
@@ -131,7 +183,8 @@ der Stopp gilt für die ERSTE vollständige Messung, Optimieren erst nach Rückm
 
 ## Gates (vorregistriert, Absolutwerte)
 
-- **Root** `check:diag` **≤ +5,500** gegen 246,763 @ 140 (seit infra-02 = Produkt + Laufzeittests,
+- **Root** `check:diag` **≤ +2,500** gegen 246,763 @ 140 (v1.1, A5: Baustein 0 maß +1,031; das
+  ursprüngliche +5,500 war ~5× zu locker) (seit infra-02 = Produkt + Laufzeittests,
   ohne Typ-Pins). Herleitung, offen: dt4-Implementierung +3,821 für 6 Ops + `where` + `any`/`all`;
   dt5 ändert 4 Ops und fügt einen Fold hinzu, entfernt `DTypeLock` aus 4 Signaturen; Laufzeittests
   kosteten dt3 +1,503, dt4 +971. Baustein 0 misst einen Entwurf und kann das Gate VOR der Umsetzung
@@ -150,3 +203,19 @@ parallel (A auf deep). Jeder Agent-Auftrag trägt Arbeitsregel 22, den sicheren 
 (`[ -e node_modules ] || ln -sn …` nur im Worktree-Root, Abschlussprüfung auf Selbst-Link im
 Haupt-Tree) und die Anweisung, den Worktree zuerst per `git merge --ff-only` auf den Zielstand zu
 bringen.
+
+## Adversariale Spec-Verifikation (Addendum, Baustein 0, 2026-10-14)
+
+`brainroute:deep`, eigener Worktree auf `296e1f6`, Entwurf F1–F5 plus Laufzeittests und ~120 Zeilen
+Typ-Pins (Patch im Scratchpad, nicht Merge-Kandidat). **Ein Blocker (D-1, `any`-Gate in `SqrtDType`),
+keine falsche Code-Annahme** (alle Zeilenangaben bestätigt). **A2 empirisch:** mit den Original-Tests
+auf dem Entwurf: `scalar-mean.test.ts` lädt ohne `lockedOpMessage` nicht (mit Shim 4 rote Tests,
+genau die erwarteten), `resident.test.ts` 20 rote Fälle an einer Zeile, `argmax-topk.test.ts`,
+`threaded`, `elementwise`, `special-values`, `backend-api` unberührt; kein Typ-Pin betroffen.
+**Messung:** Root −573 (A), +899 (A+B), +1,031 (Endstand mit Laufzeittests); dtype-Korpus +4,423 für
+die Pins; bench:editor alle 8 Pins verschoben (w1–w7 −49 = stress-Δ, w8 +198 ungeklärt → in D
+erklären). **Semantik** gegen BigInt- und Brute-Force-Referenzen ohne Abweichung (sqrt float32
+korrekt gerundet, int32 → float64, argmax/topk alle dtypes, sNaN in topk/stack). **Mutanten:** 11
+Laufzeit (3 V8-unbeobachtbar, 1 äquivalent), 12 Typ (überlebt: Guard-Reihenfolge → Fixture-Pflicht;
+redundanter Array-Schutz → streichen oder bewusst nicht pinnen). Eingearbeitet: D-1, D-3, D-4, A2,
+A1, Commit-Schnitt, Gate, F6-Lücken, v13-Wortlaut.
