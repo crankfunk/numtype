@@ -32,6 +32,10 @@ steckte in einem frei formulierten Auftrag.
 7. **Nie `git config` setzen und nie committen** (Verifier ändern nichts; ein `git config user.*`
    ohne `--worktree` schreibt in die gemeinsame Repo-Konfiguration und verfälscht die Autorenschaft
    aller künftigen Commits — Vorfall 2026-09-26, CLAUDE.md Arbeitsregel 22).
+8. **Mutanten-/Typ-Nachweise laufen gegen `pnpm check`** (den Verbund ALLER Korpora, inkl.
+   `spike/tests-dtype`), nie nur gegen den Root-Check (`tsc --noEmit`): die dtype-Typ-Pins
+   liegen seit infra-02 im eigenen Korpus, ein Root-only-Lauf übersieht jeden Mutanten, den nur
+   dieser Korpus tötet (docs/infra-02-dtype-pin-korpus.md).
 
 ## Baustein 0 — adversarialer Spec-Verifier (VOR der Implementierung)
 
