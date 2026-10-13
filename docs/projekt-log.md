@@ -1424,3 +1424,20 @@ Fälle sagte „gleich", ein gezieltes Subnormal-Gegenbeispiel widerlegte es (vo
 reproduziert). Bei Gleitkomma-Äquivalenzen zählt das konstruierte Gegenbeispiel, nicht die
 Stichprobengröße. (3) Commit-Messages von Agenten können falsche Herleitungen enthalten
 („provably equivalent") — im Ergebnis-Doc richtigstellen, nicht übernehmen.
+
+## dt4 — Vergleiche, `where`, `any`/`all` (2026-10-05 … 14, Stufe 3b)
+
+Sechs Vergleiche, statisches `where`, `any`/`all` auf allen dtypes (docs/dtype-dt4-spec.md v1.1 /
+-ergebnisse.md), Covenant v11 + v12. Erstmals griff der harte Stopp am letzten Messpunkt: C2 lag bei
++12,485 gegen +9,000, der Implementierer committete und berichtete, statt Pins zu streichen (die
+dt3-Lehre wirkte). Zugleich zeigte die Runde zwei neue Lehren. (1) **Gate-Mutanten an `IsAnyDType`/
+`IsUnion` sind auf Aufrufebene oft verhaltensgleich redundant** — Aufruf-Pins können sie nicht töten;
+Pins müssen das Alias direkt treffen (Baustein 0: Alias-Pins töteten mehr Mutanten zum halben Preis).
+(2) **Eine vollständige Pin-Matrix hat trotzdem Lücken an der unscheinbarsten Stelle:** keiner der
+sechs Vergleiche pinnte die Ergebnis-SHAPE mit dem größeren Operanden als Argument; erst der
+adversariale Verifier fand es. Außerdem: elementweise Zuweisung in ein `Float32Array` macht aus
+signalisierenden NaNs ruhige (V8, reproduziert) — Datenbewegung braucht eine Ganzzahl-Sicht; für
+`Float64Array` erlaubt ECMAScript dasselbe, V8 tut es nicht, also ist die Absicherung dort auf V8
+nicht testbar. Dritte Scheibe in Folge über dem Gate, jedes Mal durch Typ-Pins im Root-Korpus →
+Struktur-Folgepunkt (eigener Pin-Korpus, Präzedenz infra-01). Stopp-Regel geschärft: der Stopp gilt
+für die erste vollständige Messung — Optimieren erst nach Rückmeldung.
