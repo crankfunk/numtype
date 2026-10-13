@@ -1,5 +1,5 @@
 # Covenant — NumType
-<!-- covenant:version 11 -->
+<!-- covenant:version 12 -->
 
 ## Invarianten
 
@@ -75,7 +75,10 @@
   auch bei Union-Operanden). Garantiert abgelehnt werden: ein bool-Operand eines Vergleichs, eine
   nicht-bool-Maske von `where`, eine Mischung aus bool und numerisch in `a`/`b` von `where`.
   Meldungen und Laufzeit-Tabellen stammen aus einer Quelle.
-  Anker: `spike/src/dim.ts`, `spike/src/literal-arithmetic.ts`, `sym:Guard`, `sym:OkShape`, `sym:DTypeLock`, `sym:Promote`, `sym:PromoteDiv`, `sym:ReduceDType`, `sym:CompareCheck`, `sym:WhereCheck`
+  · **Präzisierung v12 (Owner-entschieden 2026-10-13):** die Skalar-Form der Vergleiche prüft über
+  `CompareScalarOperand` nach denselben Regeln wie `CompareCheck` (`any` und Unions → kein
+  Anspruch; ein bool-Empfänger wird abgelehnt).
+  Anker: `spike/src/dim.ts`, `spike/src/literal-arithmetic.ts`, `sym:Guard`, `sym:OkShape`, `sym:DTypeLock`, `sym:Promote`, `sym:PromoteDiv`, `sym:ReduceDType`, `sym:CompareCheck`, `sym:WhereCheck`, `sym:CompareScalarOperand`
   · GESCHLOSSEN in Item 11 / S1 (2026-07-17): der `Literal|undefined`-Verstoß durch OPTIONALE
   Parameter (`sum`s `axis`/`keepdims`) ist behoben. Der `sum`-Overload-Umbau (Overloads nach
   Argument-Anzahl 0/1/2 — keine optionalen Parameter mehr in der Mehr-Argument-Form — plus
@@ -140,6 +143,10 @@
   gilt auch für einen bool-Empfänger in der Skalar-Form eines Vergleichs (dort scheitert ein
   Vergleich, keine Arithmetik). Bei `where` steht jede Ablehnung am fehlerhaften Argument (Maske,
   `a` oder `b`), in der Reihenfolge Shape → Maske → `a`/`b`, zur Compile- wie zur Laufzeit.
+  · **Präzisierung v12 (Owner-entschieden 2026-10-13):** Shape-Fehler von `where` stehen am letzten
+  Argument (`b`), auch wenn der Konflikt schon zwischen Maske und `a` entsteht — wie bei `add` am
+  zweiten Operanden; die Meldung nennt die beteiligten Shapes, bei einem Dreifach-Konflikt die
+  Zwischen-Shape aus Maske und `a`.
   Anker: `sym:Guard`, `sym:ShowShape`
 - **M4** · Frozen Baseline: v1-Kerne/-Einstiegspunkte bleiben byte-unberührt; der bindende
   Freeze-Beweis ist der Artefakt-Hash aus einem Clean-Rebuild; abi.rs/matmul_blocked.rs/shape.rs
@@ -198,6 +205,12 @@
 - Keine transzendenten Ops ohne eigene Determinismus-Entscheidung (brechen Bit-Parität).
 
 ## Änderungslog
+- v12 (2026-10-13) · **Nachträge aus der dt4-Verify-Runde (Baustein C).** M2: die Skalar-Form der
+  Vergleiche (`CompareScalarOperand`) ausdrücklich unter dieselben Regeln gestellt und geankert —
+  v11 nannte nur `CompareCheck`/`WhereCheck`, der Code hielt die Norm bereits. M3: die Position
+  von `where`-Shape-Fehlern (immer am letzten Argument, Präzedenz `add`) festgehalten, damit
+  „am fehlerhaften Argument" (v11) nicht anders gelesen wird. Norm unverändert; Wortlaut vom Owner
+  abgenommen 2026-10-13.
 - v11 (2026-10-06) · **Vergleiche, `where`, `any`/`all` (Scheibe dt4, docs/dtype-dt4-spec.md v1.1).**
   M2: `CompareCheck`/`WhereCheck` unter der dtype-Maschinerie, Ergebnis-dtype bool als gültiger
   Anspruch auch bei Union-Operanden, die drei garantierten Ablehnungen benannt; Anker
