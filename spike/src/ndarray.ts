@@ -26,7 +26,7 @@ import type { ReduceAxis, Transpose } from "./reduce.ts";
 import type { ReshapeCheck } from "./reshape.ts";
 import {
   anyAllTyped,
-  argmaxRuntime,
+  argmaxTyped,
   assertFloat64Locked,
   assertReshapeArgs,
   astypeConvert,
@@ -62,10 +62,10 @@ import {
   scalarElementwiseRuntime,
   sliceDtyped,
   type SliceSpec,
-  sqrtRuntime,
+  sqrtTyped,
   stackRuntime,
   sumTyped,
-  topkRuntime,
+  topkTyped,
   transposeDtyped,
   WHERE_BOOL_MIX_MESSAGE,
   WHERE_MASK_MESSAGE,
@@ -282,6 +282,25 @@ export type ReduceDType<D extends DType> = IsAnyDType<D> extends true
   : IsUnion<D> extends true
     ? DType
     : (typeof REDUCE_DTYPE)[D];
+
+/** dt5 F3 (A3 ii): result dtype of `sqrt()` — float32 stays float32, float64
+ * and int32 widen to float64 (the `REDUCE_DTYPE` table, single source), and
+ * bool is `never`: `sqrt()` is niladic, so there is no argument to hang a
+ * compile-time rejection on (M2 v10, precedent `norm()`); the call throws at
+ * runtime and never produces a value, which `never` says honestly. Gate order
+ * (Arbeitsregel 3): `IsAnyDType` FIRST — an `any` receiver would otherwise
+ * satisfy `[D] extends ["bool"]` and wrongly claim `never` (Baustein-0 D-1,
+ * `AnyNDArray.sqrt()`) — then `IsUnion` (a union degrades to `DType`, no
+ * claim), then the bool case, then the table. Disclosed (v13): on a `never`
+ * result a few follow-up calls show a native message through the private
+ * `__varianceD` marker; they sit in code that throws at the `sqrt()` anyway. */
+export type SqrtDType<D extends DType> = IsAnyDType<D> extends true
+  ? DType
+  : IsUnion<D> extends true
+    ? DType
+    : D extends "bool"
+      ? never
+      : (typeof REDUCE_DTYPE)[D];
 
 /** dt2 P3 (D6): does `N`'s own literal template form PROVE it non-integer
  * via the dot-form pattern (`2.5`, never `2.5e0`)? Built from the exported
@@ -1829,33 +1848,32 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * (same reasoning as `norm()` above) — an empty receiver is a pure
    * runtime throw, never a compile-time claim.
    *
-   * Result data is always an f64-encoded INTEGRAL index (this codebase is
-   * f64-only throughout — `NDArray.data` is always a `Float64Array`, so an
-   * index like `3` is stored as the exact double `3.0`, safely
-   * round-trippable since every index here stays far below
-   * `Number.MAX_SAFE_INTEGER`).
+   * Every dtype is accepted, bool included (dt5 F1, A3 iii): `argmax` only
+   * orders, it computes nothing, so E5 (bool has no arithmetic) does not
+   * apply — a deliberate asymmetry to the comparisons, which reject bool
+   * (v13). Elements are compared as JS numbers, exact for every dtype.
+   * `argmax()` stays a plain `number`; the axis forms return the indices as
+   * `int32` (E6, A3 i) for EVERY receiver dtype, float64 included — a change
+   * against 0.3.0, where they were float64 — as an `Int32Array`. (`WNDArray`
+   * keeps float64 indices until dt6.) An `any`/union receiver dtype is no
+   * obstacle: the result dtype does not depend on it.
    *
    * Surface asymmetry (D1, disclosed): `argmax`/`topk` exist ONLY on this
    * naive `NDArray` — no WASM kernel, no `WNDArray`/threaded parity yet
-   * (FOLLOWUPS.md tracks the follow-up).
-   *
-   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt5). The
-   * 0-arg overload is NILADIC (same disclosed gap as `norm()`); the
-   * axis-bearing overloads combine `DTypeLock` into their existing
-   * `ReduceAxis` `Guard`. */
+   * (FOLLOWUPS.md tracks the follow-up). Non-float64 receivers are compared
+   * through a temporary float64 copy (`argmaxTyped`, kernel-less). */
   argmax(): number;
   argmax<const Axis extends number | undefined>(
-    axis: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "argmax">, Axis>,
-  ): NDArray<OkShape<ReduceAxis<S, Axis, false>>>;
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
+  ): NDArray<OkShape<ReduceAxis<S, Axis, false>>, "int32">;
   argmax<const Axis extends number | undefined, const KeepDims extends boolean | undefined>(
-    axis: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "argmax">, Axis>,
+    axis: Guard<ReduceAxis<S, Axis>, Axis>,
     keepdims: KeepDims,
-  ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>;
+  ): NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>, "int32">;
   argmax<const Axis extends number | undefined = undefined, const KeepDims extends boolean = false>(
-    axis?: Guard<ReduceAxis<S, Axis> extends ShapeError<string> ? ReduceAxis<S, Axis> : DTypeLock<D, "argmax">, Axis>,
+    axis?: Guard<ReduceAxis<S, Axis>, Axis>,
     keepdims?: KeepDims,
-  ): NDArray<any> | number {
-    assertFloat64Locked("argmax", this.dtype);
+  ): NDArray<any, any> | number {
     // `arguments.length`, not `axis === undefined`: the TRULY niladic
     // overload (`argmax()`, zero arguments -> `number`) is a DIFFERENT
     // overload from the 1-/2-arg forms with an axis value that happens to
@@ -1866,17 +1884,13 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
     // must too, or a 2-arg `argmax(undefined, true)` call would silently
     // fall through to the bare-`number` branch and drop `keepdims`.
     if (arguments.length === 0) {
-      const flat = argmaxRuntime(this.shape, this.data as unknown as Float64Array, undefined);
+      const flat = argmaxTyped(this.shape, this.data as unknown as DataOfRuntime, undefined);
       return flat.data[0] ?? 0;
     }
     const axisNum = axis as unknown as Axis | undefined;
-    const { shape, data } = argmaxRuntime(this.shape, this.data as unknown as Float64Array, axisNum);
+    const { shape, data } = argmaxTyped(this.shape, this.data as unknown as DataOfRuntime, axisNum);
     const outShape = keepdims ? keepDimsShape(this.shape, axisNum) : shape;
-    return new NDArray<OkShape<ReduceAxis<S, Axis, KeepDims>>>(
-      outShape as OkShape<ReduceAxis<S, Axis, KeepDims>>,
-      "float64",
-      data,
-    );
+    return new NDArray<any, any>(outShape, "int32", data);
   }
 
   /** Top-`k` values + indices along a rank-1 receiver (Op-Scheibe W1,
@@ -1890,24 +1904,26 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * whole vector, sorted). Total order (D4, pinned, same NaN-is-maximal
    * rule as `argmax`): NaN entries first (by ascending index among
    * themselves), then descending by value, ties broken by ascending index —
-   * `values[i] === data[indices[i]]` exactly (a `Float64Array`-to-
-   * `Float64Array` copy, so a NaN's exact bit payload survives).
+   * `values[i] === data[indices[i]]` exactly.
    *
-   * Same f64-index and surface-asymmetry notes as `argmax` above apply to
-   * `indices`.
-   *
-   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt5) —
-   * combined into the SAME `Guard` as `TopkCheck` (rank check first,
-   * message-table order). */
+   * Every dtype is accepted, bool included (dt5 F2, A3 iii; same reasoning
+   * as `argmax` above). `values` keeps the receiver's dtype `D`, `indices`
+   * is `int32` (E6, A3 i) for every receiver — float64 included, a change
+   * against 0.3.0 where they were float64; `WNDArray` keeps float64 indices
+   * until dt6. The values are pure data movement (M1 v6): they are gathered
+   * from the receiver's own buffer bit for bit — float32 through a
+   * `Uint32Array` view, float64 through `BigUint64Array` — so NaN payloads
+   * (signalling NaNs included) survive, per dtype. Same surface-asymmetry
+   * note as `argmax` above. Only the rank/`k` shape errors remain, at the
+   * `k` argument (`TopkCheck`, rank check first). */
   topk<const K extends number>(
-    k: Guard<TopkCheck<S, K> extends ShapeError<string> ? TopkCheck<S, K> : DTypeLock<D, "topk">, K>,
-  ): { values: NDArray<OkShape<TopkShape<S, K>>>; indices: NDArray<OkShape<TopkShape<S, K>>> } {
-    assertFloat64Locked("topk", this.dtype);
+    k: Guard<TopkCheck<S, K>, K>,
+  ): { values: NDArray<OkShape<TopkShape<S, K>>, D>; indices: NDArray<OkShape<TopkShape<S, K>>, "int32"> } {
     const kNum = k as unknown as K;
-    const { values, indices } = topkRuntime(this.shape, this.data as unknown as Float64Array, kNum);
+    const { values, indices } = topkTyped(this.shape, this.data as unknown as DataOfRuntime, kNum);
     return {
-      values: new NDArray<OkShape<TopkShape<S, K>>>([kNum] as unknown as OkShape<TopkShape<S, K>>, "float64", values),
-      indices: new NDArray<OkShape<TopkShape<S, K>>>([kNum] as unknown as OkShape<TopkShape<S, K>>, "float64", indices),
+      values: new NDArray<any, any>([kNum], this.dtype, values),
+      indices: new NDArray<any, any>([kNum], "int32", indices),
     };
   }
 
@@ -1994,14 +2010,20 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * — no WASM kernel, no `WNDArray` parity yet (FOLLOWUPS.md tracks the
    * follow-up).
    *
-   * dt1 (K4, O2(a)): locked for `D != "float64"` in this slice (dt5's
-   * int32/float32 rule for `sqrt` is a LATER dt-slice) — NILADIC, same
-   * disclosed gap as `norm()` above (no argument position for a
-   * compile-time `Guard`). */
-  sqrt(): NDArray<S> {
-    assertFloat64Locked("sqrt", this.dtype);
-    const data = sqrtRuntime(this.data as unknown as Float64Array);
-    return new NDArray<S>(this.shape as unknown as S, "float64", data);
+   * dt5 F3 (A3 ii, E6): every dtype but bool computes. float64 -> float64
+   * (unchanged), float32 -> float32 (`Math.fround(Math.sqrt(x))` — correctly
+   * rounded, since float64 carries more than 2p+2 bits for p = 24,
+   * Figueroa), int32 -> float64 (exact input, rounded once). bool is
+   * rejected, permanently and ONLY at runtime with the bool-arithmetic
+   * message (M2 v10, precedent `norm()`): `sqrt()` is niladic, so there is no
+   * argument position for a compile-time `Guard`. The return type
+   * `SqrtDType<D>` says so: bool gives `never` (no value ever arises), `any`
+   * and union receivers degrade to `DType` (no claim). Disclosed (v13): on a
+   * `never` result a few follow-up calls show a native message through the
+   * private `__varianceD` marker — code that throws at the `sqrt()` anyway. */
+  sqrt(): NDArray<S, SqrtDType<D>> {
+    const data = sqrtTyped(this.dtype, this.data as unknown as DataOfRuntime);
+    return new NDArray<any, any>(this.shape, REDUCE_DTYPE[this.dtype], data);
   }
 
   /** Op-Scheibe W5 (docs/op-w5-item-spec.md): the direct scalar read, NumPy's

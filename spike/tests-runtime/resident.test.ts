@@ -2449,7 +2449,7 @@ test("resident topk: the VALIDATION ORDER is pinned — a call violating two con
           assert.deepStrictEqual([...(got.values.shape as readonly number[])], [...nd.values.shape], "values shape must be identical across surfaces");
           assert.deepStrictEqual([...(got.indices.shape as readonly number[])], [...nd.indices.shape], "indices shape must be identical across surfaces");
           assertF64BitsIdentical(nd.values.data, got.values.toArray(), `cross-surface values case ${c}`);
-          assertF64BitsIdentical(nd.indices.data, got.indices.toArray(), `cross-surface indices case ${c}`);
+          assertF64BitsIdentical(Float64Array.from(nd.indices.data), got.indices.toArray(), `cross-surface indices case ${c}`);
         } finally {
           got.values.dispose();
           got.indices.dispose();

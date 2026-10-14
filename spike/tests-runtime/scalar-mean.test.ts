@@ -1496,25 +1496,6 @@ test("sum/mean: no lock for any dtype, bool included — both the 0-arg and axis
   }
 });
 
-test("argmax/topk: both the 0-arg (argmax) and argument-bearing forms throw the locked message", () => {
-  for (const dtype of NON_FLOAT64) {
-    const nd = NDArray.fromArray([3], [1, 0, 1], { dtype });
-    assert.throws(() => nd.argmax(), lockedMsgRegex("argmax", dtype), `argmax() [${dtype}]`);
-    assert.throws(() => nd.argmax(0), lockedMsgRegex("argmax", dtype), `argmax(0) [${dtype}]`);
-    assert.throws(() => nd.topk(2), lockedMsgRegex("topk", dtype), `topk(2) [${dtype}]`);
-  }
-});
-
-// dt3 A2 point 3: `norm` left this test (it computes for float32/int32 now, and
-// its bool rejection is its own permanent runtime-only test in the dt3 section
-// at the end of this file); `sqrt` stays locked until dt5.
-test("sqrt: niladic locked op throws for every non-float64 receiver (no compile-time claim possible, M2 disclosed gap)", () => {
-  for (const dtype of NON_FLOAT64) {
-    const nd = NDArray.fromArray([3], [1, 0, 1], { dtype });
-    assert.throws(() => nd.sqrt(), lockedMsgRegex("sqrt", dtype), `sqrt() [${dtype}]`);
-  }
-});
-
 test("stack(): a non-float64 row throws the locked message at runtime (M3 v8 disclosed exception: the EDITOR shows a native structural diagnostic instead until dt5, but the runtime message is word-identical to every other locked op)", () => {
   const stackAny = NDArray.stack as unknown as (rows: readonly AnyNDArray[]) => unknown;
   for (const dtype of NON_FLOAT64) {
@@ -1536,68 +1517,6 @@ test("AnyNDArray spans every dtype (K5 fix): a non-float64 array assigned throug
 // dtypes rejects on the RECEIVER's dtype first" test is GONE. After dt3 no
 // locked two-operand op remains, and the bool-arithmetic message names no
 // dtype, so there is no receiver-first order left to prove.
-
-// --- Section dt1.6 (F2 post-review fix; dt3 A2 point 5): the compile-time
-// lock text equals `lockedOpMessage` verbatim (cross-layer parity) ----------
-//
-// `DTypeLockPair` — whose receiver-first branch order this section used to
-// prove with a swapped-branch mutant — was deleted by dt3 R5 (no users left),
-// so the mutant half is gone with its subject. The cross-layer half moves to
-// `argmax(0)`, which stays `DTypeLock`-locked until dt5 (and will move or end
-// there): the compile-time message text must equal `lockedOpMessage(op,
-// dtype)` — the same function the runtime tests above import from
-// runtime.ts, never a hand-typed duplicate. Real-compiler-on-a-throwaway-
-// fixture pattern (spawnSync tsc against an out-of-repo dir, so the
-// deliberately non-float64 fixture code never joins any type corpus).
-test("DTypeLock (F2 pin, moved to argmax(0) by dt3): the compile-time lock text matches lockedOpMessage exactly (cross-layer parity)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "numtype-dtypelock-pin-"));
-  try {
-    const ndarrayPath = fileURLToPath(new URL("../src/ndarray.ts", import.meta.url).href);
-    const ambientPath = fileURLToPath(new URL("../src/ambient.d.ts", import.meta.url).href);
-    const repoRoot = fileURLToPath(new URL("../..", import.meta.url).href);
-    writeFileSync(
-      join(dir, "probe.ts"),
-      `import { NDArray } from ${JSON.stringify(ndarrayPath)};\n` +
-        `const i32Mat = NDArray.fromArray([2, 2], [1, 0, 0, 1], { dtype: "int32" });\n` +
-        `i32Mat.argmax(0); // must name int32 (the RECEIVER)\n`,
-    );
-    writeFileSync(
-      join(dir, "tsconfig.json"),
-      JSON.stringify({
-        compilerOptions: {
-          strict: true,
-          target: "ES2022",
-          module: "ESNext",
-          moduleResolution: "bundler",
-          noEmit: true,
-          allowImportingTsExtensions: true,
-          skipLibCheck: true,
-          noUncheckedIndexedAccess: true,
-          exactOptionalPropertyTypes: true,
-        },
-        include: ["probe.ts", ambientPath],
-      }),
-    );
-    const res = spawnSync("pnpm", ["exec", "tsc", "--noEmit", "-p", dir], { cwd: repoRoot, encoding: "utf8" });
-    const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
-    assert.notStrictEqual(res.status, 0, `fixture must fail to compile (a genuine dtype lock):\n${out}`);
-
-    const probeErrors = out.split("\n").filter((l) => l.includes("probe.ts(") && l.includes("error TS"));
-    assert.strictEqual(probeErrors.length, 1, `expected exactly ONE fixture error (the locked argmax(0) call):\n${out}`);
-
-    // tsc prints the message as the CONTENT of a quoted string-literal type,
-    // so its own embedded `"` chars come out backslash-escaped;
-    // `JSON.stringify(...).slice(1, -1)` reproduces that exact escaping
-    // instead of hand-duplicating it.
-    const escaped = (op: string, dtype: DType) => JSON.stringify(lockedOpMessage(op, dtype)).slice(1, -1);
-    assert.ok(
-      out.includes(escaped("argmax", "int32")),
-      `i32Mat.argmax(0) must surface lockedOpMessage("argmax", "int32") verbatim:\n${out}`,
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 // --- Section dt1.7 (F1 post-review fix): every DType switch is exhaustive,
 // and never silently mislabels an unrecognized value as float64 -------------

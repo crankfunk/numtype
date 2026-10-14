@@ -2361,3 +2361,103 @@ export function anyAllTyped(kind: "any" | "all", shape: readonly number[], data:
   }
   return { shape: summed.shape, data: out };
 }
+
+// ---------------------------------------------------------------------------
+// dt5 (docs/dtype-dt5-spec.md), Commit A — F1 `argmax`, F2 `topk`, F3 `sqrt` on
+// every dtype. Appended strictly after all pre-existing content (nothing above
+// is touched). Kernel-less reference functions like the dt3/dt4 ones (COVENANT
+// M1 v5): the float64 oracles `argmaxRuntime`/`topkRuntime`/`sqrtRuntime` stay
+// byte-identical and are composed, never copied.
+// ---------------------------------------------------------------------------
+
+/**
+ * Copy the elements of `data` selected by `src` (source indices) into a fresh
+ * array of the SAME class, moving the BITS (M1 v6 data movement): float32
+ * through a `Uint32Array` view (an element-wise assignment into a
+ * `Float32Array` turns a signalling NaN into a quiet one, measured on V8:
+ * `0x7fa00001` -> `0x7fe00001`), float64 through `BigUint64Array` (ECMAScript
+ * lets an engine pick ANY NaN encoding when a number is stored into a
+ * `Float64Array`; V8 happens to keep the payload, so on V8 a test cannot tell
+ * the view from a plain copy — the view makes the guarantee engine-
+ * independent, same as `whereTyped`). int32 and bool have no NaN and keep
+ * their bits through plain assignment. The views are built on
+ * `byteOffset`/`length` of the given array, so a typed array that is a window
+ * into a larger buffer is read correctly.
+ */
+function gatherBits(data: DataOfRuntime, src: ArrayLike<number>): DataOfRuntime {
+  const out = sameKindArray(data, src.length);
+  if (data instanceof Float32Array) {
+    const s = new Uint32Array(data.buffer, data.byteOffset, data.length);
+    const d = new Uint32Array(out.buffer, out.byteOffset, out.length);
+    for (let i = 0; i < src.length; i++) d[i] = s[src[i] ?? 0] ?? 0;
+  } else if (data instanceof Float64Array) {
+    const s = new BigUint64Array(data.buffer, data.byteOffset, data.length);
+    const d = new BigUint64Array(out.buffer, out.byteOffset, out.length);
+    for (let i = 0; i < src.length; i++) d[i] = s[src[i] ?? 0] ?? 0n;
+  } else {
+    for (let i = 0; i < src.length; i++) out[i] = data[src[i] ?? 0] ?? 0;
+  }
+  return out;
+}
+
+/**
+ * dt5 F1: `argmax` on any dtype. The comparison runs on the exact float64
+ * widening (int32, float32 and bool all widen exactly; a `Float64Array` is
+ * not copied) through the float64 oracle `argmaxRuntime`, so order (NaN
+ * maximal, first index wins) and error messages are the oracle's own. The
+ * index array is an `Int32Array` (E6, A3 i): same values, new class.
+ */
+export function argmaxTyped(
+  shape: readonly number[],
+  data: DataOfRuntime,
+  axis: number | undefined,
+): { shape: number[]; data: Int32Array } {
+  const r = argmaxRuntime(shape, toFloat64(data), axis);
+  return { shape: r.shape, data: Int32Array.from(r.data) };
+}
+
+/**
+ * dt5 F2: `topk` on any dtype. ORDER and INDICES come from the float64 oracle
+ * `topkRuntime` on the exact widening (validation order and messages are
+ * its own); the VALUES are then gathered from the ORIGINAL buffer by bit
+ * movement (`gatherBits`), so every dtype keeps its own class and NaN
+ * payloads — signalling ones included — survive. Indices are an `Int32Array`
+ * (E6).
+ */
+export function topkTyped(
+  shape: readonly number[],
+  data: DataOfRuntime,
+  k: number,
+): { values: DataOfRuntime; indices: Int32Array } {
+  const r = topkRuntime(shape, toFloat64(data), k);
+  return { values: gatherBits(data, r.indices), indices: Int32Array.from(r.indices) };
+}
+
+/**
+ * dt5 F3: `sqrt` per dtype. float64 -> float64 (`sqrtRuntime`, unchanged),
+ * float32 -> float32 (`Math.fround(Math.sqrt(x))`: float64 carries more than
+ * 2p+2 bits for p = 24, so rounding the exact-enough float64 root to float32
+ * is the correctly rounded float32 root, Figueroa — same argument as the
+ * float32 add/sub/mul/div), int32 -> float64 (exact widening, one rounding).
+ * bool is a PERMANENT runtime rejection (niladic op: no argument position for
+ * a compile-time check, M2 v10, precedent `norm()`), thrown before any work —
+ * size-0 and rank-0 bool arrays included.
+ */
+export function sqrtTyped(dtype: DType, data: DataOfRuntime): DataOfRuntime {
+  switch (dtype) {
+    case "float64":
+      return sqrtRuntime(data as Float64Array);
+    case "float32": {
+      const src = data as Float32Array;
+      const out = new Float32Array(src.length);
+      for (let i = 0; i < src.length; i++) out[i] = Math.fround(Math.sqrt(src[i] ?? 0));
+      return out;
+    }
+    case "int32":
+      return sqrtRuntime(toFloat64(data));
+    case "bool":
+      throw new Error(BOOL_ARITHMETIC_MESSAGE);
+    default:
+      return assertNeverDType(dtype, "sqrtTyped");
+  }
+}
