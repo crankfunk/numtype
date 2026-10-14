@@ -908,3 +908,260 @@ function dt4OpenAny<S extends Shape, D extends DType>(x: NDArray<S, D>) {
   return x.any();
 }
 void [dt4OpenArray, dt4OpenWhere, dt4OpenAny];
+
+
+// =============================================================================
+// dt5 pins (docs/dtype-dt5-spec.md): `sqrt` / `argmax` / `topk` / `stack` on every dtype. Alias-level pins on
+// `SqrtDType` / `StackDTypeCheck` (a gate that is only observable on the alias cannot be killed from a call site, dt4
+// lesson), then call pins per op and per overload including the result SHAPE, union and `any` operands, the openly
+// disclosed `never` follow-ups of `sqrt()` on bool (A6), and the measured known limits of open type parameters (D-6).
+// Diagnostic CONTENTS and their order (shape before dtype) are NOT pinned by `@ts-expect-error` here -- it cannot tell
+// two errors apart; they are pinned by the tsc-fixture test in scalar-mean.test.ts ("dt5 diagnostic CONTENTS").
+// =============================================================================
+import type { SqrtDType, StackDTypeCheck } from "../src/ndarray.ts";
+
+declare const dt5v64: NDArray<[3]>;
+declare const dt5v32: NDArray<[3], "float32">;
+declare const dt5vi: NDArray<[3], "int32">;
+declare const dt5vbl: NDArray<[3], "bool">;
+declare const dt5m64: NDArray<[2, 3]>;
+declare const dt5m32: NDArray<[2, 3], "float32">;
+declare const dt5mi: NDArray<[2, 3], "int32">;
+declare const dt5mbl: NDArray<[2, 3], "bool">;
+declare const dt5c32: NDArray<[2, 3, 4], "float32">;
+declare const dt5uniV: NDArray<[3], "float32" | "int32">;
+declare const dt5uniM: NDArray<[2, 3], "float32" | "int32">;
+declare const dt5anyV: NDArray<[3], any>;
+declare const dt5anyM: NDArray<[2, 3], any>;
+declare const dt5top: AnyNDArray;
+
+// --- SqrtDType, alias level: IsAnyDType first, then IsUnion, then bool -> never, then the table ---
+type DT5_SQRTD_F64 = Expect<Equal<SqrtDType<"float64">, "float64">>;
+type DT5_SQRTD_F32 = Expect<Equal<SqrtDType<"float32">, "float32">>;
+type DT5_SQRTD_I32 = Expect<Equal<SqrtDType<"int32">, "float64">>;
+type DT5_SQRTD_BOOL = Expect<Equal<SqrtDType<"bool">, never>>;
+type DT5_SQRTD_ANY = Expect<Equal<SqrtDType<any>, DType>>; // the Baustein-0 blocker D-1: without the any-gate this was `never`
+type DT5_SQRTD_UNION = Expect<Equal<SqrtDType<"float32" | "int32">, DType>>;
+type DT5_SQRTD_UNION_BOOL = Expect<Equal<SqrtDType<"float32" | "bool">, DType>>; // a union containing bool is NOT `never`
+type DT5_SQRTD_ALL = Expect<Equal<SqrtDType<DType>, DType>>;
+
+// --- sqrt(): niladic, per receiver dtype, shape kept ---
+type DT5_SQRT_F64 = Expect<Equal<ReturnType<NDArray<[3]>["sqrt"]>, NDArray<[3], "float64">>>;
+type DT5_SQRT_F32 = Expect<Equal<ReturnType<NDArray<[3], "float32">["sqrt"]>, NDArray<[3], "float32">>>;
+type DT5_SQRT_I32 = Expect<Equal<ReturnType<NDArray<[3], "int32">["sqrt"]>, NDArray<[3], "float64">>>;
+type DT5_SQRT_BOOL = Expect<Equal<ReturnType<NDArray<[3], "bool">["sqrt"]>, NDArray<[3], never>>>; // runtime-only rejection (M2 v10)
+type DT5_SQRT_RANK0 = Expect<Equal<ReturnType<NDArray<[], "float32">["sqrt"]>, NDArray<[], "float32">>>;
+type DT5_SQRT_RANK2 = Expect<Equal<ReturnType<typeof dt5mi.sqrt>, NDArray<[2, 3], "float64">>>;
+type DT5_SQRT_ZERO = Expect<Equal<ReturnType<NDArray<[0, 3], "float32">["sqrt"]>, NDArray<[0, 3], "float32">>>;
+// any / union receivers (T-2): no claim, never `never`
+type DT5_SQRT_ANY_RECV = Expect<Equal<ReturnType<typeof dt5anyV.sqrt>, NDArray<[3], DType>>>;
+type DT5_SQRT_TOP_RECV = Expect<Equal<ReturnType<AnyNDArray["sqrt"]>["dtype"], DType>>;
+type DT5_SQRT_UNION_RECV = Expect<Equal<ReturnType<typeof dt5uniV.sqrt>, NDArray<[3], DType>>>;
+// chains through the `never` result degrade quietly and add no compile error of their own
+const dt5chain = dt5mbl.sqrt().sum(0);
+type DT5_SQRT_BOOL_CHAIN = Expect<Equal<typeof dt5chain, NDArray<[3], DType>>>;
+const dt5chainT = dt5mbl.sqrt().transpose();
+type DT5_SQRT_BOOL_TRANSPOSE = Expect<Equal<typeof dt5chainT, NDArray<[3, 2], never>>>;
+
+// --- the three named `never` follow-ups of sqrt() on bool (A6 / COVENANT M3 v13): a native message through the private
+// `__varianceD` marker, in code that throws at the sqrt() anyway. Pinned so a change in them is noticed. ---
+const dt5never = dt5mbl.sqrt();
+// @ts-expect-error - A6 (1): assigning the `never`-dtype result to AnyNDArray
+const dt5neverTop: AnyNDArray = dt5never;
+declare const dt5neverRow: ReturnType<NDArray<[3], "bool">["sqrt"]>;
+NDArray.stack(
+  // @ts-expect-error - A6 (2): `stack` with such a row
+  [dt5neverRow],
+);
+// @ts-expect-error - A6 (3): the scalar form of add on it (TS2769, generic text)
+dt5never.add(1);
+void dt5neverTop;
+
+// --- argmax(), overload 1: niladic -> plain number for every dtype, unions and `any` included ---
+const dt5a0 = [dt5v64.argmax(), dt5v32.argmax(), dt5vi.argmax(), dt5vbl.argmax(), dt5uniV.argmax(), dt5anyV.argmax(), dt5top.argmax()] as const;
+type DT5_ARGMAX_NILADIC = Expect<Equal<typeof dt5a0, readonly [number, number, number, number, number, number, number]>>;
+
+// --- argmax(axis), overload 2: int32 indices of the reduced shape, EVERY receiver dtype (E6, float64 included) ---
+const dt5a1 = dt5m32.argmax(1);
+const dt5a2 = dt5m32.argmax(-1);
+const dt5a3 = dt5m64.argmax(0);
+const dt5a4 = dt5mbl.argmax(1);
+const dt5a5 = dt5c32.argmax(1);
+const dt5a6 = dt5m32.argmax(undefined);
+const dt5a7 = dt5uniM.argmax(1);
+const dt5a8 = dt5anyM.argmax(1);
+const dt5a9 = dt5mi.argmax(0);
+type DT5_ARGMAX_AXIS_F32 = Expect<Equal<typeof dt5a1, NDArray<[2], "int32">>>;
+type DT5_ARGMAX_AXIS_NEG = Expect<Equal<typeof dt5a2, NDArray<[2], "int32">>>;
+type DT5_ARGMAX_F64_INT32 = Expect<Equal<typeof dt5a3, NDArray<[3], "int32">>>; // E6: float64 receivers return int32 now (0.3.0: float64)
+type DT5_ARGMAX_BOOL = Expect<Equal<typeof dt5a4, NDArray<[2], "int32">>>;
+type DT5_ARGMAX_RANK3 = Expect<Equal<typeof dt5a5, NDArray<[2, 4], "int32">>>;
+type DT5_ARGMAX_UNDEFINED = Expect<Equal<typeof dt5a6, NDArray<[], "int32">>>;
+type DT5_ARGMAX_UNION_RECV = Expect<Equal<typeof dt5a7, NDArray<[2], "int32">>>;
+type DT5_ARGMAX_ANY_RECV = Expect<Equal<typeof dt5a8, NDArray<[2], "int32">>>;
+type DT5_ARGMAX_I32 = Expect<Equal<typeof dt5a9, NDArray<[3], "int32">>>;
+
+// --- argmax(axis, keepdims), overload 3 ---
+const dt5k1 = dt5m32.argmax(1, true);
+const dt5k2 = dt5mbl.argmax(0, true);
+const dt5k3 = dt5mi.argmax(1, false);
+const dt5k4 = dt5m64.argmax(undefined, true);
+const dt5k5 = dt5uniM.argmax(0, true);
+type DT5_ARGMAX_KEEP_F32 = Expect<Equal<typeof dt5k1, NDArray<[2, 1], "int32">>>;
+type DT5_ARGMAX_KEEP_BOOL = Expect<Equal<typeof dt5k2, NDArray<[1, 3], "int32">>>;
+type DT5_ARGMAX_KEEP_FALSE = Expect<Equal<typeof dt5k3, NDArray<[2], "int32">>>;
+type DT5_ARGMAX_KEEP_UNDEF = Expect<Equal<typeof dt5k4, NDArray<[1, 1], "int32">>>;
+type DT5_ARGMAX_KEEP_UNION = Expect<Equal<typeof dt5k5, NDArray<[1, 3], "int32">>>;
+// the shape guard stays (the dtype lock is gone): out-of-range axis stands at the axis argument, both overloads, any dtype
+dt5m32.argmax(
+  // @ts-expect-error - overload 2: axis out of range
+  5,
+);
+dt5mbl.argmax(
+  // @ts-expect-error - overload 3: axis out of range, bool receiver
+  5,
+  true,
+);
+dt5m64.argmax(
+  // @ts-expect-error - overload 2: axis out of range, float64 receiver
+  -3,
+);
+
+// --- topk(k): values keep the receiver dtype, indices are int32 for every receiver (E6) ---
+const dt5t1 = dt5v32.topk(2);
+const dt5t2 = dt5vbl.topk(3);
+const dt5t3 = dt5v64.topk(1);
+const dt5t4 = dt5uniV.topk(2);
+const dt5t5 = dt5vi.topk(0);
+const dt5t6 = dt5anyV.topk(2);
+type DT5_TOPK_F32 = Expect<Equal<typeof dt5t1, { values: NDArray<[2], "float32">; indices: NDArray<[2], "int32"> }>>;
+type DT5_TOPK_BOOL = Expect<Equal<typeof dt5t2, { values: NDArray<[3], "bool">; indices: NDArray<[3], "int32"> }>>;
+type DT5_TOPK_F64_INT32 = Expect<Equal<typeof dt5t3.indices, NDArray<[1], "int32">>>; // E6 for float64 too
+type DT5_TOPK_F64_VALUES = Expect<Equal<typeof dt5t3.values, NDArray<[1], "float64">>>;
+type DT5_TOPK_UNION = Expect<Equal<typeof dt5t4, { values: NDArray<[2], "float32" | "int32">; indices: NDArray<[2], "int32"> }>>;
+type DT5_TOPK_K0 = Expect<Equal<typeof dt5t5, { values: NDArray<[0], "int32">; indices: NDArray<[0], "int32"> }>>;
+type DT5_TOPK_ANY = Expect<Equal<typeof dt5t6, { values: NDArray<[2], any>; indices: NDArray<[2], "int32"> }>>;
+dt5v32.topk(
+  // @ts-expect-error - k beyond the length stands at the k argument (no dtype lock any more)
+  5,
+);
+dt5m32.topk(
+  // @ts-expect-error - a rank-2 receiver is reported at the k argument
+  1,
+);
+dt5vbl.topk(
+  // @ts-expect-error - negative k, bool receiver
+  -1,
+);
+
+// --- StackDTypeCheck, alias level ---
+type DT5_STACKC_SAME = Expect<Equal<StackDTypeCheck<["float32", "float32"]>, true>>;
+type DT5_STACKC_SINGLE = Expect<Equal<StackDTypeCheck<["bool"]>, true>>;
+type DT5_STACKC_EMPTY = Expect<Equal<StackDTypeCheck<[]>, true>>; // the empty literal has its own SHAPE message
+type DT5_STACKC_MIXED = Expect<
+  Equal<StackDTypeCheck<["float32", "int32"]>, ShapeError<"stack: rows must share one dtype (got 'float32' and 'int32') — use astype() first">>
+>;
+type DT5_STACKC_LATE = Expect<
+  Equal<StackDTypeCheck<["bool", "bool", "float64"]>, ShapeError<"stack: rows must share one dtype (got 'bool' and 'float64') — use astype() first">>
+>;
+// union / any rows are SKIPPED and the fold continues (D-3): the verdict does not depend on where they stand
+type DT5_STACKC_UNION_ROW = Expect<Equal<StackDTypeCheck<["float32", "float32" | "int32"]>, true>>;
+type DT5_STACKC_UNION_ONLY_DISJOINT = Expect<Equal<StackDTypeCheck<["float64", "float32" | "int32"]>, true>>; // no member equals float64, still no claim
+type DT5_STACKC_UNION_FIRST = Expect<Equal<StackDTypeCheck<["float32" | "int32", "float32", "int32"]>, ShapeError<"stack: rows must share one dtype (got 'float32' and 'int32') — use astype() first">>>;
+type DT5_STACKC_ANY_FIRST = Expect<Equal<StackDTypeCheck<[any, "float32", "int32"]>, ShapeError<"stack: rows must share one dtype (got 'float32' and 'int32') — use astype() first">>>;
+type DT5_STACKC_ANY_MID = Expect<Equal<StackDTypeCheck<["float32", any, "int32"]>, ShapeError<"stack: rows must share one dtype (got 'float32' and 'int32') — use astype() first">>>;
+type DT5_STACKC_ANY_OK = Expect<Equal<StackDTypeCheck<["float32", any, "float32"]>, true>>;
+type DT5_STACKC_ALL_UNION = Expect<Equal<StackDTypeCheck<["float32" | "int32", "float32" | "int32"]>, true>>;
+// arrays of rows (no tuple structure): no claim; a variadic tail is checked on its fixed leading rows
+type DT5_STACKC_ARRAY = Expect<Equal<StackDTypeCheck<readonly ("float32" | "int32")[]>, true>>;
+type DT5_STACKC_ARRAY_ONE = Expect<Equal<StackDTypeCheck<readonly "int32"[]>, true>>;
+type DT5_STACKC_VARIADIC_OK = Expect<Equal<StackDTypeCheck<readonly ["float32", ...("int32")[]]>, true>>;
+type DT5_STACKC_VARIADIC_ERR = Expect<
+  Equal<StackDTypeCheck<readonly ["float32", "int32", ...("int32")[]]>, ShapeError<"stack: rows must share one dtype (got 'float32' and 'int32') — use astype() first">>
+>;
+
+// --- NDArray.stack(rows): result shape [N, D] and the shared dtype ---
+const dt5s1 = NDArray.stack([dt5v32, dt5v32]);
+const dt5s2 = NDArray.stack([dt5vi, dt5vi, dt5vi]);
+const dt5s3 = NDArray.stack([dt5vbl]);
+const dt5s4 = NDArray.stack([dt5v64, dt5v64]);
+const dt5s5 = NDArray.stack([dt5v32, dt5uniV]);
+const dt5s6 = NDArray.stack([dt5v32, dt5anyV]);
+const dt5s7 = NDArray.stack([dt5uniV, dt5uniV]);
+const dt5s8 = NDArray.stack([dt5uniV, NDArray.zeros([3], "float64")]);
+type DT5_STACK_F32 = Expect<Equal<typeof dt5s1, NDArray<readonly [2, 3], "float32">>>;
+type DT5_STACK_I32 = Expect<Equal<typeof dt5s2, NDArray<readonly [3, 3], "int32">>>;
+type DT5_STACK_BOOL = Expect<Equal<typeof dt5s3, NDArray<readonly [1, 3], "bool">>>;
+type DT5_STACK_F64 = Expect<Equal<typeof dt5s4, NDArray<readonly [2, 3], "float64">>>;
+type DT5_STACK_UNION_ROW = Expect<Equal<typeof dt5s5, NDArray<readonly [2, 3], "float32" | "int32">>>;
+type DT5_STACK_ANY_ROW = Expect<Equal<(typeof dt5s6)["dtype"], any>>;
+type DT5_STACK_UNION_BOTH = Expect<Equal<typeof dt5s7, NDArray<readonly [2, 3], "float32" | "int32">>>;
+type DT5_STACK_UNION_DISJOINT = Expect<Equal<typeof dt5s8, NDArray<readonly [2, 3], "float32" | "int32" | "float64">>>; // accepted, runtime decides
+declare const dt5arr: NDArray<[3], "int32">[];
+declare const dt5arrMixed: (NDArray<[3], "float32"> | NDArray<[3], "int32">)[];
+declare const dt5arrAny: AnyNDArray[];
+const dt5s9 = NDArray.stack(dt5arr);
+const dt5s10 = NDArray.stack(dt5arrMixed);
+const dt5s11 = NDArray.stack(dt5arrAny);
+type DT5_STACK_ARRAY = Expect<Equal<typeof dt5s9, NDArray<readonly [number, 3], "int32">>>;
+type DT5_STACK_ARRAY_MIXED = Expect<Equal<typeof dt5s10, NDArray<readonly [number, 3], "float32" | "int32">>>;
+type DT5_STACK_ARRAY_ANY = Expect<Equal<(typeof dt5s11)["dtype"], any>>;
+// a dtype mismatch is an error at the rows argument (the exact text and the order shape-before-dtype: fixture test)
+NDArray.stack(
+  // @ts-expect-error - float32 and int32
+  [dt5v32, dt5vi],
+);
+NDArray.stack(
+  // @ts-expect-error - the mismatch is the LAST row
+  [dt5v64, dt5v64, dt5vbl],
+);
+NDArray.stack(
+  // @ts-expect-error - a union row in front is skipped, the definite rows still disagree
+  [dt5uniV, dt5v32, dt5vi],
+);
+NDArray.stack(
+  // @ts-expect-error - an any row in front is skipped, the definite rows still disagree
+  [dt5anyV, dt5v32, dt5vi],
+);
+NDArray.stack(
+  // @ts-expect-error - a variadic tail: the fixed leading rows disagree
+  [dt5v32, dt5vi, ...dt5arr],
+);
+NDArray.stack(
+  // @ts-expect-error - shape error (rank) first
+  [dt5v32, dt5mbl],
+);
+NDArray.stack(
+  // @ts-expect-error - an empty literal keeps its own message
+  [],
+);
+
+// --- known limits (D-6, measured): a generic helper with an OPEN shape or dtype parameter cannot prove the call, so it is
+// rejected -- like `add`/`where` (dt2/dt4). `argmax(axis)` with a CONCRETE shape and an open dtype compiles (the result does not
+// depend on D), as do `topk` and `sqrt` with an open dtype. ---
+function dt5OpenStack<S extends Shape, D extends DType>(x: NDArray<S, D>) {
+  // @ts-expect-error - known limit: stack with an open S and an open D
+  return NDArray.stack([x, x]);
+}
+function dt5OpenStackD<D extends DType>(x: NDArray<[3], D>) {
+  // @ts-expect-error - known limit: stack with a concrete S but an open D (the dtype fold cannot resolve)
+  return NDArray.stack([x, x]);
+}
+function dt5OpenArgmaxS<S extends Shape>(x: NDArray<S, "float32">) {
+  // @ts-expect-error - known limit: argmax(axis) with an open S (like sum(axis))
+  return x.argmax(0);
+}
+function dt5OpenArgmaxD<D extends DType>(x: NDArray<[2, 3], D>) {
+  return x.argmax(0);
+}
+function dt5OpenTopk<D extends DType>(x: NDArray<[3], D>) {
+  return x.topk(2);
+}
+function dt5OpenSqrt<D extends DType>(x: NDArray<[3], D>) {
+  return x.sqrt();
+}
+type DT5_OPEN_ARGMAX_D = Expect<Equal<ReturnType<typeof dt5OpenArgmaxD<"bool">>, NDArray<[3], "int32">>>;
+type DT5_OPEN_TOPK_D = Expect<Equal<ReturnType<typeof dt5OpenTopk<"int32">>, { values: NDArray<[2], "int32">; indices: NDArray<[2], "int32"> }>>;
+type DT5_OPEN_SQRT_D = Expect<Equal<ReturnType<typeof dt5OpenSqrt<"int32">>, NDArray<[3], "float64">>>;
+type DT5_OPEN_SQRT_D_BOOL = Expect<Equal<ReturnType<typeof dt5OpenSqrt<"bool">>, NDArray<[3], never>>>;
+void [dt5OpenStack, dt5OpenStackD, dt5OpenArgmaxS, dt5OpenArgmaxD, dt5OpenTopk, dt5OpenSqrt];
