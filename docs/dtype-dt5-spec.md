@@ -1,7 +1,7 @@
 # dt5 — `sqrt`, `argmax`, `topk`, `stack` auf allen dtypes — bindende Spec (Stufe 3b)
 
 **Version:** v1.1 (2026-10-14) · **Status:** Owner-abgenommen (A1–A4, Nachträge A5–A8 nach Baustein 0),
-Baustein 0 gelaufen (ein Blocker, eingearbeitet) → implementierungsreif nach Bestätigung des v13-Wortlauts
+Baustein 0 gelaufen (ein Blocker, eingearbeitet) → **implementierungsreif**
 **Stufe:** 3b — neue Typ-Maschinerie (`StackDTypeCheck`, ein Fold über die Zeilen-dtypes),
 Covenant-Änderung (v13), Verhaltensänderung bestehender Ops (E6, A3 i).
 **Berührte Invarianten:** M2 (Fold mit Union-Gate, niladische bool-Sperre von `sqrt()`, Ende der
@@ -131,7 +131,7 @@ astype, Achse 1.5).
 
 **A5–A8 (nach Baustein 0, ENTSCHIEDEN 2026-10-14):** A5 Root-Gate ≤ +2,500 mit Stopps +500/+1,800/
 +2,500 · A6 `never` für `sqrt()` auf bool bleibt (mit `any`-Gate, die drei Folgefälle dokumentiert und
-gepinnt) · A7 A1/A2 erweitert (s. o.) · A8 v13-Wortlaut nachgeschärft (s. u., Bestätigung ausstehend).
+gepinnt) · A7 A1/A2 erweitert (s. o.) · A8 v13-Wortlaut nachgeschärft (s. u., bestätigt).
 Offengelegt ohne Entscheidungsbedarf: `argmax`/`topk` akzeptieren bool, Vergleiche lehnen bool ab
 (D-5, bewusste Asymmetrie, in v13 benannt); E6 bricht Konsumenten, die `indices` als `NDArray<[k]>`
 annotieren (README.md:188, examples/rag-demo — gehört in Release-Notes und README-Schritt von 0.4.0,
@@ -149,7 +149,7 @@ D-7); `argmax`/`topk` widen Nicht-float64 auf eine temporäre f64-Kopie (20M Ele
 > **M3 · v13:** die befristete Ausnahme `stack` (v8) entfällt — eine dtype-Ablehnung von `stack`
 > zeigt die eigene Meldung am Argument, wortgleich zur Laufzeit.
 
-**A8 — v13 nachgeschärft (Baustein 0 C-1, C-2, D-5) — Bestätigung ausstehend:**
+**A8 — v13 nachgeschärft (Baustein 0 C-1, C-2, D-5) — vom Owner bestätigt 2026-10-14:**
 
 > **M2 · Präzisierung v13 — Ende der übergangsweisen Sperren (Owner-entschieden 2026-10-14):** seit dt5
 > ist keine Op auf `NDArray` mehr übergangsweise für einen dtype gesperrt; `DTypeLock` und die
