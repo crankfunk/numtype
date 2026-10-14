@@ -1008,15 +1008,40 @@ function printGateVerdict(results: WorkloadResult[]): void {
 // commit (F1, tests only) holds the old pins exactly and passes the hard
 // gate. The same change moves the stress corpus by +31 (123,107 ->
 // 123,138). Measured TWICE, byte-identical both times.
+//
+// Re-pinned 2026-10-14 (dt5, docs/dtype-dt5-spec.md, Commit D): `sqrt`,
+// `argmax`, `topk` and `stack` run on every dtype -- `DTypeLock` leaves the
+// `argmax`/`topk` signatures, `topk`/`argmax(axis)` gain the `"int32"` index
+// dtype, `sqrt` gains `SqrtDType<D>`, `stack` gains the `StackDTypeCheck` fold
+// over the rows' dtypes -- and `lockedOpMessage`/`assertFloat64Locked` are
+// gone. Two components:
+//   (1) w1-w7 move by the SAME -32: exactly the stress-corpus delta of the
+//       same change (123,138 -> 123,106), the "editor delta = stress delta"
+//       rule of thumb again. A class-surface ripple (the four ops' own
+//       signatures), no per-call cost, because none of w1-w7 calls them.
+//   (2) w8 moves by +219 = -32 + 202 + 49 and is the ONLY workload that calls
+//       the changed ops (one `NDArray.stack([a, b])`, six `topk(2)`). The two
+//       parts were isolated by replacing, in a copy of the w8 file, first the
+//       `stack` call by `NDArray.zeros(...)` and then the `topk` calls by a
+//       plain object, on the dt5 tree AND on its parent tree (measured on the
+//       state before the last -6 of `stackTyped`; the shares are differences
+//       between the two trees): the `stack` call costs +202 more than before
+//       (the dtype fold, the `RowDTypesOf` mapping and the `StackDType`
+//       result), the six `topk` calls +49 together (about +8 each: `D` and
+//       `"int32"` in the return type); with both calls removed the difference
+//       is the uniform shift and nothing else.
+// Measured TWICE (fresh `gen-workloads.ts` run each time), byte-identical both
+// times. Correctness gate (every hover position) and latency medians
+// unaffected (still PASS, under the 2x ceiling).
 const INSTANTIATION_PINS: Record<string, number> = {
-  w1: 44996,
-  w2: 46916,
-  w3: 77673,
-  w4: 45059,
-  w5: 50695,
-  w6: 51312,
-  w7: 43909,
-  w8: 51982,
+  w1: 44964,
+  w2: 46884,
+  w3: 77641,
+  w4: 45027,
+  w5: 50663,
+  w6: 51280,
+  w7: 43877,
+  w8: 52201,
 };
 
 function enforceHardGate(results: WorkloadResult[], instResults: InstantiationResult[]): void {
