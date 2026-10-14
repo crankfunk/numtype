@@ -1451,3 +1451,17 @@ Mutanten-Nachweis. Lehre: ein Korpus-Schnitt verschiebt nicht nur Zahlen, sonder
 Mutant gefangen wird — der Root-Check allein übersieht danach jeden Typ-Mutanten der dtype-Maschinerie
 (acht von acht belegt). Deshalb läuft jeder Typ-Mutanten-Nachweis gegen den Verbund (Verify-Template
 Regel 8).
+
+## dt5 — `sqrt`, `argmax`, `topk`, `stack` auf allen dtypes (2026-10-14, Stufe 3b)
+
+Abschluss der dtype-Umsetzung auf `NDArray` (docs/dtype-dt5-spec.md v1.1 / -ergebnisse.md), Covenant
+v13: keine Op mehr übergangsweise gesperrt, `DTypeLock` gelöscht, `stack`-Ausnahme aus M3 v8
+entfallen. Erste Scheibe nach infra-02: das Root-Gate misst wieder Produkt + Laufzeittests, und
+Baustein 0 konnte es deshalb von +5,500 auf +2,500 straffen — der Stopp griff trotzdem nach C1 (+33),
+diesmal wegen einer teuren tsc-Fixture, nicht wegen Pins. **Lehren:** (1) Baustein 0 fand einen
+echten M2-Blocker in einer frisch spezifizierten Typregel (`any` → `never` ohne `IsAnyDType`-Gate) —
+das G1-Muster aus dt2 muss bei JEDER neuen indexierten/konditionalen dtype-Regel mit, nicht nur bei
+Promotion. (2) `TypedArray#set` ist bei gleichem Elementtyp per ECMA-262 eine bitgenaue Byte-Kopie —
+die eigene Ganzzahl-Sicht aus dt4 war für zusammenhängende Kopien unnötig; nötig bleibt sie nur beim
+Gather über Indizes. (3) Testkosten im Root sind nicht nur Pins: eine tsc-Fixture mit Thunk-Arrays
+kostete ~+891 — Fixture-Probes als Strings sind kostenlos.

@@ -419,6 +419,10 @@ dtype-generische Funktionen als bekannte Grenze). Nächste Scheiben: dt1 (Kern +
 **dt2 ERLEDIGT (2026-09-26)** — docs/dtype-dt2-spec.md v1.1 / -ergebnisse.md; COVENANT v9 (inkl.
 `PromoteDiv`). check:diag 243,818 (Δ+6,720; Überschreitung um 720 Owner-akzeptiert). Unveröffentlicht bis dt5.
 
+**dt5 ERLEDIGT (2026-10-14)** — docs/dtype-dt5-spec.md v1.1 / -ergebnisse.md; COVENANT v13 (Ende der übergangsweisen
+dtype-Sperren). check:diag Root 249,296 (Δ+2,533; Gate +2,500 um 33 überschritten, Owner-akzeptiert), dtype-Korpus 75,868.
+Damit ist die dtype-Umsetzung auf `NDArray` abgeschlossen; als Nächstes Release 0.4.0. Unveröffentlicht bis dahin.
+
 **dt4 ERLEDIGT (2026-10-14)** — docs/dtype-dt4-spec.md v1.1 / -ergebnisse.md; COVENANT v11/v12. check:diag
 264,285 (Δ+13,966; Gate +9,000, Überschreitung Owner-akzeptiert, ganz aus Tests/Pins). Unveröffentlicht bis dt5.
 

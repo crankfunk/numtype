@@ -219,3 +219,12 @@ korrekt gerundet, int32 → float64, argmax/topk alle dtypes, sNaN in topk/stack
 Laufzeit (3 V8-unbeobachtbar, 1 äquivalent), 12 Typ (überlebt: Guard-Reihenfolge → Fixture-Pflicht;
 redundanter Array-Schutz → streichen oder bewusst nicht pinnen). Eingearbeitet: D-1, D-3, D-4, A2,
 A1, Commit-Schnitt, Gate, F6-Lücken, v13-Wortlaut.
+
+## Nachträge nach der Umsetzung (2026-10-14)
+
+- **F4 überholt (Owner-Entscheidung nach C1):** `stack` kopiert Zeilen per `TypedArray.prototype.set`
+  statt über Ganzzahl-Sichten — ECMA-262 SetTypedArrayFromTypedArray kopiert bei gleichem Elementtyp
+  byteweise (normativ; von Baustein A und B an der Quelle bestätigt). `topk`/`where` behalten ihre
+  Sichten (Gather über Indizes).
+- **Gate:** Root +2,533 gegen +2,500 (Stopp nach C1 ausgelöst), vom Owner akzeptiert.
+- Ergebnisse, Verify-Runde und offengelegte Grenzen: docs/dtype-dt5-ergebnisse.md.
