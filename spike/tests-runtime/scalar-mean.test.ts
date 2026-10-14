@@ -1158,7 +1158,6 @@ import {
   astypeConvert,
   BOOL_ARITHMETIC_MESSAGE,
   convertToDType,
-  lockedOpMessage,
   normalizeSliceSpecs,
   onesData,
   sameKindArray,
@@ -1178,18 +1177,9 @@ const DATA_CTOR: Record<DType, Float64ArrayConstructor | Float32ArrayConstructor
   bool: Uint8Array,
 };
 
-/** A RegExp matching `lockedOpMessage(op, dtype)` verbatim — built from the
- * SAME function `runtime.ts` exports (never re-derived by hand), so this
- * test can never silently drift from the actual thrown message. */
-function lockedMsgRegex(op: string, dtype: DType): RegExp {
-  return new RegExp(lockedOpMessage(op, dtype).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-}
-
 /** dt2 (P4): a RegExp matching `BOOL_ARITHMETIC_MESSAGE` verbatim — built
  * from the SAME constant `runtime.ts` exports (never re-derived by hand),
- * for the PERMANENT bool-arithmetic rejection (every op, both overloads),
- * as opposed to `lockedMsgRegex`'s dt1 TRANSITIONAL message above (still
- * used by the ops that stay locked until dt5: argmax/topk/sqrt/stack). */
+ * for the PERMANENT bool-arithmetic rejection (every op, both overloads). */
 const boolMsgRegex = new RegExp(BOOL_ARITHMETIC_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
 // --- Section dt1.1: construction + round trip per dtype ---------------------
@@ -1388,14 +1378,6 @@ test("reshape()/flatten(): dtype-neutral inline copy for every dtype — class, 
   }
 });
 
-// --- Section dt1.4: K4 locks (O2(a)) — every non-float64 receiver/argument --
-// throws the word-identical runtime message for every op dt1 does not yet
-// implement outside float64. `lockedOpMessage` is imported directly from
-// runtime.ts (not re-derived) so this test can never silently drift from the
-// actual thrown message.
-
-const NON_FLOAT64: readonly DType[] = ["float32", "int32", "bool"];
-
 // --- Section dt2.1 (dt2 P3/P4, docs/dtype-dt2-spec.md A2 point 1): the dt1
 // scalar-form LOCK is gone for float32/int32 — add/sub/mul/div now compute,
 // keeping the receiver's own dtype (D6/E4, div always widens to float — D5).
@@ -1493,14 +1475,6 @@ test("sum/mean: no lock for any dtype, bool included — both the 0-arg and axis
     assert.deepStrictEqual([...nd.sum(0).data], [2, 0], `sum(0) [${dtype}]`);
     assert.deepStrictEqual([...nd.mean().data], [0.5], `mean() [${dtype}]`);
     assert.deepStrictEqual([...nd.mean(0).data], [1, 0], `mean(0) [${dtype}]`);
-  }
-});
-
-test("stack(): a non-float64 row throws the locked message at runtime (M3 v8 disclosed exception: the EDITOR shows a native structural diagnostic instead until dt5, but the runtime message is word-identical to every other locked op)", () => {
-  const stackAny = NDArray.stack as unknown as (rows: readonly AnyNDArray[]) => unknown;
-  for (const dtype of NON_FLOAT64) {
-    const row = NDArray.fromArray([3], [1, 0, 1], { dtype });
-    assert.throws(() => stackAny([row]), lockedMsgRegex("stack", dtype), `stack() [${dtype}]`);
   }
 });
 

@@ -27,7 +27,6 @@ import type { ReshapeCheck } from "./reshape.ts";
 import {
   anyAllTyped,
   argmaxTyped,
-  assertFloat64Locked,
   assertReshapeArgs,
   astypeConvert,
   BOOL_ARITHMETIC_MESSAGE,
@@ -63,7 +62,7 @@ import {
   sliceDtyped,
   type SliceSpec,
   sqrtTyped,
-  stackRuntime,
+  stackTyped,
   sumTyped,
   topkTyped,
   transposeDtyped,
@@ -603,34 +602,62 @@ type WhereBArg<V> = [V] extends [ShapeError<typeof WHERE_MASK_MESSAGE>] ? true :
  * filter (vector.ts, F8) degrade it to wide `number` deliberately, rather
  * than silently miscomputing `never`.
  */
-type UnwrapRow<R> = R extends NDArray<infer S> ? S : never;
-type RowShapesOf<Rows extends readonly NDArray<any>[]> = { [I in keyof Rows]: UnwrapRow<Rows[I]> };
+type UnwrapRow<R> = R extends NDArray<infer S, any> ? S : never;
+type RowShapesOf<Rows extends readonly NDArray<any, any>[]> = { [I in keyof Rows]: UnwrapRow<Rows[I]> };
+
+/** dt5 F4 (A1): the dtype twin of `UnwrapRow`/`RowShapesOf` — same
+ * homomorphic-mapped-type idiom, same extra generic for per-element
+ * distribution. (`NDArray<infer S>` alone fills `D` with its default
+ * `"float64"`, which is why `stack` used to turn a non-float64 row away with
+ * a native message; both unwraps now say `any` for the other parameter.) */
+type UnwrapRowD<R> = R extends NDArray<any, infer D> ? D : never;
+type RowDTypesOf<Rows extends readonly NDArray<any, any>[]> = { [I in keyof Rows]: UnwrapRowD<Rows[I]> };
+
+/** dt5 F4: the one-dtype-per-`stack` message. Word-identical to the runtime
+ * function `stackDTypeMessage` (runtime.ts) — pinned per tsc fixture, since a
+ * template literal type and a template literal string cannot share a single
+ * source. `A` is the dtype of the first definite row, `B` the first one that
+ * differs. */
+type StackDTypeMessage<A extends string, B extends string> = `stack: rows must share one dtype (got '${A}' and '${B}') — use astype() first`;
+
+/** dt5 F4: the fold behind `StackDTypeCheck`. `Acc` is the dtype of the first
+ * definite row so far (`"none"` until one is seen). A row whose dtype is `any`
+ * or a union is SKIPPED and the fold continues (Baustein-0 D-3: no claim about
+ * that row, the runtime checks it; skipping keeps the verdict independent of
+ * the row order — stopping at the first such row would not). `IsAnyDType`
+ * before `IsUnion` (Arbeitsregel 3). */
+type StackDTypeFold<Ds extends readonly unknown[], Acc extends string> = Ds extends readonly [infer H, ...infer T]
+  ? IsAnyDType<H> extends true
+    ? StackDTypeFold<T, Acc>
+    : IsUnion<H> extends true
+      ? StackDTypeFold<T, Acc>
+      : H extends string
+        ? [Acc] extends ["none"]
+          ? StackDTypeFold<T, H>
+          : [H] extends [Acc]
+            ? StackDTypeFold<T, Acc>
+            : ShapeError<StackDTypeMessage<Acc, H>>
+        : true
+  : true;
 
 /**
- * dt1 (K4, O2(a), docs/dtype-dt1-spec.md): the compile-time half of the lock
- * for every op not yet implemented for `D != "float64"` (after dt3:
- * argmax/topk/sqrt — dt5 unlocks these; `stack` has its own disclosed M3
- * exception, see its doc comment above). `D extends DType` is an
- * ordinary in-scope generic reference — the SAME mechanism `Broadcast<S,B>`
- * already is, never a `this`-parameter (Owner decision O2(a): a
- * `this`-parameter's TS2684 diagnostic is opaque and not in the M3
- * exception list). Resolves to `true` for `D = "float64"`; otherwise a
- * `ShapeError` naming the op and the offending dtype, WORD-IDENTICAL to
- * `lockedOpMessage` (runtime.ts, M3 message parity) — attached to WHATEVER
- * argument the op already has (message-table order: independent of, and
- * combined with, any shape check the same argument might also carry, the
- * same pattern `add`'s own inline conditionals below already use for shape
- * errors).
- *
- * Known gap, disclosed (M2 v8 "übergangsweise nur zur Laufzeit gesperrte
- * Ops", never a false accept): a genuinely NILADIC op (`sqrt()`, the
- * 0-argument overload of `argmax()`) has no argument position to attach this
- * to at all — those forms keep their pre-dtype signature and rely solely on
- * `assertFloat64Locked` (runtime.ts) as their ONLY backstop.
+ * dt5 F4 (D5, A3 iv): `stack` combines rows of ONE dtype — no promotion across
+ * rows. `Ds` is `RowDTypesOf<Rows>`. All definite rows equal -> `true`; the
+ * first definite row that differs from the first definite row -> a
+ * `ShapeError` naming both, attached to the `rows` argument (M3), word-
+ * identical to the runtime message. `any`/union rows give no claim and are
+ * skipped; an array of rows (`NDArray<…>[]`, no tuple structure) gives no
+ * claim either (the runtime checks), and a tuple with a variadic tail
+ * (`[a, b, ...rest]`) is checked on its fixed leading rows only — those are
+ * definite, so a mismatch among them is a true error. Shape errors outrank
+ * this verdict (see `stack`). Exported for the alias-level pins.
  */
-type DTypeLock<D extends DType, Op extends string> = D extends "float64"
-  ? true
-  : ShapeError<`${Op}: dtype '${D}' is not implemented for non-float64 arrays yet (use astype("float64") first)`>;
+export type StackDTypeCheck<Ds extends readonly unknown[]> = StackDTypeFold<Ds, "none">;
+
+/** dt5 F4: result dtype of `stack` — the union of the rows' dtypes: exactly the
+ * shared dtype for any accepted call over definite rows, the union for union
+ * rows, `any` for an `any` row. */
+type StackDType<Ds extends readonly unknown[]> = Extract<Ds[number], DType>;
 
 /** dt1 (K3(b), docs/dtype-dt1-spec.md): a same-typed-array-class copy of
  * `data` — the dtype-generic successor of the plain `new
@@ -1084,35 +1111,37 @@ export class NDArray<S extends Shape, D extends DType = "float64"> implements ND
    * `NDArray` — no WASM kernel, no `WNDArray` parity yet (FOLLOWUPS.md
    * tracks the follow-up).
    *
-   * dt1 (K4, docs/dtype-dt1-spec.md; M3 v8 "befristete Ausnahme stack"):
-   * `Rows` is effectively float64-only already — `NDArray<any>` (in
-   * `RowShapesOf`'s `UnwrapRow` below) fills the omitted `D` with its
-   * default `"float64"`, so a non-float64 row is rejected by a NATIVE
-   * structural-mismatch diagnostic, not this codebase's own `DTypeLock`
-   * message — a DISCLOSED, TIME-BOXED M3 exception until dt5 gives `stack`
-   * real cross-dtype support (every row sharing one dtype; Promotion across
-   * rows stays a non-goal, D5). Measured against real tsc 7.0.2 (a non-
-   * float64 row passed to `stack`): the diagnostic is TS2322 on the row
-   * argument, reported through the PRIVATE `__varianceD` invariance marker
-   * (`NDArray`'s own deliberate-invariance device, defined above) —
-   * `Types of property '__varianceD' are incompatible ... Type '"float64"'
-   * is not assignable to type '"int32"'` — NOT a `data: Int32Array` vs.
-   * `data: Float64Array` mismatch as an earlier draft of this comment
-   * claimed. The private marker name leaking into the message text is
-   * itself part of the disclosed, time-boxed exception: an internal
-   * implementation detail surfacing in a user-facing diagnostic, accepted
-   * only until dt5 replaces this path with a real `DTypeLock`-shaped
-   * message. `assertFloat64Locked` per row is still the honest RUNTIME
-   * backstop, word-identical to every other locked op (M3 message parity
-   * holds at the runtime boundary; only the editor diagnostic is the
-   * disclosed exception). */
-  static stack<const Rows extends readonly NDArray<any>[]>(
-    rows: Guard<StackCheck<RowShapesOf<Rows>>, Rows>,
-  ): NDArray<OkShape<StackShape<RowShapesOf<Rows>>>> {
-    const rs = rows as unknown as readonly NDArray<any>[];
-    for (const r of rs) assertFloat64Locked("stack", r.dtype);
-    const { shape, data } = stackRuntime(rs.map((r) => ({ shape: r.shape as readonly number[], data: r.data })));
-    return new NDArray<OkShape<StackShape<RowShapesOf<Rows>>>>(shape as unknown as OkShape<StackShape<RowShapesOf<Rows>>>, "float64", data);
+   * dt5 F4 (docs/dtype-dt5-spec.md): every dtype stacks, but the rows must
+   * share ONE dtype (no promotion across rows, D5) and the result carries it.
+   * Mixed dtypes are rejected AT THE `rows` ARGUMENT (M3) by `StackDTypeCheck`
+   * with `stack: rows must share one dtype (got 'A' and 'B') — use astype()
+   * first`, word-identical to the runtime message (`stackDTypeMessage`); `A`
+   * is the first row's dtype, `B` the first that differs. The fold is a type-
+   * level `Guard` after the shape check: a SHAPE error (empty literal, rank,
+   * length) outranks the dtype error, at compile time and at runtime alike. A
+   * row with an `any` or union dtype is skipped by the fold (no claim; the
+   * runtime checks), and so is an array of rows (`NDArray<…>[]`); the result
+   * dtype is then the union of the rows' dtypes (`any` for an `any` row). The
+   * M3-v8 exception of dt1 — a native structural message through the private
+   * `__varianceD` marker for any non-float64 row — is gone (COVENANT v13).
+   *
+   * The values are pure data movement (M1 v6): bit-exact per dtype, float32
+   * through `Uint32Array` views, float64 through `BigUint64Array`, so NaN
+   * payloads (signalling NaNs included) survive (`stackTyped`). A known limit,
+   * the same as for `add`/`where`: a generic helper with an OPEN `S` or `D`
+   * type parameter (`<S, D>(x: NDArray<S, D>) => NDArray.stack([x, x])`) is
+   * rejected — the checker cannot prove the open dtype equal to itself. */
+  static stack<const Rows extends readonly NDArray<any, any>[]>(
+    rows: Guard<
+      StackCheck<RowShapesOf<Rows>> extends ShapeError<string> ? StackCheck<RowShapesOf<Rows>> : StackDTypeCheck<RowDTypesOf<Rows>>,
+      Rows
+    >,
+  ): NDArray<OkShape<StackShape<RowShapesOf<Rows>>>, StackDType<RowDTypesOf<Rows>>> {
+    const rs = rows as unknown as readonly NDArray<any, any>[];
+    const { shape, data, dtype } = stackTyped(
+      rs.map((r) => ({ shape: r.shape as readonly number[], data: r.data as unknown as DataOfRuntime, dtype: r.dtype as DType })),
+    );
+    return new NDArray<any, any>(shape, dtype, data);
   }
 
   /** dt4 V2 (docs/dtype-dt4-spec.md): `NDArray.where(mask, a, b)` — NumPy's

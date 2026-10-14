@@ -1451,30 +1451,6 @@ export function sliceDtyped(
   return { shape: outShape, data: out };
 }
 
-/**
- * K4 (O2(a)): word-identical (M3 message parity) runtime half of the lock
- * for every computing op dt1 does not yet implement for `D != "float64"`
- * (add/sub/mul/div/matmul/dot/cosineSimilarity/sum/mean/argmax/topk/stack/
- * sqrt/norm — dt2-dt5 unlock these progressively, docs/dtype-dt1-spec.md
- * K4). Every locked op calls this FIRST, defense-in-depth for the
- * argument-less (niladic) forms the compile-time `DTypeLock` (ndarray.ts)
- * cannot reach at all (no argument position to hang a conditional type on —
- * the exact reason a `this`-parameter alternative was tempting and O2
- * rejected it for opaque TS2684 diagnostics) — so a bypass (e.g. via `any`)
- * or a niladic call on a non-float64 receiver still throws instead of
- * silently computing a wrong answer (M2's runtime backstop holds even where
- * the compile-time claim can't reach).
- */
-export function lockedOpMessage(op: string, dtype: DType): string {
-  return `${op}: dtype '${dtype}' is not implemented for non-float64 arrays yet (use astype("float64") first)`;
-}
-
-export function assertFloat64Locked(op: string, dtype: DType): void {
-  if (dtype !== "float64") {
-    throw new Error(lockedOpMessage(op, dtype));
-  }
-}
-
 // ---------------------------------------------------------------------------
 // dt2 (docs/dtype-dt2-spec.md), Commit A — P1 (Promote) + P2 (array⊕array for
 // add/sub/mul/div). Prototype precedent: proto/dtype 90e7aae (stage 3,
@@ -2460,4 +2436,53 @@ export function sqrtTyped(dtype: DType, data: DataOfRuntime): DataOfRuntime {
     default:
       return assertNeverDType(dtype, "sqrtTyped");
   }
+}
+
+// ---------------------------------------------------------------------------
+// dt5, Commit B — F4 `stack` on every dtype (rows must share one dtype, no
+// promotion across rows, D5). Appended after the Commit-A block above.
+// ---------------------------------------------------------------------------
+
+/**
+ * dt5 F4: the one-dtype-per-`stack` message. Word-identical to the type-level
+ * `StackDTypeMessage` (ndarray.ts) — pinned per tsc fixture. `expected` is the
+ * FIRST row's dtype, `got` the first row whose dtype differs from it.
+ */
+export function stackDTypeMessage(expected: DType, got: DType): string {
+  return `stack: rows must share one dtype (got '${expected}' and '${got}') — use astype() first`;
+}
+
+/**
+ * dt5 F4: `stack` for rows of one dtype. The SHAPE validation runs first
+ * (`stackValidateShapes`: the same three stems in the same order as
+ * `stackRuntime` and the type-level `StackCheck`), then the dtype check — a
+ * shape error outranks the dtype error, exactly like at compile time. Then
+ * bit-exact data movement into a fresh buffer of the rows' class (never
+ * aliasing a row): float32 through `Uint32Array` views and float64 through
+ * `BigUint64Array` views (M1 v6 — an element-wise copy would quiet signalling
+ * NaNs in float32, and leaves float64 payloads to the engine, same reasoning
+ * as `gatherBits`/`whereTyped`); int32 and bool keep their bits through
+ * `set`. `stackRuntime` itself stays byte-identical (the float64 oracle).
+ */
+export function stackTyped(
+  rows: ReadonlyArray<{ shape: readonly number[]; data: DataOfRuntime; dtype: DType }>,
+): { shape: number[]; data: DataOfRuntime; dtype: DType } {
+  const { n, d } = stackValidateShapes(rows.map((r) => r.shape));
+  const dtype = rows[0]?.dtype ?? "float64";
+  for (const r of rows) {
+    if (r.dtype !== dtype) throw new Error(stackDTypeMessage(dtype, r.dtype));
+  }
+  const out = zerosData(dtype, n * d);
+  for (let i = 0; i < n; i++) {
+    const src = rows[i]?.data;
+    if (src === undefined) continue;
+    if (out instanceof Float32Array) {
+      new Uint32Array(out.buffer, out.byteOffset, out.length).set(new Uint32Array(src.buffer, src.byteOffset, src.length), i * d);
+    } else if (out instanceof Float64Array) {
+      new BigUint64Array(out.buffer, out.byteOffset, out.length).set(new BigUint64Array(src.buffer, src.byteOffset, src.length), i * d);
+    } else {
+      (out as Int32Array | Uint8Array).set(src as Int32Array | Uint8Array, i * d);
+    }
+  }
+  return { shape: [n, d], data: out, dtype };
 }
