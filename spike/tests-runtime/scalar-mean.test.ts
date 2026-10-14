@@ -3494,3 +3494,615 @@ test("dt4 diagnostic CONTENTS (M3): comparison/where rejections name word-identi
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// =============================================================================
+// dt5 (docs/dtype-dt5-spec.md): `sqrt` / `argmax` / `topk` / `stack` on every
+// dtype. Same no-new-file house convention (appended; the Dateiset stays
+// fixed). Kernel-less (M1 v5), so the oracles are independent of `runtime.ts`
+// wherever a value is claimed: a BigInt correctly-rounded square root for
+// `sqrt`, brute-force lane/sort references for `argmax`/`topk`, a bit-pattern
+// walk for the NaN-payload claims — and, as the spec asks, the unchanged
+// float64 oracles `argmaxRuntime`/`topkRuntime` on the converted data as a
+// SECOND, differential check. Receivers go through the structural `Dt5Nd`
+// view (the typed surface is pinned in spike/tests-dtype/dtype.test-d.ts).
+// Booleans are only ever 0/1 here (T-6).
+// =============================================================================
+import { argmaxRuntime, stackDTypeMessage, stackTyped, topkRuntime, topkTyped } from "../src/runtime.ts";
+
+interface Dt5Nd {
+  readonly dtype: DType;
+  readonly shape: readonly number[];
+  readonly strides: readonly number[];
+  readonly data: DataOfRuntime;
+  sqrt(): Dt5Nd;
+  argmax(...args: unknown[]): Dt5Nd | number;
+  topk(k: number): { values: Dt5Nd; indices: Dt5Nd };
+  transpose(): Dt5Nd;
+  slice(...specs: readonly unknown[]): Dt5Nd;
+}
+const d5 = (nd: unknown): Dt5Nd => nd as Dt5Nd;
+const mk5 = (shape: readonly number[], values: ArrayLike<number>, dtype: DType): Dt5Nd => d5(NDArray.fromArray(shape as number[], Array.from(values), { dtype }));
+const stack5 = (rows: readonly Dt5Nd[]): Dt5Nd => (NDArray.stack as unknown as (r: readonly Dt5Nd[]) => Dt5Nd)(rows);
+const ALL_DTYPES: readonly DType[] = ["float64", "float32", "int32", "bool"];
+
+/** Fill a float32 array with raw IEEE bit patterns (an element-wise store would quiet signalling NaNs). */
+function f32WithBits(bits: readonly number[]): Dt5Nd {
+  const nd = mk5([bits.length], new Array<number>(bits.length).fill(0), "float32");
+  new Uint32Array(nd.data.buffer, nd.data.byteOffset, bits.length).set(bits);
+  return nd;
+}
+function f64WithBits(bits: readonly bigint[]): Dt5Nd {
+  const nd = mk5([bits.length], new Array<number>(bits.length).fill(0), "float64");
+  new BigUint64Array(nd.data.buffer, nd.data.byteOffset, bits.length).set(bits);
+  return nd;
+}
+const f32BitsOf = (nd: Dt5Nd): number[] => Array.from(new Uint32Array(nd.data.buffer, nd.data.byteOffset, nd.data.length));
+const f64BitsOf = (nd: Dt5Nd): bigint[] => Array.from(new BigUint64Array(nd.data.buffer, nd.data.byteOffset, nd.data.length));
+const f32FromBits = (bits: number): number => {
+  const u = new Uint32Array(1);
+  u[0] = bits;
+  return new Float32Array(u.buffer)[0] ?? 0;
+};
+
+/** Correctly rounded square root of the exact positive value `m * 2^e`, rounded to `p` significand bits (round half to even), using only BigInt — independent of `Math.sqrt`/`Math.fround`. */
+function exactSqrtRounded(m: bigint, e: number, p: number): number {
+  let mm = m;
+  let ee = e;
+  if (ee % 2 !== 0) {
+    mm *= 2n;
+    ee -= 1;
+  }
+  const P = 80n;
+  const scaled = mm << (2n * P);
+  let x = 1n << BigInt(Math.ceil(scaled.toString(2).length / 2));
+  for (;;) {
+    const y = (x + scaled / x) >> 1n;
+    if (y >= x) break;
+    x = y;
+  }
+  const sticky = x * x !== scaled;
+  const shift = BigInt(x.toString(2).length - p);
+  let mant = x >> shift;
+  const rem = x & ((1n << shift) - 1n);
+  const half = 1n << (shift - 1n);
+  if (rem > half || (rem === half && (sticky || (mant & 1n) === 1n))) mant += 1n;
+  return Number(mant) * 2 ** (Number(shift) + ee / 2 - Number(P));
+}
+
+test("dt5 sqrt: float32 stays float32 and is the CORRECTLY ROUNDED float32 root (independent BigInt reference) — -0, NaN, negatives, Infinity, subnormals, extremes, 3000 random bit patterns", () => {
+  const special = [0x00000000, 0x80000000, 0x3f800000, 0x40000000, 0x40800000, 0x00000001, 0x007fffff, 0x00800000, 0x7f7fffff, 0x7f800000, 0xff800000, 0xbf800000, 0x7fc00000, 0x7fa00001];
+  const rng = makeRng(0x4452543553515254n); // "DRT5SQRT"
+  const bits: number[] = [...special];
+  for (let i = 0; i < 3000; i++) bits.push(Number(rng.nextU64() & 0xffffffffn));
+  const nd = f32WithBits(bits);
+  const r = nd.sqrt();
+  assert.strictEqual(r.dtype, "float32");
+  assert.ok(r.data instanceof Float32Array);
+  assert.deepStrictEqual([...r.shape], [bits.length]);
+  const out = f32BitsOf(r);
+  let nonVacuous = 0;
+  for (let i = 0; i < bits.length; i++) {
+    const b = bits[i] ?? 0;
+    const x = f32FromBits(b);
+    const got = out[i] ?? 0;
+    const ctx = `sqrt(0x${b.toString(16)}) = sqrt(${x}): got 0x${got.toString(16)}`;
+    if (Number.isNaN(x) || x < 0 || x === -Infinity) {
+      assert.ok(Number.isNaN(f32FromBits(got)), `${ctx} must be NaN`);
+    } else if (x === 0) {
+      assert.strictEqual(got, b, `${ctx}: +-0 keeps its sign`);
+    } else if (x === Infinity) {
+      assert.strictEqual(got, 0x7f800000, ctx);
+    } else {
+      const exp = (b >>> 23) & 0xff;
+      const frac = b & 0x7fffff;
+      const m = BigInt(exp === 0 ? frac : frac | 0x800000);
+      const e = (exp === 0 ? 1 : exp) - 127 - 23;
+      const wantNum = exactSqrtRounded(m, e, 24);
+      const want = new Float32Array(1);
+      want[0] = wantNum;
+      assert.strictEqual(want[0], wantNum, "the reference root must be exactly float32-representable");
+      assert.strictEqual(got, new Uint32Array(want.buffer)[0] ?? 0, ctx);
+      nonVacuous++;
+    }
+  }
+  assert.ok(nonVacuous > 500, `non-vacuity: ${nonVacuous} finite positive patterns were checked bit for bit`);
+});
+
+test("dt5 sqrt: int32 -> float64 (one rounding of the exact root; INT_MIN and negatives give NaN, perfect squares are exact), float64 -> float64 unchanged, rank 0 and size 0 keep their shape", () => {
+  const vals = [0, 1, 2, 3, 4, 9, 15, 16, 46340, 46341, 2147483647, -1, -2147483648, 1000000007];
+  const r = mk5([vals.length], vals, "int32").sqrt();
+  assert.strictEqual(r.dtype, "float64");
+  assert.ok(r.data instanceof Float64Array);
+  vals.forEach((v, i) => {
+    const got = r.data[i] ?? 0;
+    if (v < 0) assert.ok(Number.isNaN(got), `sqrt(${v}) is NaN`);
+    else if (v === 0) assert.ok(Object.is(got, 0), "sqrt(0) is +0");
+    else assert.strictEqual(got, exactSqrtRounded(BigInt(v), 0, 53), `sqrt(${v})`);
+  });
+  const r0 = mk5([], [16], "int32").sqrt();
+  assert.deepStrictEqual([...r0.shape], []);
+  assert.strictEqual(r0.dtype, "float64");
+  assert.deepStrictEqual(Array.from(r0.data), [4]);
+  assert.deepStrictEqual([...mk5([0], [], "int32").sqrt().shape], [0]);
+  assert.strictEqual(mk5([0, 3], [], "int32").sqrt().dtype, "float64");
+  assert.deepStrictEqual([...mk5([0, 3], [], "float32").sqrt().shape], [0, 3]);
+  assert.strictEqual(mk5([0, 3], [], "float32").sqrt().dtype, "float32");
+  const f = mk5([5], [4, -0, -1, Infinity, 2], "float64").sqrt();
+  assert.strictEqual(f.dtype, "float64");
+  assert.ok(f.data instanceof Float64Array);
+  assert.strictEqual(f.data[0], 2);
+  assert.ok(Object.is(f.data[1], -0), "sqrt(-0) is -0");
+  assert.ok(Number.isNaN(f.data[2]));
+  assert.strictEqual(f.data[3], Infinity);
+  assert.strictEqual(f.data[4], exactSqrtRounded(2n, 0, 53));
+});
+
+test("dt5 sqrt: bool is a PERMANENT runtime-only rejection with the bool-arithmetic message — shape [3], rank 0, size 0 and a matrix alike (M2 v10)", () => {
+  for (const shape of [[3], [], [0], [2, 2], [0, 3]]) {
+    const nd = mk5(shape, new Array<number>(prod(shape)).fill(1), "bool");
+    assert.strictEqual(msgOf(() => nd.sqrt()), BOOL_ARITHMETIC_MESSAGE, `sqrt on bool ${JSON.stringify(shape)}`);
+  }
+});
+
+/** Independent references (NaN maximal, first index wins; topk: NaN first by ascending index, then descending, ties by ascending index). */
+function bruteArgmaxLane(v: readonly number[]): number {
+  let best = 0;
+  for (let i = 1; i < v.length; i++) {
+    const a = v[i] ?? 0;
+    const b = v[best] ?? 0;
+    if ((Number.isNaN(a) && !Number.isNaN(b)) || a > b) best = i;
+  }
+  return best;
+}
+function bruteTopk(v: readonly number[], k: number): { values: number[]; indices: number[] } {
+  const idx = v.map((_, i) => i);
+  idx.sort((i, j) => {
+    const a = v[i] ?? 0;
+    const b = v[j] ?? 0;
+    const an = Number.isNaN(a);
+    const bn = Number.isNaN(b);
+    if (an !== bn) return an ? -1 : 1;
+    if (!an && a !== b) return a > b ? -1 : 1;
+    return i - j;
+  });
+  const top = idx.slice(0, k);
+  return { values: top.map((i) => v[i] ?? 0), indices: top };
+}
+
+const DT5_VALUES: Record<DType, number[]> = {
+  float64: [3, Number.NaN, 7, 7, -0, 0, 1e300, -5, Number.NaN, 2, 7, 1],
+  float32: [3, Number.NaN, 7, 7, -0, 0, 3e38, -5, Number.NaN, 2, 7, 1],
+  int32: [3, -2147483648, 7, 7, 0, 0, 2147483647, -5, 5, 2, 7, 1],
+  bool: [1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1],
+};
+
+test("dt5 argmax: every dtype incl. bool — niladic / every axis / negative axis / keepdims / argmax(undefined) vs a brute lane reference; axis forms are an Int32Array of dtype int32 for EVERY receiver, float64 included (E6)", () => {
+  const shape = [2, 3, 2];
+  const strides = [6, 2, 1];
+  for (const dtype of ALL_DTYPES) {
+    const nd = mk5(shape, DT5_VALUES[dtype], dtype);
+    const flat = Array.from(nd.data);
+    assert.strictEqual(nd.argmax(), bruteArgmaxLane(flat), `argmax() [${dtype}]`);
+    for (const axis of [0, 1, 2, -1, -2, -3]) {
+      const ax = axis < 0 ? 3 + axis : axis;
+      const outShape = shape.filter((_, i) => i !== ax);
+      const want: number[] = [];
+      for (let o = 0; o < prod(outShape); o++) {
+        let rem = o;
+        const coord: number[] = [];
+        for (let d = outShape.length - 1; d >= 0; d--) {
+          coord[d] = rem % (outShape[d] ?? 1);
+          rem = Math.floor(rem / (outShape[d] ?? 1));
+        }
+        let base = 0;
+        let c = 0;
+        for (let d = 0; d < 3; d++) if (d !== ax) base += (coord[c++] ?? 0) * (strides[d] ?? 0);
+        const lane: number[] = [];
+        for (let a = 0; a < (shape[ax] ?? 1); a++) lane.push(flat[base + a * (strides[ax] ?? 0)] ?? 0);
+        want.push(bruteArgmaxLane(lane));
+      }
+      const ctx = `argmax(${axis}) [${dtype}]`;
+      const got = nd.argmax(axis) as Dt5Nd;
+      assert.strictEqual(got.dtype, "int32", `${ctx}: dtype`);
+      assert.ok(got.data instanceof Int32Array, `${ctx}: class`);
+      assert.deepStrictEqual([...got.shape], outShape, `${ctx}: shape`);
+      assert.deepStrictEqual(Array.from(got.data), want, ctx);
+      const kept = nd.argmax(axis, true) as Dt5Nd;
+      assert.strictEqual(kept.dtype, "int32");
+      assert.ok(kept.data instanceof Int32Array);
+      assert.deepStrictEqual([...kept.shape], shape.map((d, i) => (i === ax ? 1 : d)), `${ctx} keepdims: shape`);
+      assert.deepStrictEqual(Array.from(kept.data), want, `${ctx} keepdims`);
+    }
+    for (const full of [nd.argmax(undefined) as Dt5Nd, nd.argmax(undefined, true) as Dt5Nd]) {
+      assert.strictEqual(full.dtype, "int32");
+      assert.ok(full.data instanceof Int32Array);
+      assert.strictEqual(full.data[0], bruteArgmaxLane(flat));
+    }
+    assert.deepStrictEqual([...(nd.argmax(undefined) as Dt5Nd).shape], []);
+    assert.deepStrictEqual([...(nd.argmax(undefined, true) as Dt5Nd).shape], [1, 1, 1]);
+  }
+  // rank 0 and the error stems, on every dtype (the messages are the oracle's own)
+  for (const dtype of ALL_DTYPES) {
+    assert.strictEqual(mk5([], [1], dtype).argmax(), 0, `rank 0 [${dtype}]`);
+    assert.throws(() => mk5([0], [], dtype).argmax(), /argmax: attempt to get argmax of an empty array/, `empty [${dtype}]`);
+    assert.throws(() => mk5([0, 2], [], dtype).argmax(0), /argmax: attempt to get argmax of an empty array/, `empty axis [${dtype}]`);
+    assert.throws(() => mk5([2], [1, 0], dtype).argmax(1), /reduce: axis 1 is out of range for shape \[2\] \(rank 1\)/, `axis [${dtype}]`);
+  }
+});
+
+test("dt5 argmax / topk: randomized differential against the unchanged float64 oracles on the converted data — values, tie-breaks, NaN placement, -0/0, per dtype", () => {
+  const rng = makeRng(0x4452543541524754n); // "DRT5ARGT"
+  const stored = (dtype: DType, n: number): number[] => {
+    const raw: number[] = [];
+    for (let i = 0; i < n; i++) {
+      if (dtype === "bool") raw.push(rng.nextInt(0, 1));
+      else if (dtype === "int32") raw.push(rng.nextInt(-4, 4));
+      else raw.push(rng.nextInt(0, 7) === 0 ? ([Number.NaN, -0, 0, Infinity, -Infinity][rng.nextInt(0, 4)] ?? 0) : rng.nextInt(-3, 3));
+    }
+    return raw;
+  };
+  for (let c = 0; c < 400; c++) {
+    const dtype = ALL_DTYPES[c % 4] ?? "float64";
+    const rank = rng.nextInt(1, 3);
+    const shape = Array.from({ length: rank }, () => rng.nextInt(1, 5));
+    const nd = mk5(shape, stored(dtype, prod(shape)), dtype);
+    const asF64 = Float64Array.from(nd.data);
+    const ctx = `case ${c} [${dtype}] shape=${JSON.stringify(shape)}`;
+    assert.strictEqual(nd.argmax(), argmaxRuntime(shape, asF64, undefined).data[0], `${ctx} argmax()`);
+    for (let axis = -rank; axis < rank; axis++) {
+      const want = argmaxRuntime(shape, asF64, axis);
+      const got = nd.argmax(axis) as Dt5Nd;
+      assert.deepStrictEqual([...got.shape], want.shape, `${ctx} argmax(${axis}) shape`);
+      assert.deepStrictEqual(Array.from(got.data), Array.from(want.data), `${ctx} argmax(${axis})`);
+    }
+    if (rank === 1) {
+      const n = shape[0] ?? 1;
+      for (const k of [0, 1, Math.ceil(n / 2), n]) {
+        const want = topkRuntime(shape, asF64, k);
+        const got = nd.topk(k);
+        assert.deepStrictEqual(Array.from(got.indices.data), Array.from(want.indices), `${ctx} topk(${k}) indices`);
+        assert.deepStrictEqual(Array.from(got.values.data).map(String), Array.from(want.values).map(String), `${ctx} topk(${k}) values`);
+        assert.strictEqual(got.values.dtype, dtype, `${ctx} topk(${k}) values dtype`);
+        assert.ok(got.values.data.constructor === nd.data.constructor, `${ctx} topk(${k}) values class`);
+      }
+    }
+  }
+});
+
+test("dt5 topk: every dtype incl. bool vs a brute reference — values keep the receiver dtype AND class, indices are an Int32Array of dtype int32 for every receiver (E6); k = 0 and k = n; fresh buffers; error stems", () => {
+  for (const dtype of ALL_DTYPES) {
+    const v = DT5_VALUES[dtype];
+    const nd = mk5([v.length], v, dtype);
+    for (const k of [0, 1, 4, v.length]) {
+      const got = nd.topk(k);
+      const want = bruteTopk(Array.from(nd.data), k);
+      const ctx = `topk(${k}) [${dtype}]`;
+      assert.strictEqual(got.values.dtype, dtype, `${ctx}: values dtype`);
+      assert.strictEqual(got.indices.dtype, "int32", `${ctx}: indices dtype`);
+      assert.ok(got.values.data.constructor === nd.data.constructor, `${ctx}: values class`);
+      assert.ok(got.indices.data instanceof Int32Array, `${ctx}: indices class`);
+      assert.deepStrictEqual([...got.values.shape], [k], `${ctx}: values shape`);
+      assert.deepStrictEqual([...got.indices.shape], [k], `${ctx}: indices shape`);
+      assert.deepStrictEqual(Array.from(got.indices.data), want.indices, `${ctx}: indices`);
+      assert.deepStrictEqual(Array.from(got.values.data).map(String), want.values.map(String), `${ctx}: values`);
+      if (k > 0) {
+        assert.notStrictEqual(got.values.data.buffer, nd.data.buffer, `${ctx}: values never alias the receiver`);
+        assert.notStrictEqual(got.indices.data.buffer, got.values.data.buffer, `${ctx}: indices have their own buffer`);
+      }
+    }
+    assert.throws(() => nd.topk(v.length + 1), /topk: k=13 exceeds the vector length 12/, `k too large [${dtype}]`);
+    assert.throws(() => nd.topk(-1), /topk: k must be a non-negative integer \(got -1\)/, `k negative [${dtype}]`);
+    assert.throws(() => mk5([2, 2], [1, 0, 1, 0], dtype).topk(1), /topk: expected a 1-D vector/, `rank 2 [${dtype}]`);
+    assert.throws(() => mk5([], [1], dtype).topk(0), /topk: expected a 1-D vector/, `rank 0 [${dtype}]`);
+  }
+});
+
+test("dt5 topk / stack: values move bit for bit — signalling NaNs survive in float32 (0x7fa00001) and float64 (0x7ff4000000000001), -0 and subnormals included", () => {
+  // Non-vacuity: a plain float32 store quiets the signalling NaN on this engine, which is why the float32 paths copy through Uint32Array views.
+  const cell = new Float32Array(1);
+  new Uint32Array(cell.buffer)[0] = 0x7fa00001;
+  const plain = new Float32Array(1);
+  plain[0] = cell[0] ?? 0;
+  assert.notStrictEqual(new Uint32Array(plain.buffer)[0], 0x7fa00001, "non-vacuity: an element-wise float32 store quiets the signalling NaN");
+
+  const F32 = [0x3f800000, 0x7fa00001, 0xffa00002, 0x7fc00003, 0x40000000, 0x7fa00001, 0x80000000, 0x00000001];
+  const nd32 = f32WithBits(F32);
+  const t32 = nd32.topk(8);
+  const idx32 = Array.from(t32.indices.data);
+  assert.deepStrictEqual(idx32, [1, 2, 3, 5, 4, 0, 7, 6], "NaNs first by ascending index, then descending (+subnormal above -0)");
+  assert.deepStrictEqual(f32BitsOf(t32.values), idx32.map((i) => F32[i] ?? 0), "float32 topk values are the source BITS (0x7fa00001 stays signalling)");
+  assert.strictEqual(f32BitsOf(nd32.topk(1).values)[0], 0x7fa00001, "topk(1) of the NaN group is the first NaN, payload intact");
+
+  // float64: HONEST LIMIT — V8 keeps the payload bits of a plain Float64Array assignment as well, so this passes with and without the
+  // BigUint64Array views: it pins the guarantee, it cannot kill a mutant that drops the views (ECMAScript lets other engines canonicalise).
+  const F64 = [0x3ff0000000000000n, 0x7ff4000000000001n, 0xfff4000000000007n, 0x7ff8000000000005n, 0x4000000000000000n, 0x8000000000000000n];
+  const nd64 = f64WithBits(F64);
+  const t64 = nd64.topk(6);
+  const idx64 = Array.from(t64.indices.data);
+  assert.deepStrictEqual(idx64, [1, 2, 3, 4, 0, 5]);
+  assert.deepStrictEqual(f64BitsOf(t64.values), idx64.map((i) => F64[i] ?? 0n));
+
+  // stack moves the rows' bits unchanged
+  const rowA = f32WithBits([0x7fa00001, 0x80000000, 0x00000001]);
+  const rowB = f32WithBits([0xffa00002, 0x7f800001, 0x7fffffff]);
+  const s32 = stack5([rowA, rowB]);
+  assert.strictEqual(s32.dtype, "float32");
+  assert.deepStrictEqual(f32BitsOf(s32), [0x7fa00001, 0x80000000, 0x00000001, 0xffa00002, 0x7f800001, 0x7fffffff]);
+  const s64 = stack5([f64WithBits([0x7ff4000000000001n, 0x8000000000000000n]), f64WithBits([0xfff4000000000007n, 0x0000000000000001n])]);
+  assert.deepStrictEqual(f64BitsOf(s64), [0x7ff4000000000001n, 0x8000000000000000n, 0xfff4000000000007n, 0x0000000000000001n]);
+  // int32 extremes
+  const si = stack5([mk5([2], [-2147483648, 2147483647], "int32"), mk5([2], [0, -1], "int32")]);
+  assert.deepStrictEqual(Array.from(si.data), [-2147483648, 2147483647, 0, -1]);
+  const ti = mk5([4], [-2147483648, 2147483647, 0, -1], "int32").topk(4);
+  assert.deepStrictEqual(Array.from(ti.values.data), [2147483647, 0, -1, -2147483648]);
+});
+
+test("dt5 topkTyped / stackTyped read their input at its OWN byteOffset (typed arrays that are windows into a larger buffer): float32, float64, int32 and bool", () => {
+  const backing32 = new Float32Array(12);
+  const w32 = backing32.subarray(3, 7); // byteOffset 12
+  new Uint32Array(w32.buffer, w32.byteOffset, 4).set([0x3f800000, 0x7fa00001, 0xffa00002, 0x40400000]);
+  assert.strictEqual(w32.byteOffset, 12);
+  const t32 = topkTyped([4], w32, 3);
+  assert.deepStrictEqual(Array.from(t32.indices), [1, 2, 3]);
+  assert.deepStrictEqual(Array.from(new Uint32Array(t32.values.buffer, t32.values.byteOffset, 3)), [0x7fa00001, 0xffa00002, 0x40400000]);
+  assert.ok(t32.values instanceof Float32Array);
+
+  const backing64 = new Float64Array(12);
+  const w64 = backing64.subarray(2, 5); // byteOffset 16
+  new BigUint64Array(w64.buffer, w64.byteOffset, 3).set([0x3ff0000000000000n, 0x7ff4000000000001n, 0x4000000000000000n]);
+  assert.strictEqual(w64.byteOffset, 16);
+  const t64 = topkTyped([3], w64, 3);
+  assert.deepStrictEqual(Array.from(t64.indices), [1, 2, 0]);
+  assert.deepStrictEqual(Array.from(new BigUint64Array(t64.values.buffer, t64.values.byteOffset, 3)), [0x7ff4000000000001n, 0x4000000000000000n, 0x3ff0000000000000n]);
+
+  const backingI = new Int32Array(10);
+  const wI = backingI.subarray(3, 6);
+  wI.set([5, -7, 9]);
+  assert.deepStrictEqual(Array.from(topkTyped([3], wI, 2).values), [9, 5]);
+
+  // stackTyped: rows that are windows into one buffer, at non-zero offsets, for every dtype
+  const r32a = backing32.subarray(1, 4);
+  const r32b = backing32.subarray(7, 10);
+  new Uint32Array(r32a.buffer, r32a.byteOffset, 3).set([0x7fa00001, 2, 3]);
+  new Uint32Array(r32b.buffer, r32b.byteOffset, 3).set([0xffa00002, 5, 6]);
+  const s32 = stackTyped([r32a, r32b].map((data) => ({ shape: [3], data, dtype: "float32" as const })));
+  assert.deepStrictEqual(Array.from(new Uint32Array(s32.data.buffer, s32.data.byteOffset, 6)), [0x7fa00001, 2, 3, 0xffa00002, 5, 6]);
+  const r64a = backing64.subarray(1, 3);
+  const r64b = backing64.subarray(6, 8);
+  new BigUint64Array(r64a.buffer, r64a.byteOffset, 2).set([0x7ff4000000000001n, 7n]);
+  new BigUint64Array(r64b.buffer, r64b.byteOffset, 2).set([0xfff4000000000007n, 9n]);
+  const s64 = stackTyped([r64a, r64b].map((data) => ({ shape: [2], data, dtype: "float64" as const })));
+  assert.deepStrictEqual(Array.from(new BigUint64Array(s64.data.buffer, s64.data.byteOffset, 4)), [0x7ff4000000000001n, 7n, 0xfff4000000000007n, 9n]);
+  const backingB = new Uint8Array(10);
+  const rBa = backingB.subarray(1, 3);
+  const rBb = backingB.subarray(5, 7);
+  rBa.set([1, 0]);
+  rBb.set([0, 1]);
+  const sB = stackTyped([rBa, rBb].map((data) => ({ shape: [2], data, dtype: "bool" as const })));
+  assert.deepStrictEqual(Array.from(sB.data), [1, 0, 0, 1]);
+  assert.ok(sB.data instanceof Uint8Array);
+  const backingI2 = new Int32Array(10);
+  const rIa = backingI2.subarray(1, 3);
+  const rIb = backingI2.subarray(5, 7);
+  rIa.set([-1, 2]);
+  rIb.set([3, -4]);
+  assert.deepStrictEqual(Array.from(stackTyped([rIa, rIb].map((data) => ({ shape: [2], data, dtype: "int32" as const }))).data), [-1, 2, 3, -4]);
+});
+
+test("dt5 stack: every dtype stacks to [N, D] of the SAME dtype and typed-array class, never aliasing a row; size-0 rows are valid; float64 equals the unchanged oracle", () => {
+  for (const dtype of ALL_DTYPES) {
+    const a = mk5([3], [1, 0, 1], dtype);
+    const b = mk5([3], [0, 1, 1], dtype);
+    const s = stack5([a, b, a]);
+    assert.strictEqual(s.dtype, dtype);
+    assert.ok(s.data.constructor === a.data.constructor, `[${dtype}] class`);
+    assert.deepStrictEqual([...s.shape], [3, 3]);
+    assert.deepStrictEqual([...s.strides], [3, 1]);
+    assert.deepStrictEqual(Array.from(s.data), [1, 0, 1, 0, 1, 1, 1, 0, 1]);
+    assert.notStrictEqual(s.data.buffer, a.data.buffer, `[${dtype}] never aliases a row`);
+    assert.notStrictEqual(s.data.buffer, b.data.buffer);
+    const one = stack5([a]);
+    assert.deepStrictEqual([...one.shape], [1, 3]);
+    assert.notStrictEqual(one.data.buffer, a.data.buffer, `[${dtype}] a single row is copied too`);
+    const e = stack5([mk5([0], [], dtype), mk5([0], [], dtype)]);
+    assert.deepStrictEqual([...e.shape], [2, 0]);
+    assert.strictEqual(e.dtype, dtype);
+    assert.ok(e.data.constructor === a.data.constructor);
+  }
+  const rows64 = [mk5([2], [1.5, Number.NaN], "float64"), mk5([2], [-0, 4], "float64")];
+  const oracle = stackRuntime(rows64.map((r) => ({ shape: [...r.shape], data: r.data as Float64Array })));
+  assert.deepStrictEqual([...stack5(rows64).shape], oracle.shape);
+  assert.deepStrictEqual(f64BitsOf(stack5(rows64)), Array.from(new BigUint64Array(oracle.data.buffer, oracle.data.byteOffset, 4)));
+});
+
+test("dt5 stack: rows of different dtypes throw ONE message (first row's dtype vs the first differing row's), for every pair of dtypes; shape errors outrank it; the empty list keeps its message", () => {
+  const f32 = mk5([3], [1, 2, 3], "float32");
+  const i32 = mk5([3], [1, 2, 3], "int32");
+  const f64 = mk5([3], [1, 2, 3], "float64");
+  const bool = mk5([3], [1, 0, 1], "bool");
+  assert.strictEqual(msgOf(() => stack5([f32, i32])), stackDTypeMessage("float32", "int32"));
+  assert.strictEqual(msgOf(() => stack5([f32, f32, i32])), stackDTypeMessage("float32", "int32"));
+  assert.strictEqual(msgOf(() => stack5([f64, f32, i32])), stackDTypeMessage("float64", "float32"));
+  assert.strictEqual(msgOf(() => stack5([bool, f64])), stackDTypeMessage("bool", "float64"));
+  assert.strictEqual(msgOf(() => stack5([f64, f64, bool])), stackDTypeMessage("float64", "bool"));
+  for (const x of ALL_DTYPES) {
+    for (const y of ALL_DTYPES) {
+      if (x === y) continue;
+      assert.strictEqual(msgOf(() => stack5([mk5([2], [1, 0], x), mk5([2], [0, 1], y)])), `stack: rows must share one dtype (got '${x}' and '${y}') — use astype() first`, `${x} then ${y}`);
+    }
+  }
+  assert.strictEqual(msgOf(() => stack5([])), "stack: expected at least one row");
+  assert.strictEqual(msgOf(() => stack5([f32, mk5([2, 3], [1, 2, 3, 4, 5, 6], "int32")])), "stack: expected 1-D rows (got shape [2,3] at index 1)");
+  assert.strictEqual(msgOf(() => stack5([f32, mk5([4], [1, 2, 3, 4], "int32")])), "stack: row length mismatch (expected 3, got 4 at index 1)");
+  assert.strictEqual(msgOf(() => stack5([mk5([2, 2], [1, 2, 3, 4], "float32"), f64])), "stack: expected 1-D rows (got shape [2,2] at index 0)");
+  // a dtype mismatch at an earlier index does not hide a LATER shape error either (shape validation covers every row first)
+  assert.strictEqual(msgOf(() => stack5([f32, i32, mk5([4], [1, 2, 3, 4], "float32")])), "stack: row length mismatch (expected 3, got 4 at index 2)");
+});
+
+test("dt5 union rows give no compile-time claim, so the RUNTIME check carries them: a row typed with a union dtype stacks with its own dtype and throws when it differs", () => {
+  type UnionRow = NDArray<[3], "float32" | "int32">;
+  const asUnion = (nd: unknown): UnionRow => nd as UnionRow;
+  const f32 = NDArray.fromArray([3], [1, 2, 3], { dtype: "float32" });
+  const realF32 = asUnion(NDArray.fromArray([3], [4, 5, 6], { dtype: "float32" }));
+  const realI32 = asUnion(NDArray.fromArray([3], [4, 5, 6], { dtype: "int32" }));
+  const ok = NDArray.stack([f32, realF32]); // compiles (no claim about the union row) and the dtypes agree
+  assert.strictEqual(ok.dtype, "float32");
+  assert.deepStrictEqual(Array.from(ok.data), [1, 2, 3, 4, 5, 6]);
+  assert.strictEqual(msgOf(() => NDArray.stack([f32, realI32])), stackDTypeMessage("float32", "int32"));
+  assert.strictEqual(msgOf(() => NDArray.stack([realI32, f32])), stackDTypeMessage("int32", "float32"));
+});
+
+test("dt5 views: transposed / sliced / composed results (fresh buffers, exact shape + strides asserted right after construction) feed argmax, topk, sqrt and stack with the hand-built contents", () => {
+  const values = [4, 1, 9, 2, 8, 3, 7, 6, 5, 10, 12, 11];
+  for (const dtype of NUMERIC_DTYPES) {
+    const base = mk5([3, 4], values, dtype);
+    const stored = Array.from(base.data);
+    const t = base.transpose();
+    assert.deepStrictEqual([...t.shape], [4, 3], `[${dtype}] transpose shape`);
+    assert.deepStrictEqual([...t.strides], [3, 1], `[${dtype}] transpose strides`);
+    const tStored = Array.from({ length: 12 }, (_, f) => stored[(f % 3) * 4 + Math.floor(f / 3)] ?? 0);
+    assert.deepStrictEqual(Array.from(t.data), tStored, `[${dtype}] transpose contents`);
+    const colMax = [0, 1, 2].map((c) => bruteArgmaxLane([0, 1, 2, 3].map((r) => tStored[r * 3 + c] ?? 0)));
+    const rowMax = [0, 1, 2, 3].map((r) => bruteArgmaxLane([0, 1, 2].map((c) => tStored[r * 3 + c] ?? 0)));
+    assert.deepStrictEqual(Array.from((t.argmax(0) as Dt5Nd).data), colMax, `[${dtype}] argmax(0) of transposed`);
+    assert.deepStrictEqual(Array.from((t.argmax(1) as Dt5Nd).data), rowMax, `[${dtype}] argmax(1) of transposed`);
+    // a rank-1 slice (an integer index drops the axis) of the transposed view
+    const row = t.slice(...wideSpecs(1, null));
+    assert.deepStrictEqual([...row.shape], [3], `[${dtype}] row slice shape`);
+    assert.deepStrictEqual([...row.strides], [1], `[${dtype}] row slice strides`);
+    const rowStored = tStored.slice(3, 6);
+    assert.deepStrictEqual(Array.from(row.data), rowStored, `[${dtype}] row slice contents`);
+    const tk = row.topk(2);
+    const want = bruteTopk(rowStored, 2);
+    assert.deepStrictEqual(Array.from(tk.indices.data), want.indices, `[${dtype}] topk of a sliced view`);
+    assert.deepStrictEqual(Array.from(tk.values.data), want.values);
+    // sqrt of a composed view
+    const s = base.slice(...wideSpecs({ start: 1, stop: 3 }, null)).transpose();
+    assert.deepStrictEqual([...s.shape], [4, 2], `[${dtype}] composed shape`);
+    assert.deepStrictEqual([...s.strides], [2, 1], `[${dtype}] composed strides`);
+    const root = s.sqrt();
+    assert.strictEqual(root.dtype, dtype === "float32" ? "float32" : "float64");
+    assert.deepStrictEqual([...root.shape], [4, 2]);
+    const sStored = Array.from(s.data);
+    assert.deepStrictEqual(Array.from(root.data), dtype === "float32" ? sStored.map((x) => Math.fround(Math.sqrt(x))) : sStored.map((x) => Math.sqrt(x)), `[${dtype}] sqrt of a composed view`);
+    // stack rows taken from two views
+    const r2 = t.slice(...wideSpecs(2, null));
+    const st = stack5([row, r2]);
+    assert.deepStrictEqual(Array.from(st.data), [...rowStored, ...tStored.slice(6, 9)], `[${dtype}] stack of two sliced rows`);
+    assert.strictEqual(st.dtype, dtype);
+  }
+});
+
+// --- dt5 diagnostic CONTENTS (M3, Arbeitsregel 2): real tsc on a throwaway fixture OUTSIDE the repo. Every dtype
+// rejection of `stack` stands at the `rows` argument with the message the runtime throws, word for word (the expected
+// text comes from a REAL thrown runtime error, never hand-typed); shape errors outrank the dtype error (Baustein-0 T-1:
+// an `@ts-expect-error` pin cannot tell the two orders apart, only the message CONTENT can); union and `any` rows are
+// skipped by the fold, independent of their position.
+test("dt5 diagnostic CONTENTS (M3): stack's dtype rejection names the runtime message at the rows argument; shape errors come first; union / any rows are skipped in any position; argmax / topk keep their shape messages", () => {
+  const dir = mkdtempSync(join(tmpdir(), "numtype-dt5-diag-pin-"));
+  try {
+    const ndarrayPath = fileURLToPath(new URL("../src/ndarray.ts", import.meta.url).href);
+    const ambientPath = fileURLToPath(new URL("../src/ambient.d.ts", import.meta.url).href);
+    const repoRoot = fileURLToPath(new URL("../..", import.meta.url).href);
+    const rowsOf = (...dts: DType[]): Dt5Nd[] => dts.map((x) => mk5([3], [1, 0, 1], x));
+    // [source line, thunk whose thrown message the compile error must carry, index of the argument that must carry it, line must NOT show the dtype message]
+    const rejected: [string, () => unknown, boolean][] = [
+      [`NDArray.stack([f32, i32]);`, () => stack5(rowsOf("float32", "int32")), false],
+      [`NDArray.stack([f64, f32, i32]);`, () => stack5(rowsOf("float64", "float32", "int32")), false],
+      [`NDArray.stack([f32, f32, i32]);`, () => stack5(rowsOf("float32", "float32", "int32")), false],
+      [`NDArray.stack([bl3, f64]);`, () => stack5(rowsOf("bool", "float64")), false],
+      // union / any rows are SKIPPED and the fold continues: the verdict is the same wherever they stand
+      [`NDArray.stack([un, f32, i32]);`, () => stack5(rowsOf("float32", "int32")), false],
+      [`NDArray.stack([f32, un, i32]);`, () => stack5(rowsOf("float32", "int32")), false],
+      [`NDArray.stack([f32, i32, un]);`, () => stack5(rowsOf("float32", "int32")), false],
+      [`NDArray.stack([an, f32, i32]);`, () => stack5(rowsOf("float32", "int32")), false],
+      [`NDArray.stack([f32, an, i32]);`, () => stack5(rowsOf("float32", "int32")), false],
+      // a tuple with a variadic tail is checked on its fixed leading rows
+      [`NDArray.stack([f32, i32, ...arr]);`, () => stack5(rowsOf("float32", "int32")), false],
+      // SHAPE before dtype (T-1): both wrong -> the shape message, never the dtype one
+      [`NDArray.stack([f32, m2i]);`, () => stack5([mk5([3], [1, 0, 1], "float32"), mk5([2, 3], [1, 0, 1, 0, 1, 0], "int32")]), true],
+      [`NDArray.stack([f32, i32len4]);`, () => stack5([mk5([3], [1, 0, 1], "float32"), mk5([4], [1, 0, 1, 0], "int32")]), true],
+      [`NDArray.stack([m2i, f32]);`, () => stack5([mk5([2, 3], [1, 0, 1, 0, 1, 0], "int32"), mk5([3], [1, 0, 1], "float32")]), true],
+      [`NDArray.stack([]);`, () => stack5([]), true],
+    ];
+    // argmax / topk keep their SHAPE messages on non-float64 receivers (the dtype lock is gone, the shape guard stays)
+    const shapeRejected: [string, () => unknown][] = [
+      [`i32m.argmax(5);`, () => mk5([2, 3], [1, 0, 1, 0, 1, 0], "int32").argmax(5)],
+      [`i32m.argmax(2, true);`, () => mk5([2, 3], [1, 0, 1, 0, 1, 0], "int32").argmax(2, true)],
+      [`f32.topk(5);`, () => mk5([3], [1, 0, 1], "float32").topk(5)],
+      [`i32m.topk(1);`, () => mk5([2, 3], [1, 0, 1, 0, 1, 0], "int32").topk(1)],
+    ];
+    const accepted = [
+      `NDArray.stack([f32, f32]);`,
+      `NDArray.stack([un, f32]);`,
+      `NDArray.stack([f32, un]);`,
+      `NDArray.stack([an, f32, f32]);`,
+      `NDArray.stack([f32, an, f32]);`,
+      `NDArray.stack([un, un]);`,
+      `NDArray.stack(arr);`,
+      `NDArray.stack(arrMixed);`,
+      `NDArray.stack([f32, ...arr32]);`,
+      `NDArray.stack([bl3, bl3]);`,
+      `i32m.argmax(0);`,
+      `i32m.argmax(1, true);`,
+      `i32m.argmax(undefined);`,
+      `bl3.argmax();`,
+      `bl3.topk(2);`,
+      `f32.sqrt();`,
+      `i32.sqrt();`,
+      `bl3.sqrt();`,
+    ];
+    const header = [
+      `import { NDArray } from ${JSON.stringify(ndarrayPath)};`,
+      `declare const f32: NDArray<[3], "float32">;`,
+      `declare const i32: NDArray<[3], "int32">;`,
+      `declare const f64: NDArray<[3]>;`,
+      `declare const bl3: NDArray<[3], "bool">;`,
+      `declare const un: NDArray<[3], "float32" | "int32">;`,
+      `declare const an: NDArray<[3], any>;`,
+      `declare const m2i: NDArray<[2, 3], "int32">;`,
+      `declare const i32m: NDArray<[2, 3], "int32">;`,
+      `declare const i32len4: NDArray<[4], "int32">;`,
+      `declare const arr: NDArray<[3], "int32">[];`,
+      `declare const arr32: NDArray<[3], "float32">[];`,
+      `declare const arrMixed: (NDArray<[3], "float32"> | NDArray<[3], "int32">)[];`,
+    ];
+    const lines = [...rejected.map((p) => p[0]), ...shapeRejected.map((p) => p[0]), ...accepted];
+    writeFileSync(join(dir, "probe.ts"), [...header, ...lines, ``].join("\n"));
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: { strict: true, target: "ES2022", module: "ESNext", moduleResolution: "bundler", noEmit: true, allowImportingTsExtensions: true, skipLibCheck: true, noUncheckedIndexedAccess: true, exactOptionalPropertyTypes: true },
+        include: ["probe.ts", ambientPath],
+      }),
+    );
+    const res = spawnSync("pnpm", ["exec", "tsc", "--noEmit", "-p", dir], { cwd: repoRoot, encoding: "utf8" });
+    const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
+    assert.notStrictEqual(res.status, 0, `fixture must fail to compile:\n${out}`);
+    const probeErrors: string[] = [];
+    for (const l of out.split("\n")) {
+      if (l.includes("probe.ts(") && l.includes("error TS")) probeErrors.push(l);
+      else if (/^\s/.test(l) && probeErrors.length > 0) probeErrors[probeErrors.length - 1] += `\n${l}`;
+    }
+    const nRejected = rejected.length + shapeRejected.length;
+    assert.strictEqual(probeErrors.length, nRejected, `exactly the ${nRejected} rejected lines fail, none of the ${accepted.length} accepted ones:\n${out}`);
+    const escaped = (msg: string) => JSON.stringify(msg).slice(1, -1);
+    const verify = (src: string, thunk: () => unknown, index: number, argIndex: number): string => {
+      const line = header.length + 1 + index;
+      const args = src.slice(src.indexOf("(") + 1, src.lastIndexOf(")")).split(", ");
+      const col = src.indexOf("(") + 2 + args.slice(0, argIndex).reduce((n, a) => n + a.length + 2, 0);
+      const err = probeErrors.find((l) => l.includes(`probe.ts(${line},`)) ?? "";
+      assert.ok(err.includes(`probe.ts(${line},${col}):`), `${src}: the error must stand at argument ${argIndex} (col ${col}):\n${err}`);
+      const runtime = msgOf(thunk);
+      assert.ok(err.includes(escaped(runtime)), `${src}: the compile-time text must equal the runtime message "${runtime}":\n${err}`);
+      return err;
+    };
+    rejected.forEach(([src, thunk, shapeFirst], i) => {
+      const err = verify(src, thunk, i, 0);
+      if (shapeFirst) assert.ok(!err.includes("share one dtype"), `${src}: the shape error outranks the dtype error:\n${err}`);
+    });
+    shapeRejected.forEach(([src, thunk], i) => verify(src, thunk, rejected.length + i, 0));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
