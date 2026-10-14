@@ -2458,11 +2458,17 @@ export function stackDTypeMessage(expected: DType, got: DType): string {
  * `stackRuntime` and the type-level `StackCheck`), then the dtype check — a
  * shape error outranks the dtype error, exactly like at compile time. Then
  * bit-exact data movement into a fresh buffer of the rows' class (never
- * aliasing a row): float32 through `Uint32Array` views and float64 through
- * `BigUint64Array` views (M1 v6 — an element-wise copy would quiet signalling
- * NaNs in float32, and leaves float64 payloads to the engine, same reasoning
- * as `gatherBits`/`whereTyped`); int32 and bool keep their bits through
- * `set`. `stackRuntime` itself stays byte-identical (the float64 oracle).
+ * aliasing a row) with `TypedArray.prototype.set`. Every row has the same
+ * dtype (checked above), hence the same element type as the target, and for
+ * that case ECMA-262 `%TypedArray%.prototype.set` -> SetTypedArrayFromTypedArray
+ * ("If srcType is targetType, ... the transfer must be performed in a manner
+ * that preserves the bit-level encoding of the source data") requires a byte
+ * copy: signalling NaN payloads survive in float32 and float64 on every
+ * conforming engine, no integer view needed (contrast `gatherBits`/`whereTyped`,
+ * which pick single elements and therefore DO go through views). Measured on
+ * V8: float32 `set` keeps 0x7fa00001, an element-wise store gives 0x7fe00001.
+ * `set` reads the source at its own `byteOffset` by construction.
+ * `stackRuntime` itself stays byte-identical (the float64 oracle).
  */
 export function stackTyped(
   rows: ReadonlyArray<{ shape: readonly number[]; data: DataOfRuntime; dtype: DType }>,
@@ -2476,13 +2482,7 @@ export function stackTyped(
   for (let i = 0; i < n; i++) {
     const src = rows[i]?.data;
     if (src === undefined) continue;
-    if (out instanceof Float32Array) {
-      new Uint32Array(out.buffer, out.byteOffset, out.length).set(new Uint32Array(src.buffer, src.byteOffset, src.length), i * d);
-    } else if (out instanceof Float64Array) {
-      new BigUint64Array(out.buffer, out.byteOffset, out.length).set(new BigUint64Array(src.buffer, src.byteOffset, src.length), i * d);
-    } else {
-      (out as Int32Array | Uint8Array).set(src as Int32Array | Uint8Array, i * d);
-    }
+    (out as Int32Array).set(src as Int32Array, i * d); // same element type as `src`: a bit-exact byte copy (see above)
   }
   return { shape: [n, d], data: out, dtype };
 }

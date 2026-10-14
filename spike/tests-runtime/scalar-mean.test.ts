@@ -3798,7 +3798,10 @@ test("dt5 topk: every dtype incl. bool vs a brute reference — values keep the 
 });
 
 test("dt5 topk / stack: values move bit for bit — signalling NaNs survive in float32 (0x7fa00001) and float64 (0x7ff4000000000001), -0 and subnormals included", () => {
-  // Non-vacuity: a plain float32 store quiets the signalling NaN on this engine, which is why the float32 paths copy through Uint32Array views.
+  // Non-vacuity: a plain float32 store quiets the signalling NaN on this engine, which is why `topk`'s float32 gather copies through Uint32Array views.
+  // `stack` needs no view: it copies whole rows with `TypedArray.prototype.set` between arrays of the SAME element type, which ECMA-262
+  // (SetTypedArrayFromTypedArray) requires to preserve the bit-level encoding. The stack assertions below therefore PIN that guarantee for
+  // float32 and float64; they are not expected to kill a mutant that adds or drops an integer view (such a mutant is equivalent).
   const cell = new Float32Array(1);
   new Uint32Array(cell.buffer)[0] = 0x7fa00001;
   const plain = new Float32Array(1);
@@ -3813,8 +3816,8 @@ test("dt5 topk / stack: values move bit for bit — signalling NaNs survive in f
   assert.deepStrictEqual(f32BitsOf(t32.values), idx32.map((i) => F32[i] ?? 0), "float32 topk values are the source BITS (0x7fa00001 stays signalling)");
   assert.strictEqual(f32BitsOf(nd32.topk(1).values)[0], 0x7fa00001, "topk(1) of the NaN group is the first NaN, payload intact");
 
-  // float64: HONEST LIMIT — V8 keeps the payload bits of a plain Float64Array assignment as well, so this passes with and without the
-  // BigUint64Array views: it pins the guarantee, it cannot kill a mutant that drops the views (ECMAScript lets other engines canonicalise).
+  // float64 topk: HONEST LIMIT — V8 keeps the payload bits of a plain Float64Array assignment as well, so this passes with and without the
+  // BigUint64Array views in `gatherBits`: it pins the guarantee, it cannot kill a mutant that drops the views (ECMAScript lets other engines canonicalise).
   const F64 = [0x3ff0000000000000n, 0x7ff4000000000001n, 0xfff4000000000007n, 0x7ff8000000000005n, 0x4000000000000000n, 0x8000000000000000n];
   const nd64 = f64WithBits(F64);
   const t64 = nd64.topk(6);
@@ -3822,7 +3825,7 @@ test("dt5 topk / stack: values move bit for bit — signalling NaNs survive in f
   assert.deepStrictEqual(idx64, [1, 2, 3, 4, 0, 5]);
   assert.deepStrictEqual(f64BitsOf(t64.values), idx64.map((i) => F64[i] ?? 0n));
 
-  // stack moves the rows' bits unchanged
+  // stack moves the rows' bits unchanged (whole-row `set`, see above)
   const rowA = f32WithBits([0x7fa00001, 0x80000000, 0x00000001]);
   const rowB = f32WithBits([0xffa00002, 0x7f800001, 0x7fffffff]);
   const s32 = stack5([rowA, rowB]);
@@ -4034,6 +4037,9 @@ test("dt5 diagnostic CONTENTS (M3): stack's dtype rejection names the runtime me
     ];
     const accepted = [
       `NDArray.stack([f32, f32]);`,
+      // a union row whose members all differ from a definite row is still SKIPPED, not rejected (D-3: no claim, the runtime checks)
+      `NDArray.stack([un, f64]);`,
+      `NDArray.stack([f64, un]);`,
       `NDArray.stack([un, f32]);`,
       `NDArray.stack([f32, un]);`,
       `NDArray.stack([an, f32, f32]);`,
